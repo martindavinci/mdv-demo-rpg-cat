@@ -17,10 +17,11 @@ const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const lerp = (a, b, t) => a + (b - a) * t;
 const shade = (c, k) => (Math.min(255, Math.round((c >> 16 & 255) * k)) << 16) | (Math.min(255, Math.round((c >> 8 & 255) * k)) << 8) | Math.min(255, Math.round((c & 255) * k));
 
-// settings are preferences only (never game content): language, frame-rate cap, shadows, sound
+// settings are preferences only (never game content): language, frame-rate cap, shadows, shake, music and sound volume (0–3)
 const SETTINGS_KEY = 'mdv-rpg-cat-settings';   // mdv-allow-storage: preferences
-const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, sound: true },
+const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, shake: true, music: 2, sound: 2 },
   (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; } })());
+if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 2 : 0;   // the first builds stored on/off
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode: keep in memory */ } };
 
 // every visible string comes from lang/<code>.json by key
@@ -386,11 +387,12 @@ const TOD_BASE = {
   alba: { sun: 0xffb08a, sunI: .85, az: 1.35, el: .24, sky: 0xc9b4d8, gnd: 0x7a6a72, hemiI: .55, glow: .45, lamp: .55, top: 0x4e5f9c, bot: 0xf4b49a, stars: .3, aur: 0 },
   giorno: { sun: 0xfff0d8, sunI: 1.0, az: -.6, el: .85, sky: 0xcfe0ff, gnd: 0xb8b0a0, hemiI: .6, glow: 0, lamp: 0, top: 0x5d9be0, bot: 0xd8e8f6, stars: 0, aur: 0 },
   tramonto: { sun: 0xff9a60, sunI: 1.15, az: -1.3, el: .3, sky: 0xc8a2c8, gnd: 0x806a70, hemiI: .56, glow: .8, lamp: .9, top: 0x2a2a66, bot: 0xf0905e, stars: .2, aur: 0 },
+  cripta: { sun: 0x8a90c0, sunI: .12, az: -.4, el: 1.2, sky: 0x40405a, gnd: 0x141018, hemiI: .4, glow: 1, lamp: 1.8, top: 0x07060a, bot: 0x120e16, stars: 0, aur: 0 },
   interno: { sun: 0xffd9a0, sunI: .35, az: -.4, el: 1.1, sky: 0x9a7a5a, gnd: 0x3a2a20, hemiI: .62, glow: .9, lamp: 1.3, top: 0x0e0a0c, bot: 0x221816, stars: 0, aur: 0 },
   notte: { sun: 0x9cb6ff, sunI: .45, az: .6, el: 1.0, sky: 0x6a8cbc, gnd: 0x283654, hemiI: .5, glow: 1, lamp: 1.5, top: 0x04070f, bot: 0x101a30, stars: 1, aur: 0 },
 };
 let tod = 1, lamps = [];   // lamps: halo sprites of the current area
-const TODS = ['alba', 'giorno', 'tramonto', 'notte', 'interno'].map((label) => {
+const TODS = ['alba', 'giorno', 'tramonto', 'notte', 'interno', 'cripta'].map((label) => {
   const o = Object.assign({}, TOD_BASE[label], null || {});
   for (const k of ['sun', 'sky', 'gnd', 'top', 'bot']) o[k] = lin(o[k]);
   o.label = label; return o;
@@ -411,10 +413,20 @@ function applyTod(k) {
 /* ---------- camera: orthographic, pitched, follows the player inside the current area ---------- */
 const CD = 60, cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 140), camT = new THREE.Vector3();
 let yaw = 0, yawT = 0, Vz = 15, VT = 15, aspect = 1;
-const minV = () => 9.5 / aspect;
+const minV = () => 13 / aspect;   // a phone held upright still sees 13 units across
 function camGoal(vv) {
-  if (A.W > 48 || A.D > 40) return [player.x, player.z - (A.camNorth || 1.5)];   // the open world: follow the cat
+  if (A.W > 48 || A.D > 40) {   // the open world: follow the cat, but never show past the map's edge
+    const k = aspect < .8 ? vv * .12 : 0;   // upright phones: the cat sits above the thumbs
+    const x = player.x + Math.sin(yaw) * k, z = player.z - (A.camNorth || 1.5) + Math.cos(yaw) * k;
+    const hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2, c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw)), ex = hx * c + hz * sn, ez = hz * c + hx * sn;
+    return [clamp(x, Math.min(ex, A.W / 2), Math.max(A.W - ex, A.W / 2)), clamp(z, Math.min(ez, A.D / 2), Math.max(A.D - ez, A.D / 2))];
+  }
   const W = A.W, D = A.D, f = clamp(1.45 - vv / 26, .4, .9); return [W / 2 + (player.x - W / 2) * f, D / 2 - (A.camNorth || 1.5) + (player.z - D / 2) * f * .6]; }
+// the ground the view covers, turned with the view, grown by m units: [x0, z0, x1, z1]
+function viewFoot(m) {
+  const vv = Math.max(Vz, VT, minV()), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2, c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw));
+  const ex = hx * c + hz * sn + m, ez = hz * c + hx * sn + m; return [camT.x - ex, camT.z - ez, camT.x + ex, camT.z + ez];
+}
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH), v = Math.max(Vz, minV());
   cam.position.set(camT.x + Math.sin(yaw) * cp * CD, camT.y + spn * CD, camT.z + Math.cos(yaw) * cp * CD); cam.lookAt(camT);
@@ -464,24 +476,32 @@ function openArea(def) {
   const solids = [], acts = [], exits = (def.exits || []).slice(), things = [];
   const solid = (x0, z0, x1, z1) => solids.push({ x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1) });
   for (const [key, x, z, hx0, hz0, o0] of def.things || []) {
+    if (o0 && o0.when && !o0.when()) continue;   // a thing that exists only in some states of the story (a closed gate)
     const s = sp[key]; if (!s) throw new Error(`area ${def.id}: sprite "${key}" is not in the art`);
     const o = Object.assign({}, o0 || {}), d = AP.sprites[key].d || 8;
     let hx = hx0, hz = hz0; if (hx === undefined) { hx = Math.max(.1, s.w * P / 2 - .15); hz = Math.max(.1, d * P / 2 - .15); }
     const px = Math.round(x * PPU) / PPU, pz = Math.round(z * PPU) / PPU;
     if (hx) { const sw = (o.rot || 0) % 2 ? [hz, hx] : [hx, hz]; solid(px - sw[0], pz - sw[1], px + sw[0], pz + sw[1]); }
-    if (o.door) { const fz = pz + d * P / 2; exits.push({ rect: [px - .9, fz, px + .9, fz + .7], to: o.door.to, at: o.door.at, face: o.door.face || [0, -1] }); }
+    if (o.door) { const fz = pz + d * P / 2; exits.push({ rect: [px - .9, fz, px + .9, fz + .7], to: o.door.to, at: o.door.at, face: o.door.face || [0, -1], need: o.door.need }); }
     if (o.look) acts.push({ x: px, z: pz + d * P / 2 + .6, r: 1.4, label: o.look.label, name: o.look.name, lines: o.look.lines });
     things.push({ s, x, z, o });
   }
   for (const [x0, z0, x1, z1] of def.solids || []) solid(x0, z0, x1, z1);
 
-  // walking: map edges, solids, water and steps higher than def.step art pixels block
+  // walking: map edges, solids, water (not for fliers) and steps higher than def.step art pixels block
   const STEP = (def.step || 3.5) * P;
-  function blocked(x, z, fromX, fromZ) {
+  const inSolid = (x, z, r) => { for (const s of solids) if (x > s.x0 - r && x < s.x1 + r && z > s.z0 - r && z < s.z1 + r) return true; return false; };
+  function blocked(x, z, fromX, fromZ, fly) {
     const r = .3; if (x < r || z < r || x > W - r || z > D - r) return true;
-    for (const s of solids) if (x > s.x0 - r && x < s.x1 + r && z > s.z0 - r && z < s.z1 + r) return true;
-    for (const [a, b] of [[-.22, 0], [.22, 0], [0, -.18], [0, .18]]) { if (isWater(x + a, z + b)) return true; if (fromX !== undefined && Math.abs(groundY(x + a, z + b) - groundY(fromX, fromZ)) > STEP) return true; }
+    if (inSolid(x, z, r)) return true;
+    for (const [a, b] of [[-.22, 0], [.22, 0], [0, -.18], [0, .18]]) { if (!fly && isWater(x + a, z + b)) return true; if (fromX !== undefined && Math.abs(groundY(x + a, z + b) - groundY(fromX, fromZ)) > STEP) return true; }
     return false;
+  }
+  // a blow or a look passes between two points unless a wall, a step up or a solid thing stands between them
+  function clear(x0, z0, x1, z1) {
+    const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / .25), y0 = groundY(x0, z0);
+    for (let i = 1; i < n; i++) { const x = lerp(x0, x1, i / n), z = lerp(z0, z1, i / n); if (groundY(x, z) - y0 > STEP || inSolid(x, z, 0)) return false; }
+    return true;
   }
 
   /* one chunk: ground texture and mesh, walls, the things standing in it, baked light, halos */
@@ -565,16 +585,22 @@ function openArea(def) {
     };
   }
 
-  /* streaming: the 3 × 3 chunks around the cat stay built (one new chunk per frame), chunks two away are freed */
+  /* streaming: the chunks under the view and around the cat stay built (one new chunk per frame); far ones are freed */
   const chunks = new Map(), ckey = (i, j) => i + ',' + j;
-  const area = { def, id: def.id, name: def.name, W, D, camNorth: def.camNorth, solids, acts, exits, groundY, isWater, blocked, lampLight, tris: 0, buildMs: 0, chunks };
-  const want = (x, z) => { const pi = Math.floor(x / (ccw * cell)), pj = Math.floor(z / (cch * cell)), out = []; for (let j = pj - 1; j <= pj + 1; j++) for (let i = pi - 1; i <= pi + 1; i++) if (i >= 0 && j >= 0 && i < NI && j < NJ) out.push([i, j, Math.abs(i - pi) + Math.abs(j - pj)]); return out.sort((a, b) => a[2] - b[2]); };
+  const area = { def, id: def.id, name: def.name, W, D, camNorth: def.camNorth, solids, acts, exits, groundY, isWater, blocked, clear, lampLight, tris: 0, buildMs: 0, chunks };
+  const cwu = ccw * cell, chu = cch * cell;
+  const span = ([x0, z0, x1, z1]) => [clamp(Math.floor(x0 / cwu), 0, NI - 1), clamp(Math.floor(z0 / chu), 0, NJ - 1), clamp(Math.floor(x1 / cwu), 0, NI - 1), clamp(Math.floor(z1 / chu), 0, NJ - 1)];
+  const want = (x, z) => {
+    const pi = Math.floor(x / cwu), pj = Math.floor(z / chu), [i0, j0, i1, j1] = span(viewFoot(6)), out = [];
+    for (let j = Math.min(j0, pj); j <= Math.max(j1, pj); j++) for (let i = Math.min(i0, pi); i <= Math.max(i1, pi); i++) if (i >= 0 && j >= 0 && i < NI && j < NJ) out.push([i, j, Math.abs(i - pi) + Math.abs(j - pj)]);
+    return out.sort((a, b) => a[2] - b[2]);
+  };
   const sync = () => { lamps = [...chunks.values()].flatMap((c) => c.halos); area.tris = [...chunks.values()].reduce((a, c) => a + c.tris, 0); };
   area.stream = (x, z, all) => {
     let built = 0;
     for (const [i, j] of want(x, z)) { const k = ckey(i, j); if (chunks.has(k)) continue; chunks.set(k, buildChunk(i, j)); built++; if (!all) break; }
-    const pi = Math.floor(x / (ccw * cell)), pj = Math.floor(z / (cch * cell));
-    for (const [k, c] of chunks) if (Math.abs(c.ci - pi) > 2 || Math.abs(c.cj - pj) > 2) { c.dispose(); chunks.delete(k); built++; }
+    const [i0, j0, i1, j1] = span(viewFoot(24));
+    for (const [k, c] of chunks) if (c.ci < i0 || c.ci > i1 || c.cj < j0 || c.cj > j1) { c.dispose(); chunks.delete(k); built++; }
     if (built) sync();
   };
   let waterT = 0, waterTick = 0, sunX = -1e9, sunZ = -1e9;
@@ -599,15 +625,17 @@ const haloTex = (() => { const c = document.createElement('canvas'); c.width = c
 // ---- engine/50-actors.js
 /* ---------- actors: flat figures from a frame atlas, always facing the camera, feet on the ground ---------- */
 // views: { down, up, side } row names of a frames sheet (side faces right; left is the side view mirrored)
-// anims: { idle: [frame], walk: [frames] } frame names inside each row
+// anims: { name: [frames] or { down: [..], up: [..], side: [..] } }; a frame is a name inside the view's row or a full
+// 'row.frame'. idle and walk are required; a.anim (with a.at, seconds into it, and a.fps) plays any other one.
 const actors = [];
 const casterMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide });
 
 function sheetActor(sheet, views, anims, o) {
   const SH = SHEETS[sheet]; if (!SH) throw new Error('actor: sheet "' + sheet + '" is not in the art');
-  const first = SH.meta.sprites[views.down + '.' + anims.idle[0]]; if (!first) throw new Error(`actor: frame "${views.down}.${anims.idle[0]}" missing in ${sheet}`);
+  const idle0 = Array.isArray(anims.idle) ? anims.idle[0] : anims.idle.down[0], first = SH.meta.sprites[idle0.includes('.') ? idle0 : views.down + '.' + idle0];
+  if (!first) throw new Error(`actor: frame "${views.down}.${idle0}" missing in ${sheet}`);
   const cw = first.w, ch = first.h, [L, U] = first.anchor || [Math.floor(cw / 2), ch];
-  const a = Object.assign({ x: 0, z: 0, fx: 0, fz: 1, step: 0, moving: false, probe: new THREE.Vector3(), lampL: { value: 0 } }, o || {});
+  const a = Object.assign({ x: 0, z: 0, fx: 0, fz: 1, step: 0, moving: false, anim: null, at: 0, fps: 10, lift: 0, blink: false, size: 1, probe: new THREE.Vector3(), lampL: { value: 0 } }, o || {});
   a.tex = nearest(new THREE.CanvasTexture(SH.canvas)); a.tex.encoding = THREE.sRGBEncoding;
   const g = new THREE.PlaneGeometry(cw * P, ch * P); g.translate((cw / 2 - L) * P, (U - ch / 2) * P, 0);   // the anchor (feet) at the origin
   const gl = g.clone(), n = gl.attributes.normal; for (let i = 0; i < n.count; i++) n.setXYZ(i, 0, 1, 0);   // normal up: light does not change when the view turns
@@ -617,15 +645,17 @@ function sheetActor(sheet, views, anims, o) {
   a.caster.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: a.tex, alphaTest: .5, side: THREE.DoubleSide });
   scene.add(a.mesh); scene.add(a.caster);
 
-  const frame = (row, name) => SH.meta.sprites[row + '.' + name] || SH.meta.sprites[row + '.' + anims.idle[0]];
+  const frame = (row, name) => SH.meta.sprites[name.includes('.') ? name : row + '.' + name] || first;
+  const listOf = (name, view) => { const L = anims[name]; return !L ? null : Array.isArray(L) ? L : L[view]; };
   a.pose = () => {
     const side = a.fx * Math.cos(yaw) - a.fz * Math.sin(yaw), toward = a.fx * Math.sin(yaw) + a.fz * Math.cos(yaw);
-    const sideView = Math.abs(side) > Math.abs(toward), row = sideView ? views.side : toward > 0 ? views.down : views.up, flip = sideView && side < 0;
-    const list = a.moving ? anims.walk : anims.idle, r = frame(row, list[Math.floor(a.step) % list.length]);
+    const sideView = Math.abs(side) > Math.abs(toward), view = sideView ? 'side' : toward > 0 ? 'down' : 'up', row = views[view], flip = sideView && side < 0;
+    const own = a.anim && listOf(a.anim, view), list = own || listOf(a.moving ? 'walk' : 'idle', view);
+    const i = own ? Math.min(list.length - 1, Math.floor(a.at * a.fps)) : Math.floor(a.step) % list.length, r = frame(row, list[i]);
     a.tex.repeat.set(r.w / SH.w, r.h / SH.h); a.tex.offset.set(r.x / SH.w, 1 - (r.y + r.h) / SH.h);
-    const y = A.groundY(a.x, a.z), sx = Math.sin(cur.az), sz = Math.cos(cur.az);
-    a.mesh.position.set(a.x, y, a.z); a.mesh.rotation.y = yaw; a.mesh.scale.set(flip ? -1 : 1, SPR_Y, 1);
-    a.caster.position.set(a.x, y, a.z); a.caster.rotation.y = cur.az; a.caster.scale.set(flip ? -1 : 1, 1, 1);
+    const y = A.groundY(a.x, a.z), sx = Math.sin(cur.az), sz = Math.cos(cur.az), k = a.size;
+    a.mesh.visible = !a.blink; a.mesh.position.set(a.x, y + a.lift, a.z); a.mesh.rotation.y = yaw; a.mesh.scale.set((flip ? -1 : 1) * k, SPR_Y * k, k);
+    a.caster.position.set(a.x, y + a.lift, a.z); a.caster.rotation.y = cur.az; a.caster.scale.set((flip ? -1 : 1) * k, k, k);
     a.probe.set(a.x + sx * .2, y, a.z + sz * .2); a.lampL.value = A.lampLight(a.x, y + .6, a.z, 0, 1, 0);
   };
   a.dispose = () => { scene.remove(a.mesh); scene.remove(a.caster); a.mesh.geometry.dispose(); a.mesh.material.dispose(); a.caster.customDepthMaterial.dispose(); a.tex.dispose(); actors.splice(actors.indexOf(a), 1); };
@@ -633,21 +663,508 @@ function sheetActor(sheet, views, anims, o) {
   return a;
 }
 
+// ---- engine/52-flat.js
+/* ---------- flat cards: effects and pickups as camera-facing pictures from any sheet; floating numbers in HTML ---------- */
+// flat(sheet, frames, x, z, o): frames are sprite names in the sheet; o = { y, size, fps, loop, life, flipX, bob, glow }
+// One texture per sheet is shared; a card changes frame by rewriting its own four UVs.
+const flats = [], flatTex = {};
+const flatMat = (sheet) => {
+  if (flatTex[sheet]) return flatTex[sheet];
+  const t = nearest(new THREE.CanvasTexture(SHEETS[sheet].canvas)); t.encoding = THREE.sRGBEncoding;
+  return (flatTex[sheet] = new THREE.MeshBasicMaterial({ map: t, alphaTest: .5, side: THREE.DoubleSide }));
+};
+
+function flat(sheet, frames, x, z, o) {
+  const SH = SHEETS[sheet]; if (!SH) throw new Error('flat: sheet "' + sheet + '" is not in the art');
+  const rs = frames.map((n) => { const r = SH.meta.sprites[n]; if (!r) throw new Error(`flat: "${n}" missing in ${sheet}`); return r; });
+  const f = Object.assign({ x, z, y: null, size: 1, fps: 14, loop: false, life: 0, t: 0, flipX: false, bob: 0, alive: true, i: -1 }, o || {});
+  const r0 = rs[0], [L, U] = r0.anchor || [r0.w / 2, r0.h];
+  const g = new THREE.PlaneGeometry(r0.w * P * f.size, r0.h * P * f.size); g.translate((r0.w / 2 - L) * P * f.size, (U - r0.h / 2) * P * f.size, 0);
+  f.mesh = new THREE.Mesh(g, flatMat(sheet)); f.mesh.renderOrder = 2; scene.add(f.mesh);
+  f.frame = (i) => {
+    if (i === f.i) return; f.i = i; const r = rs[i], uv = g.attributes.uv, u0 = r.x / SH.w, u1 = (r.x + r.w) / SH.w, v0 = 1 - (r.y + r.h) / SH.h, v1 = 1 - r.y / SH.h;
+    const [a, b] = f.flipX ? [u1, u0] : [u0, u1]; uv.setXY(0, a, v1); uv.setXY(1, b, v1); uv.setXY(2, a, v0); uv.setXY(3, b, v0); uv.needsUpdate = true;
+  };
+  f.n = rs.length; f.frame(0);
+  f.dispose = () => { f.alive = false; scene.remove(f.mesh); g.dispose(); };
+  flats.push(f);
+  return f;
+}
+// one-shot effect from the fx sheet: fx('slash', x, z, { y, size, flipX })
+const fx = (row, x, z, o) => { const SH = SHEETS['fx-1'], names = Object.keys(SH.meta.sprites).filter((k) => k.startsWith(row + '.')).sort(); return flat('fx-1', names, x, z, o); };
+
+function flatsDraw(dt) {
+  for (let k = flats.length - 1; k >= 0; k--) {
+    const f = flats[k];
+    if (!f.alive) { flats.splice(k, 1); continue; }
+    f.t += dt; const i = Math.floor(f.t * f.fps);
+    if (!f.loop && i >= f.n && !f.life) { f.dispose(); flats.splice(k, 1); continue; }
+    if (f.life && f.t >= f.life) { f.dispose(); flats.splice(k, 1); continue; }
+    f.frame(f.loop || f.life ? i % f.n : i);
+    const y = (f.y === null ? A.groundY(f.x, f.z) : f.y) + (f.bob ? (Math.sin(f.t * 4) * .5 + .5) * f.bob : 0);
+    f.mesh.position.set(f.x, y, f.z); f.mesh.rotation.y = yaw; f.mesh.scale.y = SPR_Y;
+  }
+}
+const clearFlats = () => { for (const f of flats) f.dispose(); flats.length = 0; };
+
+/* floating numbers and words over the world (damage, coins, "level up") */
+const floats = [];
+function floatText(text, x, y, z, cls) {
+  const el = document.createElement('span'); el.className = 'float ' + (cls || ''); el.textContent = text; $('floats').appendChild(el);
+  floats.push({ el, x: x + (R() - .5) * .3, y, z, t: 0 });
+}
+const _v = new THREE.Vector3();
+function floatsDraw(dt) {
+  const r = canvas.getBoundingClientRect();
+  for (let k = floats.length - 1; k >= 0; k--) {
+    const f = floats[k]; f.t += dt;
+    if (f.t > .9) { f.el.remove(); floats.splice(k, 1); continue; }
+    _v.set(f.x, f.y + f.t * 1.1, f.z).project(cam);
+    f.el.style.transform = `translate(${((_v.x + 1) / 2 * r.width).toFixed(1)}px,${((1 - _v.y) / 2 * r.height).toFixed(1)}px) translate(-50%,-100%)`;
+    f.el.style.opacity = String(Math.min(1, (0.9 - f.t) * 4));
+  }
+}
+const clearFloats = () => { for (const f of floats) f.el.remove(); floats.length = 0; };
+
+// ---- engine/54-game.js
+/* ---------- the game state: what a save holds, the level rules, items, the save and the save code ---------- */
+// G = { v, area, x, z, hp, ink, xp, level, coins, inv: { id: count }, eq: { weapon, armour, charm }, quests: { id: step },
+//       flags: { name: true }, opened: { chestId: true }, seen: { areaId: true } }
+const ITEMS = {};        // content: id → { slot?: 'weapon' | 'armour' | 'charm', atk, def, hp, ink, use?: { hp, ink }, price, key? }
+const LEVEL_XP = [0, 0, 20, 50, 95, 160];   // XP to reach level n (1…5)
+const SAVE_KEY = 'mdv-rpg-cat-save', SAVE_V = 1;
+let G = null;
+
+function newGame() {
+  G = { v: SAVE_V, area: START.area, x: null, z: null, hp: 1, ink: 0, xp: 0, level: 1, coins: 0, inv: {}, eq: { weapon: 'quill_sword', armour: null, charm: null }, quests: {}, flags: {}, opened: {}, seen: {} };
+  G.hp = stats().hp; G.ink = stats().ink;
+}
+function stats() {
+  const L = G.level - 1, eq = Object.values(G.eq).filter(Boolean).map((k) => ITEMS[k] || {});
+  const sum = (f) => eq.reduce((a, i) => a + (i[f] || 0), 0);
+  return { hp: 24 + L * 6 + sum('hp'), ink: 30 + sum('ink'), atk: 5 + L * 2 + sum('atk'), def: 1 + L + sum('def') };
+}
+const xpToNext = () => G.level >= 5 ? 0 : LEVEL_XP[G.level + 1] - G.xp;
+function gainXp(n) {
+  G.xp += n;
+  while (G.level < 5 && G.xp >= LEVEL_XP[G.level + 1]) {
+    G.level++; const s = stats(); G.hp = s.hp; G.ink = s.ink;
+    floatText(t('fx.level', { n: G.level }), player.x, 2.4, player.z, 'gold'); sfx('level'); toast(t('toast.level', { n: G.level }));
+  }
+}
+const has = (id, n) => (G.inv[id] || 0) >= (n || 1) || Object.values(G.eq).includes(id);
+function addItem(id, n) { if (id === 'coin') { G.coins += n || 1; return; } G.inv[id] = (G.inv[id] || 0) + (n || 1); }
+function takeItem(id, n) { G.inv[id] = (G.inv[id] || 0) - (n || 1); if (G.inv[id] <= 0) delete G.inv[id]; }
+function equip(id) {
+  const it = ITEMS[id]; if (!it || !it.slot || !G.inv[id]) return false;
+  const old = G.eq[it.slot]; takeItem(id); if (old) addItem(old); G.eq[it.slot] = id;
+  const s = stats(); G.hp = Math.min(G.hp, s.hp); G.ink = Math.min(G.ink, s.ink); sfx('item'); return true;
+}
+function useItem(id) {
+  const it = ITEMS[id]; if (!it || !it.use || !G.inv[id]) return false;
+  const s = stats(); if (it.use.hp && G.hp >= s.hp && !it.use.ink) return false;
+  if (it.use.hp) G.hp = Math.min(s.hp, G.hp + it.use.hp); if (it.use.ink) G.ink = Math.min(s.ink, G.ink + it.use.ink);
+  takeItem(id); sfx('item'); if (player) floatText('+' + (it.use.hp || it.use.ink), player.x, 2, player.z, it.use.hp ? 'heal' : 'ink'); return true;
+}
+
+/* the save: the browser keeps one slot; the code carries the same data as text a person can copy */
+function snapshot() { const s = JSON.parse(JSON.stringify(G)); if (player && A) { s.area = A.def.id; s.x = +player.x.toFixed(2); s.z = +player.z.toFixed(2); } return s; }
+function saveGame() { if (!G) return false; try { localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot())); return true; } catch (e) { return false; } }
+function loadSave() { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return checkSave(s); } catch (e) { return null; } }
+const hasSave = () => !!loadSave();
+function checkSave(s) {
+  if (!s || typeof s !== 'object' || typeof s.v !== 'number' || s.v > SAVE_V || !AREAS[s.area]) return null;
+  const base = { inv: {}, eq: { weapon: 'quill_sword', armour: null, charm: null }, quests: {}, flags: {}, opened: {}, seen: {}, coins: 0, xp: 0, level: 1 };
+  return Object.assign(base, s);   // older saves miss newer fields; the defaults fill them
+}
+
+// code: JSON → UTF-8 → base32 (no look-alike letters) with a CRC-32, in groups of five
+const B32 = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function crc32(bytes) { let c = ~0; for (const b of bytes) { c ^= b; for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xEDB88320 : c >>> 1; } return ~c >>> 0; }
+function saveCode() {
+  const s = snapshot(), compact = [s.v, s.area, s.x, s.z, s.hp, s.ink, s.xp, s.level, s.coins, s.inv, s.eq, s.quests, Object.keys(s.flags), Object.keys(s.opened), Object.keys(s.seen)];
+  const data = new TextEncoder().encode(JSON.stringify(compact)), crc = crc32(data), bytes = new Uint8Array(data.length + 4);
+  bytes.set(data); bytes.set([crc >>> 24, crc >>> 16 & 255, crc >>> 8 & 255, crc & 255], data.length);
+  let bits = 0, acc = 0, out = '';
+  for (const b of bytes) { acc = (acc << 8) | b; bits += 8; while (bits >= 5) { out += B32[(acc >>> (bits - 5)) & 31]; bits -= 5; } acc &= (1 << bits) - 1; }
+  if (bits) out += B32[(acc << (5 - bits)) & 31];
+  return out.match(/.{1,5}/g).join('-');
+}
+function readCode(text) {
+  const clean = String(text).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (clean.length < 16) return { error: 'code.short' };
+  const bytes = []; let bits = 0, acc = 0;
+  for (const ch of clean) { const v = B32.indexOf(ch); if (v < 0) return { error: 'code.char', ch }; acc = (acc << 5) | v; bits += 5; if (bits >= 8) { bytes.push((acc >>> (bits - 8)) & 255); bits -= 8; acc &= (1 << bits) - 1; } }
+  const data = Uint8Array.from(bytes.slice(0, -4)), c = bytes.slice(-4), crc = crc32(data);
+  if (((c[0] << 24 | c[1] << 16 | c[2] << 8 | c[3]) >>> 0) !== crc) return { error: 'code.crc' };
+  try {
+    const [v, area, x, z, hp, ink, xp, level, coins, inv, eq, quests, flags, opened, seen] = JSON.parse(new TextDecoder().decode(data));
+    const set = (a) => Object.fromEntries((a || []).map((k) => [k, true]));
+    const s = checkSave({ v, area, x, z, hp, ink, xp, level, coins, inv, eq, quests, flags: set(flags), opened: set(opened), seen: set(seen) });
+    return s ? { save: s } : { error: 'code.version' };
+  } catch (e) { return { error: 'code.crc' }; }
+}
+
+// ---- engine/56-combat.js
+/* ---------- combat: the cat's quill combo, dodge and two ink skills; enemies on one shared behaviour; drops ---------- */
+// Enemy types are data (content fills ENEMIES); every strike shows its tell first, and a hit during the tell cancels it.
+const ENEMIES = {};   // type → { sheet, row, hp, atk, def, speed, sight, reach, windup, strike, recover, xp, coins: [min, max], r, move, fly?, shield? }
+const enemies = [], pickups = [];
+const SWINGS = [
+  { reach: 1.35, arc: 2.1, dmg: 1, push: 3, dur: .24, hit: .06, sfx: 'swing' },
+  { reach: 1.35, arc: 2.1, dmg: 1, push: 3, dur: .24, hit: .06, sfx: 'swing' },
+  { reach: 1.65, arc: 2.8, dmg: 1.6, push: 8, dur: .34, hit: .1, sfx: 'swing3' },
+];
+const SKILLS = { dash: { ink: 10 }, well: { ink: 15 } };
+const hero = { swing: -1, st: 0, queued: false, grace: 0, last: -1, hitSet: null, dodge: 0, cd: 0, dx: 0, dz: 0, dash: false, inv: 0, hurt: 0, kx: 0, kz: 0, dead: 0 };
+let shakeT = 0, combatT = 0;
+
+const dmgRoll = (atk, def, mult) => Math.max(1, Math.round((atk * (mult || 1) - def) * (.9 + R() * .2)));
+const near = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+function resetHero() { Object.assign(hero, { swing: -1, st: 0, queued: false, grace: 0, last: -1, dodge: 0, cd: 0, inv: 0, hurt: 0, kx: 0, kz: 0, dead: 0, dash: false }); if (player) player.anim = null; }
+
+/* the cat */
+function heroAttack() {
+  if (hero.dead || hero.dodge > 0 || hero.hurt > 0) return;
+  if (hero.swing >= 0) { hero.queued = true; return; }   // remembered: the next swing starts when this one ends
+  startSwing(hero.grace > 0 && hero.last < 2 ? hero.last + 1 : 0);
+}
+function startSwing(i) {
+  const [ix, iy] = moveVector();
+  if (Math.hypot(ix, iy) > .3) { const [mx, mz] = screenToWorld(ix, iy); const l = Math.hypot(mx, mz); player.fx = mx / l; player.fz = mz / l; }
+  else { const e = nearestEnemy(2.4); if (e) { const l = near(e, player) || 1; player.fx = (e.x - player.x) / l; player.fz = (e.z - player.z) / l; } }
+  Object.assign(hero, { swing: i, st: 0, queued: false, hitSet: new Set() });
+  player.anim = 'attack' + (i + 1); player.at = 0; player.fps = 3 / SWINGS[i].dur; sfx(SWINGS[i].sfx);
+}
+function heroDodge(skill) {
+  if (hero.dead || hero.hurt > 0 || hero.dodge > 0 || (!skill && hero.cd > 0)) return;
+  if (skill) {
+    if (!G.flags['skill_' + skill]) { toast(t('toast.locked')); sfx('no'); return; }
+    if (G.ink < SKILLS[skill].ink) { floatText(t('fx.noink'), player.x, 1.8, player.z, 'ink'); sfx('no'); return; }
+    G.ink -= SKILLS[skill].ink;
+    if (skill === 'well') { inkwell(); return; }
+  }
+  const [ix, iy] = moveVector(); let dx = player.fx, dz = player.fz;
+  if (Math.hypot(ix, iy) > .3) { const [mx, mz] = screenToWorld(ix, iy), l = Math.hypot(mx, mz); dx = mx / l; dz = mz / l; player.fx = dx; player.fz = dz; }
+  const dash = skill === 'dash';
+  Object.assign(hero, { swing: -1, queued: false, dodge: dash ? .32 : .2, dx, dz, dash, hitSet: new Set(), sx: player.x, sz: player.z });
+  hero.inv = Math.max(hero.inv, dash ? .4 : .28);
+  player.anim = 'dodge'; player.at = 0; player.fps = 10;
+  fx(dash ? 'ink_splash' : 'dust', player.x, player.z, { size: .8 }); sfx(dash ? 'dash' : 'dodge');
+}
+function inkwell() {
+  fx('ink_splash', player.x, player.z, { size: 2.2, fps: 9 }); sfx('well'); shake(.15);
+  const s = stats();
+  for (const e of enemies) if (e.hp > 0 && near(e, player) < 3.4) { e.slow = 4; hitEnemy(e, dmgRoll(s.atk, e.T.def, .7), 4, false); }
+}
+function hurtHero(atk, fromX, fromZ) {
+  if (hero.inv > 0 || hero.dead || !G) return;
+  const d = dmgRoll(atk, stats().def); G.hp = Math.max(0, G.hp - d);
+  const l = Math.hypot(player.x - fromX, player.z - fromZ) || 1;
+  Object.assign(hero, { swing: -1, queued: false, dodge: 0, hurt: .28, inv: 1.1, kx: (player.x - fromX) / l * 7, kz: (player.z - fromZ) / l * 7 });
+  player.anim = 'hurt'; player.at = 0; floatText('-' + d, player.x, 1.8, player.z, 'bad'); sfx('hurt'); shake(.25);
+  if (G.hp <= 0) { hero.dead = 1.4; sfx('over'); }
+}
+const shake = (s) => { if (settings.shake) shakeT = Math.max(shakeT, s); };
+
+// screen-space stick → world direction (the same turn the walk uses)
+const screenToWorld = (ix, iy) => [Math.cos(yaw) * ix - Math.sin(yaw) * iy, -Math.sin(yaw) * ix - Math.cos(yaw) * iy];
+
+function heroStep(dt) {
+  const s = stats();
+  hero.inv = Math.max(0, hero.inv - dt); hero.cd = Math.max(0, hero.cd - dt); hero.grace = Math.max(0, hero.grace - dt);
+  player.blink = hero.inv > 0 && hero.dodge <= 0 && Math.floor(hero.inv * 16) % 2 === 1;
+  if (player.anim) player.at += dt;
+  const go = (vx, vz) => { const nx = player.x + vx * dt, nz = player.z + vz * dt; if (!A.blocked(nx, player.z, player.x, player.z)) player.x = nx; if (!A.blocked(player.x, nz, player.x, player.z)) player.z = nz; };
+  if (hero.dead) { hero.dead -= dt; player.moving = false; if (hero.dead <= 0) gameOver(); return; }
+  if (hero.hurt > 0) {
+    hero.hurt -= dt; go(hero.kx, hero.kz); hero.kx *= Math.pow(.02, dt); hero.kz *= Math.pow(.02, dt); player.moving = false;
+    if (hero.hurt <= 0) player.anim = null; return;
+  }
+  if (hero.dodge > 0) {
+    hero.dodge -= dt; const v = hero.dash ? 19 : 15; player.moving = false;
+    if (hero.dash) { const nx = player.x + hero.dx * v * dt, nz = player.z + hero.dz * v * dt; if (!A.blocked(nx, nz, player.x, player.z, true)) { player.x = nx; player.z = nz; } } else go(hero.dx * v, hero.dz * v);
+    if (hero.dash) for (const e of enemies) if (e.hp > 0 && !hero.hitSet.has(e) && near(e, player) < e.T.r + .6) { hero.hitSet.add(e); hitEnemy(e, dmgRoll(s.atk, e.T.def, 1.3), 5, true); }
+    if (hero.dodge <= 0) {
+      player.anim = null; hero.cd = hero.dash ? .3 : .45;
+      if (hero.dash && A.blocked(player.x, player.z)) { player.x = hero.sx; player.z = hero.sz; floatText(t('fx.short'), player.x, 1.8, player.z, 'ink'); }   // the dash fell short: back to the bank
+    }
+    return;
+  }
+  if (hero.swing >= 0) {
+    const sw = SWINGS[hero.swing]; hero.st += dt; player.moving = false;
+    if (hero.st < sw.hit + .04 && !nearestEnemy(sw.reach * .8)) go(player.fx * 3.2, player.fz * 3.2);   // a short step into the swing
+    if (hero.st >= sw.hit) for (const e of enemies) {
+      if (e.hp <= 0 || hero.hitSet.has(e)) continue;
+      const dx = e.x - player.x, dz = e.z - player.z, d = Math.hypot(dx, dz);
+      if (d > sw.reach + e.T.r) continue;
+      const ang = Math.acos(clamp((dx * player.fx + dz * player.fz) / (d || 1), -1, 1));
+      if (d > .7 && ang > sw.arc / 2) continue;
+      if (!A.clear(player.x, player.z, e.x, e.z)) continue;
+      hero.hitSet.add(e);
+      const back = e.T.shield && (dx * e.fx + dz * e.fz) < 0;   // a shielded enemy takes full damage only from behind
+      hitEnemy(e, back ? 1 : dmgRoll(s.atk, e.T.def, sw.dmg), sw.push, true, back);
+    }
+    if (hero.st >= sw.dur) {
+      hero.last = hero.swing; const next = hero.queued && hero.swing < 2 ? hero.swing + 1 : -1;
+      hero.swing = -1; player.anim = null; hero.grace = hero.last < 2 ? .16 : 0;
+      if (next >= 0) startSwing(next); else if (hero.last === 2) hero.cd = .1;
+    }
+    return;
+  }
+  // walking
+  const [ix, iy] = moveVector(), il = Math.hypot(ix, iy);
+  if (il > .15 && !dlg) {
+    const [mx, mz] = screenToWorld(ix, iy); go(mx * 9.6, mz * 9.6);   // the owner asked for 3x the first 3.2 units/s
+    const l = Math.hypot(mx, mz); player.fx = mx / l; player.fz = mz / l; player.step += dt * 18 * Math.min(1, il); player.moving = true;
+  } else { player.moving = false; player.step = 0; }
+}
+
+function hitEnemy(e, d, push, inkGain, blocked) {
+  e.hp -= d; const l = near(e, player) || 1;
+  if (!e.T.poise) { e.kx = (e.x - player.x) / l * push; e.kz = (e.z - player.z) / l * push; }
+  floatText(blocked ? t('fx.block') : String(d), e.x, 1.4 + (e.T.fly || 0), e.z, blocked ? 'dim' : '');
+  fx('hit_spark', e.x, e.z, { y: A.groundY(e.x, e.z) + .5 + (e.T.fly || 0), size: .9 }); sfx(blocked ? 'no' : 'hit'); shake(.08);
+  if (inkGain && !blocked) G.ink = Math.min(stats().ink, G.ink + 3);
+  if (e.hp <= 0) { setState(e, 'defeat', .55); e.a.anim = 'defeat'; sfx('defeat'); return; }
+  if (!e.T.poise && (!blocked || e.state === 'windup')) setState(e, 'hurt', .24);   // a hit during the tell cancels the strike
+  e.aware = true; if (e.T.onHit) e.T.onHit(e);
+}
+
+/* enemies: wander → notice → chase → windup (the tell) → strike → recover */
+function spawnEnemy(type, x, z, o) {
+  const T = ENEMIES[type]; if (!T) throw new Error('no enemy type "' + type + '"');
+  const row = T.row, a = sheetActor(T.sheet, { down: row, up: row, side: row }, T.anims || { idle: ['walk1'], walk: ['walk1', 'walk2'], windup: ['windup'], attack: ['attack'], hurt: ['hurt'], defeat: ['defeat'] });
+  if (T.size) a.size = T.size;
+  const e = Object.assign({ type, T, a, x, z, hx: x, hz: z, hp: T.hp, fx: 1, fz: 0, state: 'wander', st: 1 + R() * 2, kx: 0, kz: 0, slow: 0, aware: false, tx: x, tz: z, sx: x, sz: z, done: false, id: null }, o || {});
+  a.x = x; a.z = z; a.lift = T.fly || 0; enemies.push(e); return e;
+}
+function setState(e, s, time) { e.state = s; e.st = time; e.t0 = time; e.a.anim = null; e.a.at = 0; }
+function nearestEnemy(r) { let best = null, bd = r; for (const e of enemies) { if (e.hp <= 0) continue; const d = near(e, player); if (d < bd) { bd = d; best = e; } } return best; }
+function clearEnemies() { for (const e of enemies) e.a.dispose(); enemies.length = 0; for (const p of pickups) p.f.dispose(); pickups.length = 0; hazards.length = 0; }
+
+function enemiesStep(dt) {
+  let engaged = false;
+  for (let k = enemies.length - 1; k >= 0; k--) {
+    const e = enemies[k], T = e.T, a = e.a, dist = near(e, player), sp = T.speed * (e.slow > 0 ? .45 : 1);
+    if (dist > 40 && e.state !== 'defeat') { a.mesh.visible = false; continue; }
+    e.slow = Math.max(0, e.slow - dt); e.st -= dt; if (a.anim) a.at += dt;
+    const move = (vx, vz) => { const nx = e.x + vx * dt, nz = e.z + vz * dt; if (!A.blocked(nx, e.z, e.x, e.z, T.fly)) e.x = nx; else return false; if (!A.blocked(e.x, nz, e.x, e.z, T.fly)) e.z = nz; else return false; return true; };
+    const face = (x, z) => { const l = Math.hypot(x - e.x, z - e.z); if (l > 1e-3) { e.fx = (x - e.x) / l; e.fz = (z - e.z) / l; } };
+    const sees = dist < T.sight && A.clear(e.x, e.z, player.x, player.z) && !hero.dead;
+    if (e.kx || e.kz) { move(e.kx, e.kz); e.kx *= Math.pow(.01, dt); e.kz *= Math.pow(.01, dt); if (Math.abs(e.kx) + Math.abs(e.kz) < .05) e.kx = e.kz = 0; }
+    a.moving = false;
+    if (T.ai && e.state !== 'defeat') { engaged = T.ai(e, dt, dist, move, face) || engaged; a.x = e.x; a.z = e.z; a.fx = e.fx; a.fz = e.fz; a.step += dt * 4; a.mesh.visible = true; continue; }
+    switch (e.state) {
+      case 'wander':
+        if (sees || e.aware) { setState(e, 'notice', .35); face(player.x, player.z); floatText('!', e.x, 1.5 + (T.fly || 0), e.z, 'gold'); sfx('notice'); break; }
+        if (e.st <= 0) { const ang = R() * Math.PI * 2, r = 1 + R() * 2.5; e.tx = e.hx + Math.cos(ang) * r; e.tz = e.hz + Math.sin(ang) * r; e.st = 2 + R() * 2.5; }
+        if (Math.hypot(e.tx - e.x, e.tz - e.z) > .2) { face(e.tx, e.tz); a.moving = move(e.fx * sp * .45, e.fz * sp * .45); }
+        break;
+      case 'notice': if (e.st <= 0) setState(e, 'chase', 0); break;
+      case 'chase': {
+        engaged = true; face(player.x, player.z);
+        if (Math.hypot(e.x - e.hx, e.z - e.hz) > 16 || dist > T.sight * 1.8 || hero.dead) { setState(e, 'return', 0); e.aware = false; break; }
+        if (dist <= T.reach && A.clear(e.x, e.z, player.x, player.z)) { setState(e, 'windup', T.windup * (e.slow > 0 ? 1.4 : 1)); a.anim = 'windup'; e.sx = e.x; e.sz = e.z; e.tx = player.x; e.tz = player.z; break; }
+        if (dist > .9) a.moving = move(e.fx * sp, e.fz * sp);
+        break;
+      }
+      case 'windup': engaged = true; if (T.move !== 'smash') face(e.tx, e.tz); if (e.st <= 0) { setState(e, 'strike', T.strike); a.anim = 'attack'; e.hit = 0; e.sx = e.x; e.sz = e.z; } break;
+      case 'strike': {
+        engaged = true; a.anim = 'attack'; const p = 1 - Math.max(0, e.st) / T.strike;
+        if (T.move === 'hop') {   // a hop to where the cat stood when the tell began, then a slam on landing
+          const l = Math.hypot(e.tx - e.sx, e.tz - e.sz), k = Math.min(1, T.reach / (l || 1)), gx = e.sx + (e.tx - e.sx) * k, gz = e.sz + (e.tz - e.sz) * k;
+          const nx = lerp(e.sx, gx, p), nz = lerp(e.sz, gz, p); if (!A.blocked(nx, nz, e.x, e.z)) { e.x = nx; e.z = nz; } a.lift = Math.sin(p * Math.PI) * .9;
+          if (e.st <= 0) { a.lift = 0; fx('ink_splash', e.x, e.z, { size: 1.1 }); sfx('slam'); if (near(e, player) < .95 + T.r) hurtHero(T.atk, e.x, e.z); }
+        } else if (T.move === 'lunge') {   // a straight dive along the line the tell pointed at
+          const v = T.reach * 1.25 / T.strike; if (!move(e.fx * v, e.fz * v)) e.st = 0;
+          a.lift = (T.fly || 0) * (1 - Math.sin(p * Math.PI) * .7);
+          if (!e.hit && near(e, player) < T.r + .45) { e.hit = 1; hurtHero(T.atk, e.x, e.z); }
+        } else if (T.move === 'smash') {   // two blows in front, half the strike apart
+          for (const [n, when] of [[1, 0], [2, .5]]) if (e.hit < n && p >= when) {
+            e.hit = n; fx('dust', e.x + e.fx * 1.1, e.z + e.fz * 1.1, { size: 1.3 }); sfx('slam'); shake(.12);
+            const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz);
+            if (d < T.reach + .3 && (dx * e.fx + dz * e.fz) / (d || 1) > .2) hurtHero(T.atk, e.x, e.z);
+          }
+        }
+        if (e.st <= 0) { a.lift = T.fly || 0; setState(e, 'recover', T.recover); }
+        break;
+      }
+      case 'recover': engaged = true; a.anim = null; if (e.st <= 0) setState(e, 'chase', 0); break;
+      case 'hurt': engaged = true; a.anim = 'hurt'; a.lift = T.fly || 0; if (e.st <= 0) setState(e, 'chase', 0); break;
+      case 'return':
+        face(e.hx, e.hz); if (sees && dist < T.sight * .7) { setState(e, 'chase', 0); break; }
+        if (Math.hypot(e.hx - e.x, e.hz - e.z) < .4 || !move(e.fx * sp, e.fz * sp)) { setState(e, 'wander', 1); e.hp = T.hp; }
+        else a.moving = true;
+        break;
+      case 'defeat':
+        a.anim = 'defeat'; a.blink = e.st < .25 && Math.floor(e.st * 20) % 2 === 0;
+        if (e.st <= 0) { enemyDefeated(e); a.dispose(); enemies.splice(k, 1); continue; }
+        break;
+    }
+    // keep a little room between enemies and around the cat
+    for (const o of enemies) if (o !== e && o.hp > 0) { const dx = e.x - o.x, dz = e.z - o.z, d = Math.hypot(dx, dz), m = T.r + o.T.r; if (d < m && d > 1e-3) { const push = (m - d) * .5; if (!A.blocked(e.x + dx / d * push, e.z + dz / d * push, e.x, e.z, T.fly)) { e.x += dx / d * push; e.z += dz / d * push; } } }
+    if (e.state !== 'strike' && dist < T.r + .3 && dist > 1e-3) { const push = (T.r + .3 - dist); if (!A.blocked(e.x + (e.x - player.x) / dist * push, e.z + (e.z - player.z) / dist * push, e.x, e.z, T.fly)) { e.x += (e.x - player.x) / dist * push; e.z += (e.z - player.z) / dist * push; } }
+    a.x = e.x; a.z = e.z; a.fx = e.fx; a.fz = e.fz; a.step += dt * 6; a.mesh.visible = true;
+    if (e.state === 'wander' || e.state === 'return' || e.state === 'chase') a.lift = (T.fly || 0) + (T.fly ? Math.sin(time * 5 + e.hx) * .12 : 0);
+  }
+  if (engaged) combatT = 2.5; else combatT = Math.max(0, combatT - dt);
+  combatMusic(combatT > 0);
+}
+function enemyDefeated(e) {
+  gainXp(e.T.xp);
+  const [lo, hi] = e.T.coins || [0, 0], n = lo + Math.floor(R() * (hi - lo + 1));
+  for (let i = 0; i < n; i++) drop('coin', e.x + (R() - .5) * 1.2, e.z + (R() - .5) * 1.2, 1);
+  if (e.T.drops) for (const [id, chance] of e.T.drops) if (R() < chance) drop(id, e.x, e.z + .3, 1);
+  if (e.onDefeat) e.onDefeat(e);
+  questEvent('defeat', e.type);
+}
+
+/* pickups: coins and items on the ground; they drift to the cat when it is close */
+function drop(id, x, z, n) {
+  let px = x, pz = z; if (A.blocked(px, pz)) { px = player.x; pz = player.z; }
+  const f = flat('items-1', [id], px, pz, { size: id === 'coin' ? .32 : .4, loop: true, bob: .25, fps: 1 });
+  pickups.push({ id, n: n || 1, x: px, z: pz, f, t: 0 });
+}
+function pickupsStep(dt) {
+  for (let k = pickups.length - 1; k >= 0; k--) {
+    const p = pickups[k]; p.t += dt; const d = near(p, player);
+    if (p.t > .4 && d < 2.4 && !hero.dead) { const v = Math.min(d, dt * 12); p.x += (player.x - p.x) / d * v; p.z += (player.z - p.z) / d * v; }
+    p.f.x = p.x; p.f.z = p.z;
+    if (p.t > .4 && d < .5) {
+      addItem(p.id, p.n); sfx(p.id === 'coin' ? 'coin' : 'item');
+      floatText(p.id === 'coin' ? '+' + p.n : t('item.' + p.id), p.x, 1.4, p.z, 'gold'); if (p.id !== 'coin') questEvent('collect', p.id);
+      p.f.dispose(); pickups.splice(k, 1);
+    }
+  }
+}
+
+/* hazards: ink marks on the floor that burst after a delay (the boss's lines and rain); the mark is the tell */
+const hazards = [];
+function hazard(x, z, delay, r, atk) { const f = fx('rain_mark', x, z, { loop: true, life: delay + .25, size: 1.4, fps: 6 }); hazards.push({ x, z, t: delay, r, atk, f }); }
+function hazardsStep(dt) {
+  for (let k = hazards.length - 1; k >= 0; k--) {
+    const h = hazards[k]; h.t -= dt;
+    if (h.t <= 0) { fx('ink_splash', h.x, h.z, { size: 1.1 }); if (Math.hypot(player.x - h.x, player.z - h.z) < h.r) hurtHero(h.atk, h.x, h.z); hazards.splice(k, 1); }
+  }
+}
+
+// ---- engine/58-audio.js
+/* ---------- audio: four voices like an old console (two pulses, a triangle, noise); effects and looping tracks ---------- */
+// Everything is made here in code; nothing is loaded. Audio starts on the first input (the mobile rule); any error turns
+// sound off and the game goes on.
+let AU = null;   // { ctx, fx, mus, layer, waves, noise }
+const MUSIC = {};   // content: name → { bpm, steps, voices: { p1, p2, tri, drums }, combat?: { … same voices } }
+const VOL = [0, .35, .7, 1];
+
+function audioInit() {
+  if (AU || (!settings.sound && !settings.music)) return AU;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)(), out = ctx.createDynamicsCompressor(); out.connect(ctx.destination);
+    const fxG = ctx.createGain(), mus = ctx.createGain(); fxG.connect(out); mus.connect(out);
+    const pulse = (duty) => { const n = 32, re = new Float32Array(n), im = new Float32Array(n); for (let k = 1; k < n; k++) im[k] = 2 / (k * Math.PI) * Math.sin(k * Math.PI * duty); return ctx.createPeriodicWave(re, im); };
+    const nb = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate), d = nb.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    AU = { ctx, fx: fxG, mus, waves: { p1: pulse(.5), p2: pulse(.25), p3: pulse(.125) }, noise: nb, track: null };
+    audioVolumes();
+  } catch (e) { settings.sound = settings.music = 0; AU = null; }
+  return AU;
+}
+function audioVolumes() { if (!AU) return; AU.fx.gain.value = VOL[+settings.sound || 0] * .5; AU.mus.gain.value = VOL[+settings.music || 0] * .32; }
+
+// one note: a voice ('p1' | 'p2' | 'p3' | 'tri' | 'sine'), frequency (optionally sliding to f1), at, length, volume
+function tone(dest, wave, f0, f1, at, len, vol) {
+  const c = AU.ctx, o = c.createOscillator(), g = c.createGain();
+  if (wave === 'tri' || wave === 'sine') o.type = wave === 'tri' ? 'triangle' : 'sine'; else o.setPeriodicWave(AU.waves[wave]);
+  o.frequency.setValueAtTime(f0, at); if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, at + len);
+  g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(vol, at + .004); g.gain.setValueAtTime(vol, at + len * .6); g.gain.exponentialRampToValueAtTime(.0001, at + len);
+  o.connect(g); g.connect(dest); o.start(at); o.stop(at + len + .02);
+}
+function hiss(dest, at, len, vol, freq, q) {
+  const c = AU.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+  s.buffer = AU.noise; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q || 1;
+  g.gain.setValueAtTime(vol, at); g.gain.exponentialRampToValueAtTime(.0001, at + len);
+  s.connect(f); f.connect(g); g.connect(dest); s.start(at, Math.random() * .5); s.stop(at + len + .02);
+}
+
+const SFX = {
+  swing: (a, d) => hiss(d, a, .09, .5, 2400, .7),
+  swing3: (a, d) => { hiss(d, a, .14, .6, 1600, .7); tone(d, 'p2', 300, 160, a, .1, .12); },
+  hit: (a, d) => { tone(d, 'p1', 220, 90, a, .08, .3); hiss(d, a, .06, .5, 3000); },
+  ehurt: (a, d) => tone(d, 'p2', 520, 260, a, .1, .2),
+  defeat: (a, d) => { tone(d, 'p2', 400, 80, a, .3, .22); hiss(d, a + .05, .25, .3, 900); },
+  hurt: (a, d) => { tone(d, 'p1', 330, 110, a, .2, .3); hiss(d, a, .12, .3, 1200); },
+  dodge: (a, d) => hiss(d, a, .14, .35, 1800, .5),
+  dash: (a, d) => { hiss(d, a, .26, .45, 900, .6); tone(d, 'p3', 200, 600, a, .2, .12); },
+  well: (a, d) => { tone(d, 'tri', 160, 60, a, .4, .5); hiss(d, a, .35, .4, 500); },
+  notice: (a, d) => tone(d, 'p2', 880, 1320, a, .08, .12),
+  slam: (a, d) => { tone(d, 'sine', 120, 45, a, .2, .6); hiss(d, a, .12, .3, 400); },
+  coin: (a, d) => { tone(d, 'p2', 988, 0, a, .06, .14); tone(d, 'p2', 1319, 0, a + .06, .14, .14); },
+  item: (a, d) => [523, 659, 784].forEach((f, i) => tone(d, 'p2', f, 0, a + i * .07, .1, .14)),
+  level: (a, d) => [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tone(d, 'p1', f, 0, a + i * .09, .12, .16)),
+  chest: (a, d) => { tone(d, 'tri', 196, 0, a, .1, .4); [659, 784, 988].forEach((f, i) => tone(d, 'p2', f, 0, a + .12 + i * .08, .12, .14)); },
+  door: (a, d) => { hiss(d, a, .2, .3, 300, 2); tone(d, 'tri', 110, 90, a, .16, .4); },
+  blip: (a, d, f) => tone(d, 'p2', f || 330, 0, a, .05, .08),
+  move: (a, d) => tone(d, 'p2', 660, 0, a, .04, .08),
+  ok: (a, d) => { tone(d, 'p2', 660, 0, a, .05, .1); tone(d, 'p2', 990, 0, a + .05, .08, .1); },
+  save: (a, d) => [784, 988, 1175, 1568].forEach((f, i) => tone(d, 'p3', f, 0, a + i * .07, .1, .12)),
+  quest: (a, d) => [392, 523, 659, 784, 1047].forEach((f, i) => tone(d, 'p1', f, 0, a + i * .1, .16, .16)),
+  over: (a, d) => [392, 330, 262, 196].forEach((f, i) => tone(d, 'p1', f, f * .97, a + i * .22, .26, .18)),
+  no: (a, d) => tone(d, 'p2', 180, 140, a, .12, .14),
+};
+function sfx(name, arg) {
+  if (!settings.sound || !audioInit()) return;
+  try { if (AU.ctx.state === 'suspended') AU.ctx.resume(); SFX[name](AU.ctx.currentTime + .005, AU.fx, arg); } catch (e) { /* a lost voice is not worth a crash */ }
+}
+const blip = (f) => sfx('blip', f);
+
+/* music: tracks are step patterns; '.' rests, '-' holds the previous note, drums use k (kick), s (snare), h (hat) */
+const NOTE = { c: 0, 'c#': 1, d: 2, 'd#': 3, e: 4, f: 5, 'f#': 6, g: 7, 'g#': 8, a: 9, 'a#': 10, b: 11 };
+const freq = (tok) => { const m = /^([a-g]#?)(\d)$/.exec(tok); return m ? 440 * Math.pow(2, (NOTE[m[1]] + (+m[2] + 1) * 12 - 69) / 12) : 0; };
+const parseVoice = (s) => (s || '').replace(/\|/g, ' ').trim().split(/\s+/).filter(Boolean);
+function playTrack(name) {
+  if (!audioInit() || (AU.track && AU.track.name === name)) return;
+  const c = AU.ctx, old = AU.track;
+  if (old) { old.gain.gain.setTargetAtTime(0, c.currentTime, .3); setTimeout(() => old.gain.disconnect(), 1500); }
+  const T = MUSIC[name]; if (!T) { AU.track = null; return; }
+  const gain = c.createGain(), layer = c.createGain(); gain.connect(AU.mus); layer.connect(gain); layer.gain.value = 0;
+  gain.gain.setValueAtTime(0, c.currentTime); gain.gain.setTargetAtTime(1, c.currentTime, .4);
+  const v = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, s]) => [k, parseVoice(s)]));
+  AU.track = { name, T, gain, layer, voices: v(T.voices), combat: v(T.combat), step: 0, next: c.currentTime + .1, dur: 60 / T.bpm / 4 };
+}
+function combatMusic(on) { if (AU && AU.track) AU.track.layer.gain.setTargetAtTime(on ? 1 : 0, AU.ctx.currentTime, on ? .15 : .8); }
+function musicTick() {
+  if (!AU || !AU.track || !settings.music) return;
+  const tr = AU.track, c = AU.ctx; if (c.state === 'suspended') return;
+  if (tr.next < c.currentTime - .5) tr.next = c.currentTime + .05;   // after a pause: start again, do not race to catch up
+  while (tr.next < c.currentTime + .25) {
+    for (const [set, dest] of [[tr.voices, tr.gain], [tr.combat, tr.layer]]) for (const [k, notes] of Object.entries(set)) {
+      if (!notes.length) continue; const tok = notes[tr.step % notes.length];
+      if (k === 'drums') { if (tok === 'k') tone(dest, 'sine', 140, 45, tr.next, .12, .7); else if (tok === 's') hiss(dest, tr.next, .1, .45, 1800, .8); else if (tok === 'h') hiss(dest, tr.next, .03, .25, 8000, 1); continue; }
+      const f = freq(tok); if (!f) continue;
+      let len = 1; while (notes[(tr.step + len) % notes.length] === '-' && len < 16) len++;
+      tone(dest, k === 'tri' ? 'tri' : k === 'p2' ? 'p2' : k === 'p3' ? 'p3' : 'p1', f, 0, tr.next, len * tr.dur * .95, k === 'tri' ? .34 : .12);
+    }
+    tr.step++; tr.next += tr.dur;
+  }
+}
+
 // ---- engine/60-input.js
 /* ---------- input: keyboard, touch (stick + buttons) and gamepad feed one set of actions ---------- */
-// move: a vector; pressed actions (interact, menu, rotateL, rotateR) are queued once per press, never repeated by a held key
+// move: a vector; pressed actions (attack, dodge, skill1, skill2, interact, menu, rotateL, rotateR) are queued once per
+// press, never repeated by a held key
 const input = { keys: new Set(), stickX: 0, stickY: 0, padX: 0, padY: 0, queue: [], padPrev: {} };
-const KEYMAP = { ' ': 'interact', enter: 'interact', escape: 'menu', q: 'rotateL', e: 'rotateR' };
+const KEYMAP = { ' ': 'interact', enter: 'interact', escape: 'menu', tab: 'menu', q: 'rotateL', e: 'rotateR', j: 'attack', z: 'attack', k: 'dodge', x: 'dodge', shift: 'dodge', l: 'skill1', c: 'skill1', u: 'skill2', v: 'skill2' };
 
 function inputSetup() {
   addEventListener('keydown', (e) => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || (isTyping(e) && e.key !== 'Escape')) return;
     const k = e.key.toLowerCase();
-    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k) && !isTyping(e)) e.preventDefault();
+    if (k === 'tab' && ui.screen !== 'game') return;   // Tab moves focus in menus; in play it opens the menu
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'tab'].includes(k) && ui.screen === 'game') e.preventDefault();
     if (e.repeat) return;   // a held key acts once
     input.keys.add(k);
     const act = KEYMAP[k];
-    if (act && !(act === 'interact' && document.activeElement && /^(BUTTON|A|INPUT|SELECT)$/.test(document.activeElement.tagName))) input.queue.push(act);
+    if (act && !(act === 'interact' && document.activeElement && /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) input.queue.push(act);
   });
   addEventListener('keyup', (e) => input.keys.delete(e.key.toLowerCase()));
   addEventListener('blur', () => { input.keys.clear(); input.stickX = input.stickY = 0; });
@@ -658,18 +1175,22 @@ function inputSetup() {
   st.addEventListener('pointerdown', (e) => { id = e.pointerId; st.setPointerCapture(id); mv(e); });
   st.addEventListener('pointermove', (e) => { if (e.pointerId === id) mv(e); });
   st.addEventListener('pointerup', up); st.addEventListener('pointercancel', up);
-  document.querySelectorAll('[data-action]').forEach((b) => b.addEventListener('click', () => input.queue.push(b.dataset.action)));
+  // touch buttons act on press, not on release, so a combo keeps its rhythm
+  document.querySelectorAll('[data-action]').forEach((b) => {
+    b.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') { e.preventDefault(); input.queue.push(b.dataset.action); } });
+    b.addEventListener('click', (e) => { if (e.detail === 0 || !coarse) input.queue.push(b.dataset.action); });
+  });
 }
 const isTyping = (e) => e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
 
-// gamepad: left stick moves; A interacts, Start opens the menu, shoulders turn the view (edge-triggered)
+// gamepad: left stick moves; A hits (or talks), B dodges, X and Y are the skills, Start opens the menu, shoulders turn the view
 function pollPad() {
   const pads = navigator.getGamepads ? navigator.getGamepads() : []; const p = pads && [...pads].find(Boolean);
   input.padX = input.padY = 0; if (!p) return;
   const dz = (v) => Math.abs(v) < .2 ? 0 : v;
   input.padX = dz(p.axes[0] || 0); input.padY = -dz(p.axes[1] || 0);
   const edge = (i, act) => { const on = !!(p.buttons[i] && p.buttons[i].pressed); if (on && !input.padPrev[i]) input.queue.push(act); input.padPrev[i] = on; };
-  edge(0, 'interact'); edge(9, 'menu'); edge(4, 'rotateL'); edge(5, 'rotateR');
+  edge(0, 'attack'); edge(1, 'dodge'); edge(2, 'skill1'); edge(3, 'skill2'); edge(9, 'menu'); edge(4, 'rotateL'); edge(5, 'rotateR');
 }
 
 // the move vector in screen terms: x right, y up
@@ -680,35 +1201,142 @@ function moveVector() {
   const l = Math.hypot(x, y); return l > 1 ? [x / l, y / l] : [x, y];
 }
 
-// ---- engine/70-ui.js
-/* ---------- ui: title, options, dialogue, hint, fade (HTML over the canvas) ---------- */
-let dlg = null, actx = null, nearAct = null;
-const ui = { screen: 'title' };   // title | game | menu
+// ---- engine/62-world.js
+/* ---------- the living world: quests, villagers, chests, reading desks, spawns and scripted moments ---------- */
+// QUESTS (content): id → { name, main?, steps: [{ text, on: [event, what, count?], then?() }], reward?: { xp, coins, item } }
+//   events: 'talk' (npc id), 'collect' (item id), 'defeat' (enemy type), 'reach' (area id), 'flag' (flag name)
+// NPCS (content): id → { sheet, row, name, pic, talk() → { lines, after?, shop? } }
+// SPEAKERS (content): id → { name, pic } — who a ['speaker', 'key'] dialogue line belongs to
+const QUESTS = {}, NPCS = {}, SPEAKERS = {}, AREA_HOOKS = {};
+const CHAPTER = {};   // content: { intro?() } — what happens the first time a new game starts
+const npcs = [];
 
-function blip(f) {
-  if (!settings.sound) return;
-  try {
-    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-    const o = actx.createOscillator(), g = actx.createGain(), tt = actx.currentTime;
-    o.type = 'square'; o.frequency.value = f; g.gain.setValueAtTime(.025, tt); g.gain.exponentialRampToValueAtTime(.0001, tt + .05);
-    o.connect(g); g.connect(actx.destination); o.start(tt); o.stop(tt + .06);
-  } catch (e) { settings.sound = false; }
+const qState = (id) => G.quests[id] || null;                      // { s: step, n: count } or null (not started)
+const qStep = (id) => { const q = qState(id); return q ? q.s : -1; };
+const qDone = (id) => !!QUESTS[id] && qStep(id) >= QUESTS[id].steps.length;
+function startQuest(id) { if (qState(id)) return; G.quests[id] = { s: 0, n: 0 }; sfx('quest'); toast(t('toast.quest', { q: t(QUESTS[id].name) })); questEvent('flag', null); }
+function setFlag(f) { if (G.flags[f]) return; G.flags[f] = true; questEvent('flag', f); }
+function questEvent(type, what) {
+  if (!G) return;
+  for (const [id, Q] of Object.entries(QUESTS)) {
+    const q = qState(id); if (!q || q.s >= Q.steps.length) continue;
+    const st = Q.steps[q.s], [ev, w, n] = st.on;
+    const match = ev === 'check' && w() || ev === type && (w === what || w === '*') || (ev === 'flag' && G.flags[w]) || (ev === 'collect' && has(w, n || 1)) || (ev === 'reach' && A && A.def.id === w);
+    if (!match) continue;
+    if (ev === 'defeat' && ++q.n < (n || 1)) { toast(t('toast.count', { n: q.n, of: n })); continue; }
+    q.s++; q.n = 0; if (st.then) st.then();
+    if (q.s >= Q.steps.length) {
+      const r = Q.reward || {}; if (r.coins) G.coins += r.coins; if (r.item) addItem(r.item); if (r.xp) gainXp(r.xp);
+      sfx('quest'); toast(t('toast.questdone', { q: t(Q.name) }));
+    } else toast(t('toast.questnext', { q: t(Q.name) }));
+    saveGame(); questEvent(type === 'flag' ? 'flag' : 'none', null);   // a finished step may already satisfy the next one
+  }
 }
 
-/* dialogue: lines are language keys; text scrolls with a blip, a press shows the rest, the next press goes on */
-function showPage() { const page = dlg.lines[dlg.i], n = Math.min(page.length, Math.floor(dlg.n)); $('dText').textContent = page.slice(0, n); $('dMore').hidden = n < page.length; }
+/* villagers: stand where the area puts them, turn to the cat when it talks to them */
+function spawnNpc(id, x, z, face) {
+  const N = NPCS[id]; if (!N) throw new Error('no npc "' + id + '"');
+  const row = N.row, a = sheetActor(N.sheet || 'villagers', { down: row, up: row, side: row },
+    { idle: { down: ['down_idle'], up: ['up_idle'], side: ['side_idle'] }, walk: { down: ['down_walk1', 'down_walk2'], up: ['up_idle'], side: ['side_walk1', 'side_walk2'] } });
+  a.x = x; a.z = z; if (face) { a.fx = face[0]; a.fz = face[1]; }
+  const n = { id, N, a, x, z, home: face || [0, 1] };
+  A.solids.push({ x0: x - .35, z0: z - .3, x1: x + .35, z1: z + .3 });
+  A.acts.push({ x, z, r: 1.7, label: 'act.talk', npc: n, name: N.name });
+  npcs.push(n); return n;
+}
+function clearNpcs() { for (const n of npcs) n.a.dispose(); npcs.length = 0; }
+function npcsStep(dt) {
+  for (const n of npcs) {
+    const d = near(n, player);
+    if (d < 2.6) { const l = d || 1; n.a.fx = (player.x - n.x) / l; n.a.fz = (player.z - n.z) / l; } else { n.a.fx = n.home[0]; n.a.fz = n.home[1]; }
+  }
+}
+
+/* what Space does next to something */
+function interact(act) {
+  if (act.npc) {
+    const n = act.npc, r = n.N.talk();
+    questEvent('talk', n.id);
+    openDialogue({ name: n.N.name, pic: n.N.pic, lines: r.lines, voice: n.N.voice, after: () => { if (r.after) r.after(); if (r.shop) openShop(r.shop); } });
+    return;
+  }
+  if (act.chest) {
+    const c = act.chest; if (G.opened[c.id]) { openDialogue({ name: 'act.chest', lines: ['chest.empty'] }); return; }
+    if (c.need && !has(c.need)) { sfx('no'); openDialogue({ name: 'act.chest', lines: [c.needLine || 'chest.locked'] }); return; }
+    G.opened[c.id] = true; addItem(c.item, c.n || 1); sfx('chest'); if (c.flag) G.flags[c.flag] = true;
+    const found = [t('chest.found', { item: c.item === 'coin' ? t('item.coins', { n: c.n }) : t('item.' + c.item) })].concat((c.lines || []).map((k) => t(k)));
+    openDialogue({ name: 'act.chest', lines: found, raw: true, after: () => { questEvent('collect', c.item); if (c.flag) questEvent('flag', c.flag); saveGame(); } });
+    return;
+  }
+  if (act.desk) {
+    G.hp = stats().hp; G.ink = stats().ink;
+    const ok = saveGame(); sfx(ok ? 'save' : 'no');
+    openDialogue({ name: 'act.desk', lines: [ok ? 'desk.saved' : 'desk.failed'], after: act.after });
+    return;
+  }
+  if (act.run) { act.run(); return; }
+  openDialogue(act);
+}
+
+/* the area's living layer: villagers, enemies, chests, desks, hooks; called after the ground is built */
+function populate(def) {
+  clearEnemies(); clearNpcs(); clearFlats(); clearFloats();
+  for (const [key, x, z, , , o] of def.things || []) {
+    if (!o || (o.when && !o.when())) continue;
+    const d = AP.sprites[key].d || 8, front = z + d * P / 2 + .5;
+    if (o.chest) A.acts.push({ x, z: front, r: 1.4, label: 'act.open', chest: o.chest, name: 'act.chest' });
+    if (o.desk) A.acts.push({ x, z: front, r: 1.4, label: 'act.read', desk: true, name: 'act.desk' });
+    if (o.act) A.acts.push(Object.assign({ x, z: front, r: 1.4 }, o.act));
+  }
+  for (const [id, x, z, face, when] of def.npcs || []) if (!when || when()) spawnNpc(id, x, z, face);
+  for (const [type, x, z, when] of def.spawns || []) if (!when || when()) spawnEnemy(type, x, z);
+  if (AREA_HOOKS[def.id]) AREA_HOOKS[def.id]();
+  if (G) { G.seen[def.id] = true; questEvent('reach', def.id); }
+}
+
+// ---- engine/70-ui.js
+/* ---------- ui: dialogue with portraits, hint, toast, HUD, fade (HTML over the canvas) ---------- */
+let dlg = null, nearAct = null;
+const ui = { screen: 'title' };   // title | game | menu | menu-title | shop | over
+
+/* portraits: drawn from the portraits sheet into a small canvas */
+function drawPic(el, sheet, name) {
+  const SH = SHEETS[sheet], r = SH && name && SH.meta.sprites[name]; el.hidden = !r; if (!r) return;
+  el.width = r.w; el.height = r.h; const x = el.getContext('2d'); x.imageSmoothingEnabled = false; x.clearRect(0, 0, r.w, r.h); x.drawImage(SH.canvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+}
+
+/* dialogue: a line is a language key, or [speaker, key, vars?]; text scrolls with a blip, a press shows the rest, the next goes on */
+function showPage() {
+  const L = dlg.lines[dlg.i], page = L.text, n = Math.min(page.length, Math.floor(dlg.n));
+  if (dlg.shown !== dlg.i) {
+    dlg.shown = dlg.i; const sp = L.who ? SPEAKERS[L.who] || {} : {};
+    $('dWho').textContent = t(sp.name || dlg.name); drawPic($('dPic'), 'portraits-1', L.who ? sp.pic : dlg.pic);
+  }
+  $('dText').textContent = page.slice(0, n); $('dMore').hidden = n < page.length || (dlg.choices && dlg.i === dlg.lines.length - 1);
+  // choices: buttons under the last page, once its text is all out
+  const box = $('dChoices'), want = dlg.choices && dlg.i === dlg.lines.length - 1 && n >= page.length;
+  if (want && !box.childElementCount) {
+    for (const [key, then] of dlg.choices) { const b = document.createElement('button'); b.type = 'button'; b.textContent = t(key); b.onclick = (e) => { e.stopPropagation(); sfx('ok'); box.textContent = ''; dlg = null; $('dialog').hidden = true; then(); }; box.append(b); }
+    box.hidden = false; box.firstChild.focus({ preventScroll: true });
+  } else if (!want && box.childElementCount) { box.textContent = ''; box.hidden = true; }
+}
 function openDialogue(a) {
-  dlg = { lines: (typeof a.lines === 'function' ? a.lines() : a.lines).map((k) => t(k)), i: 0, n: reduceMotion ? 1e9 : 0, voice: a.voice || 330, last: 0 };
-  $('dWho').textContent = t(a.name); $('dialog').hidden = false; showPage();
+  const raw = (typeof a.lines === 'function' ? a.lines() : a.lines);
+  const lines = raw.map((l) => Array.isArray(l) ? { who: l[0], text: t(l[1], l[2]) } : { text: a.raw ? l : t(l) });
+  dlg = { lines, i: 0, n: reduceMotion ? 1e9 : 0, voice: a.voice || 330, last: 0, name: a.name, pic: a.pic, after: a.after, shown: -1, choices: a.choices };
+  $('dChoices').textContent = ''; $('dChoices').hidden = true; $('dialog').hidden = false; showPage(); if (player) player.moving = false;
 }
 function advance() {
-  if (!dlg) { if (nearAct) openDialogue(nearAct); return; }
-  const page = dlg.lines[dlg.i];
-  if (dlg.n < page.length) dlg.n = page.length; else if (++dlg.i < dlg.lines.length) dlg.n = reduceMotion ? 1e9 : 0; else { dlg = null; $('dialog').hidden = true; return; }
+  if (!dlg) { if (nearAct) interact(nearAct); return; }
+  const page = dlg.lines[dlg.i].text;
+  if (dlg.n < page.length) dlg.n = page.length;
+  else if (dlg.choices && dlg.i === dlg.lines.length - 1) return;   // a choice must be picked
+  else if (++dlg.i < dlg.lines.length) dlg.n = reduceMotion ? 1e9 : 0;
+  else { const after = dlg.after; dlg = null; $('dialog').hidden = true; if (after) after(); return; }
   showPage();
 }
 function tickDialogue(dt) {
-  if (!dlg) return; const page = dlg.lines[dlg.i];
+  if (!dlg) return; const page = dlg.lines[dlg.i].text;
   if (dlg.n < page.length) { dlg.n += dt * 42; const n = Math.floor(dlg.n); if (n !== dlg.last) { dlg.last = n; if (n % 2 === 0 && page[n - 1] !== ' ') blip(dlg.voice); showPage(); } }
 }
 
@@ -717,26 +1345,158 @@ function setHint(a) {
   const key = a ? 'z:' + a.label : 'base';
   if (key === hintState) return; hintState = key;
   $('hint').textContent = a ? t(coarse ? 'hint.act.touch' : 'hint.act', { what: t(a.label) }) : t(coarse ? 'hint.touch' : 'hint.keys');
+  $('bAtk').textContent = t(a ? 'btn.talk' : 'btn.atk');
 }
 
-/* options: language, frame-rate cap, shadows, sound; stored as preferences */
-function optionsSetup() {
-  const seg = (id, val, apply) => document.querySelectorAll(`#${id} button`).forEach((b) => {
-    b.setAttribute('aria-pressed', String(b.dataset.v === String(val())));
-    b.onclick = () => { apply(b.dataset.v); saveSettings(); document.querySelectorAll(`#${id} button`).forEach((o) => o.setAttribute('aria-pressed', String(o === b))); };
-  });
-  seg('optLang', () => settings.lang, (v) => { settings.lang = v; applyLang(); hintState = null; if (A) $('areaName').textContent = t(A.name); });
-  seg('optFps', () => settings.fps, (v) => { settings.fps = +v; });
-  seg('optShadows', () => settings.shadows ? 'on' : 'off', (v) => { settings.shadows = v === 'on'; sun.castShadow = settings.shadows; shadowHold = 3; });
-  seg('optSound', () => settings.sound ? 'on' : 'off', (v) => { settings.sound = v === 'on'; });
-}
-function openMenu(on) {
-  ui.screen = on ? 'menu' : 'game'; $('menu').hidden = !on;
-  if (on) { const f = $('menu').querySelector('button'); if (f) f.focus({ preventScroll: true }); } else canvas.focus({ preventScroll: true });
+let toastT = 0;
+function toast(text) { const el = $('toast'); el.textContent = text; el.hidden = false; toastT = 2.6; }
+function toastTick(dt) { if (toastT > 0 && (toastT -= dt) <= 0) $('toast').hidden = true; }
+
+/* HUD: health, ink, level, coins; the DOM is touched only when a number changes */
+let hudKey = '';
+function hudDraw() {
+  if (!G) return; const s = stats(), key = [G.hp, s.hp, G.ink, s.ink, G.level, G.coins, G.flags.skill_dash, G.flags.skill_well, settings.lang].join();
+  if (key === hudKey) return; hudKey = key;
+  $('hpBar').style.width = (100 * G.hp / s.hp).toFixed(1) + '%'; $('inkBar').style.width = (100 * G.ink / s.ink).toFixed(1) + '%';
+  $('hpNum').textContent = G.hp + '/' + s.hp; $('inkNum').textContent = G.ink + '/' + s.ink;
+  $('hLv').textContent = t('hud.lv', { n: G.level }); $('hCoins').textContent = t('hud.coins', { n: G.coins });
+  $('bDash').hidden = !G.flags.skill_dash; $('bWell').hidden = !G.flags.skill_well;
 }
 
 /* fade between areas: out, swap, in */
 function fade(to) { const f = $('fade'); f.style.opacity = to; return new Promise((ok) => setTimeout(ok, reduceMotion ? 0 : 260)); }
+
+// ---- engine/72-menus.js
+/* ---------- menus: title, pause menu (items, equipment, quests, map, options, save code), shop, load code, game over ---------- */
+const TABS = ['items', 'equip', 'quests', 'map', 'options', 'code'];
+let menuTab = 'items', pick = null;
+
+function showScreen(id) {
+  document.body.classList.toggle('playing', !id || id === 'menu' && ui.screen === 'menu' || id === 'shop');
+  for (const s of ['title', 'menu', 'shop', 'over', 'codeBox', 'end']) $(s).hidden = s !== id;
+  const first = id && $(id).querySelector('button:not([hidden]):not([disabled]), textarea');
+  if (first) first.focus({ preventScroll: true }); else canvas.focus({ preventScroll: true });
+}
+const iconCanvas = (id) => { const c = document.createElement('canvas'); c.className = 'icon'; drawPic(c, 'items-1', id); return c; };
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+const btn = (text, on, cls) => { const b = el('button', cls, text); b.type = 'button'; b.onclick = () => { sfx('ok'); on(); }; return b; };
+
+/* pause menu */
+function openMenu(on, onlyOptions) {
+  if (!on) { showScreen(null); ui.screen = ui.screen === 'menu-title' ? 'title' : 'game'; if (ui.screen === 'title') showScreen('title'); return; }
+  ui.screen = onlyOptions ? 'menu-title' : 'menu'; menuTab = onlyOptions ? 'options' : menuTab;
+  document.querySelectorAll('#tabs button').forEach((b) => { b.hidden = onlyOptions && b.dataset.tab !== 'options'; });
+  showScreen('menu'); renderTab(); sfx('ok');
+}
+function renderTab() {
+  document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === menuTab)));
+  for (const k of TABS) $('tab-' + k).hidden = k !== menuTab;
+  const box = $('tab-' + menuTab);
+  if (menuTab === 'items') renderItems(box); else if (menuTab === 'equip') renderEquip(box); else if (menuTab === 'quests') renderQuests(box);
+  else if (menuTab === 'map') renderMap(box); else if (menuTab === 'code') renderCode(box);
+}
+function renderItems(box) {
+  box.textContent = ''; const ids = Object.keys(G.inv);
+  const head = el('p', 'line', t('menu.coins', { n: G.coins })); box.append(head);
+  if (!ids.length) { box.append(el('p', 'dim', t('menu.noitems'))); return; }
+  const grid = el('div', 'grid'), info = el('div', 'info');
+  for (const id of ids) {
+    const b = el('button', 'cell'); b.type = 'button'; b.append(iconCanvas(id), el('span', 'n', G.inv[id] > 1 ? '×' + G.inv[id] : ''));
+    b.setAttribute('aria-label', t('item.' + id) + (G.inv[id] > 1 ? ' ×' + G.inv[id] : ''));
+    b.onclick = () => { pick = id; sfx('move'); showInfo(info, id); }; grid.append(b);
+  }
+  box.append(grid, info); if (pick && G.inv[pick]) showInfo(info, pick);
+}
+function showInfo(info, id) {
+  const it = ITEMS[id] || {}; info.textContent = '';
+  info.append(el('b', '', t('item.' + id)), el('p', '', t('desc.' + id)));
+  const bonus = ['atk', 'def', 'hp', 'ink'].filter((k) => it[k]).map((k) => t('stat.' + k) + ' +' + it[k]).join(' · '); if (bonus) info.append(el('p', 'dim', bonus));
+  const row = el('div', 'row');
+  if (it.use) row.append(btn(t('menu.use'), () => { if (!useItem(id)) { sfx('no'); toast(t('toast.full')); } renderTab(); }));
+  if (it.slot) row.append(btn(t('menu.equip'), () => { equip(id); renderTab(); }));
+  info.append(row);
+}
+function renderEquip(box) {
+  box.textContent = ''; const s = stats();
+  box.append(el('p', 'line', t('menu.stats', { lv: G.level, hp: s.hp, ink: s.ink, atk: s.atk, def: s.def })), el('p', 'dim', G.level >= 5 ? t('menu.maxlv') : t('menu.xp', { xp: G.xp, next: xpToNext() })));
+  for (const slot of ['weapon', 'armour', 'charm']) {
+    const id = G.eq[slot], row = el('div', 'slot'); row.append(el('span', 'dim', t('slot.' + slot)));
+    if (id) row.append(iconCanvas(id), el('span', '', t('item.' + id))); else row.append(el('span', 'dim', '—'));
+    const spare = Object.keys(G.inv).filter((k) => (ITEMS[k] || {}).slot === slot);
+    for (const k of spare) row.append(btn(t('menu.swap', { item: t('item.' + k) }), () => { equip(k); renderTab(); }, 'small'));
+    box.append(row);
+  }
+}
+function renderQuests(box) {
+  box.textContent = ''; const ids = Object.keys(G.quests).sort((a, b) => (QUESTS[b].main ? 1 : 0) - (QUESTS[a].main ? 1 : 0));
+  if (!ids.length) { box.append(el('p', 'dim', t('menu.noquests'))); return; }
+  for (const id of ids) {
+    const Q = QUESTS[id], s = qStep(id), done = s >= Q.steps.length, d = el('div', 'quest' + (done ? ' done' : ''));
+    d.append(el('b', '', t(Q.name) + (Q.main ? ' · ' + t('menu.main') : '')), el('p', '', done ? t('menu.qdone') : t(Q.steps[s].text)));
+    box.append(d);
+  }
+}
+function renderMap(box) {
+  box.textContent = ''; const def = AREAS.overworld, rows = def.map.length, cols = def.map[0].length, k = 5;
+  const c = document.createElement('canvas'); c.width = cols * k; c.height = rows * k; c.className = 'map'; const x = c.getContext('2d');
+  const col = {}; for (const [ch, g] of Object.entries(def.legend)) { const T = TILES[g.tile], p = T.px; let r = 0, gg = 0, b = 0; for (let o = 0; o < p.length; o += 4) { r += p[o]; gg += p[o + 1]; b += p[o + 2]; } const n = p.length / 4; col[ch] = `rgb(${r / n * (g.h > 20 ? .6 : 1) | 0},${gg / n * (g.h > 20 ? .6 : 1) | 0},${b / n * (g.h > 20 ? .6 : 1) | 0})`; }
+  for (let r = 0; r < rows; r++) for (let q = 0; q < cols; q++) { x.fillStyle = col[def.map[r][q]]; x.fillRect(q * k, r * k, k, k); }
+  x.fillStyle = '#2a2030'; for (const [key, tx, tz] of def.things) if (['library', 'bakery', 'shop', 'house_a', 'house_b', 'church', 'windmill'].includes(key)) x.fillRect(tx / 2 * k - 6, tz / 2 * k - 6, 12, 8);
+  const inside = A && A.def.id !== 'overworld';
+  const door = inside && def.things.find((th) => th[5] && th[5].door && th[5].door.to === A.def.id), [px, pz] = inside ? (door ? [door[1], door[2]] : [-99, -99]) : [player.x, player.z];
+  x.fillStyle = '#ffb85c'; x.fillRect(px / 2 * k - 3, pz / 2 * k - 3, 6, 6); x.strokeStyle = '#000'; x.strokeRect(px / 2 * k - 3.5, pz / 2 * k - 3.5, 7, 7);
+  box.append(c, el('p', 'dim', inside ? t('menu.inside', { area: t(A.def.name) }) : t('menu.here')));
+}
+function renderCode(box) {
+  box.textContent = ''; const code = saveCode(), ta = el('textarea', 'code'); ta.readOnly = true; ta.value = code; ta.rows = 4; ta.setAttribute('aria-label', t('menu.code'));
+  box.append(el('p', 'dim', t('menu.codehelp')), ta, btn(t('menu.copy'), () => { ta.select(); try { navigator.clipboard.writeText(code).then(() => toast(t('toast.copied'))); } catch (e) { document.execCommand('copy'); } }));
+}
+
+/* options: language, frame-rate cap, shadows, screen shake, music, sound; stored as preferences */
+function optionsSetup() {
+  const seg = (id, val, apply) => document.querySelectorAll(`#${id} button`).forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.v === String(val())));
+    b.onclick = () => { apply(b.dataset.v); saveSettings(); sfx('move'); document.querySelectorAll(`#${id} button`).forEach((o) => o.setAttribute('aria-pressed', String(o === b))); };
+  });
+  seg('optLang', () => settings.lang, (v) => { settings.lang = v; applyLang(); hintState = null; hudKey = ''; if (A) $('areaName').textContent = t(A.name); if (ui.screen === 'menu') renderTab(); });
+  seg('optFps', () => settings.fps, (v) => { settings.fps = +v; });
+  seg('optShadows', () => settings.shadows ? 'on' : 'off', (v) => { settings.shadows = v === 'on'; sun.castShadow = settings.shadows; shadowHold = 3; });
+  seg('optShake', () => settings.shake ? 'on' : 'off', (v) => { settings.shake = v === 'on'; });
+  seg('optMusic', () => settings.music, (v) => { settings.music = +v; audioInit(); audioVolumes(); if (A && player) playTrack(areaTrack()); });
+  seg('optSound', () => settings.sound, (v) => { settings.sound = +v; audioInit(); audioVolumes(); });
+  document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => { menuTab = b.dataset.tab; sfx('move'); renderTab(); }; });
+  // arrow keys move along the tab row
+  $('tabs').addEventListener('keydown', (e) => {
+    const vis = [...document.querySelectorAll('#tabs button:not([hidden])')], i = vis.indexOf(document.activeElement); if (i < 0) return;
+    const j = e.key === 'ArrowRight' ? (i + 1) % vis.length : e.key === 'ArrowLeft' ? (i + vis.length - 1) % vis.length : -1;
+    if (j >= 0) { e.preventDefault(); vis[j].focus(); vis[j].click(); }
+  });
+  $('bResume').onclick = () => openMenu(false);
+}
+
+/* shop: buy with coins; a shop is a list of item ids */
+let shopList = null;
+function openShop(list) { shopList = list; ui.screen = 'shop'; renderShop(); showScreen('shop'); }
+function renderShop() {
+  const box = $('shopList'); box.textContent = ''; $('shopCoins').textContent = t('menu.coins', { n: G.coins });
+  for (const id of shopList) {
+    const it = ITEMS[id], row = el('div', 'slot'), owned = it.slot && has(id);
+    row.append(iconCanvas(id), el('span', '', t('item.' + id)), el('span', 'dim', t('desc.' + id)));
+    const b = btn(owned ? t('shop.owned') : t('shop.buy', { n: it.price }), () => {
+      if (G.coins < it.price) { sfx('no'); toast(t('toast.poor')); return; }
+      G.coins -= it.price; addItem(id); sfx('coin'); toast(t('toast.bought', { item: t('item.' + id) })); renderShop();
+    }, 'small');
+    b.disabled = owned; row.append(b); box.append(row);
+  }
+}
+
+/* load code (from the title) */
+function openCodeBox() { $('codeIn').value = ''; $('codeErr').textContent = ''; ui.screen = 'code'; showScreen('codeBox'); }
+function submitCode() {
+  const r = readCode($('codeIn').value);
+  if (r.error) { $('codeErr').textContent = t(r.error, { ch: r.ch }); sfx('no'); return; }
+  G = r.save; saveGame(); beginPlay();
+}
 
 // ---- engine/80-loop.js
 /* ---------- loop: simulation at a fixed 120 Hz, drawing capped at the chosen 30 / 60 / 120 fps ---------- */
@@ -750,36 +1510,48 @@ function enterArea(name, at, face) {
   if (A) A.dispose();
   A = openArea(def);
   player.x = at ? at[0] : def.start[0]; player.z = at ? at[1] : def.start[1];
+  const [tx, tz] = camGoal(Math.max(VT, minV())); camT.set(tx, A.groundY(player.x, player.z) * .5, tz);
   A.open(player.x, player.z);
   if (face) { player.fx = face[0]; player.fz = face[1]; }
   tod = Math.max(0, TODS.findIndex((x) => x.label === (def.tod || 'giorno'))); applyTod(1);
-  const [tx, tz] = camGoal(Math.max(VT, minV())); camT.set(tx, A.groundY(player.x, player.z) * .5, tz);
   $('areaName').textContent = t(def.name); hintState = null; shadowHold = 8; dlg = null; $('dialog').hidden = true;
+  if (G) G.area = name;
+  populate(def); playTrack(areaTrack());
 }
 async function goTo(exit) {
-  transitioning = true; player.moving = false;
-  await fade(1); enterArea(exit.to, exit.at, exit.face); await fade(0);
+  transitioning = true; player.moving = false; sfx('door');
+  await fade(1); enterArea(exit.to, exit.at, exit.face); saveGame(); await fade(0);
   transitioning = false;
 }
+
+const areaTrack = () => typeof A.def.music === 'function' ? A.def.music(player.x, player.z) : A.def.music || 'village';
 
 function step(dt) {
   while (input.queue.length) {
     const act = input.queue.shift();
-    if (act === 'menu') { if (ui.screen === 'game') openMenu(true); else if (ui.screen === 'menu') openMenu(false); continue; }
+    if (act === 'menu') {
+      if (ui.screen === 'game' && !dlg) openMenu(true);
+      else if (ui.screen === 'menu' || ui.screen === 'menu-title') openMenu(false);
+      else if (ui.screen === 'shop') closeShop();
+      else if (ui.screen === 'code') { ui.screen = 'title'; showScreen('title'); }
+      continue;
+    }
     if (ui.screen !== 'game' || transitioning) continue;
-    if (act === 'interact') advance(); else if (act === 'rotateL') rotate(-1); else if (act === 'rotateR') rotate(1);
+    if (act === 'interact') { if (dlg || nearAct) advance(); }
+    else if (act === 'attack') { if (dlg) advance(); else if (nearAct && !nearestEnemy(4)) advance(); else heroAttack(); }
+    else if (act === 'dodge') { if (!dlg) heroDodge(); }
+    else if (act === 'skill1') { if (!dlg) heroDodge('dash'); }
+    else if (act === 'skill2') { if (!dlg) heroDodge('well'); }
+    else if (act === 'rotateL') rotate(-1); else if (act === 'rotateR') rotate(1);
   }
   if (ui.screen !== 'game' || transitioning || !A) { if (player) player.moving = false; return; }
-  const [ix, iy] = moveVector(), il = Math.hypot(ix, iy);
-  if (il > .15 && !dlg) {
-    const mx = Math.cos(yaw) * ix - Math.sin(yaw) * iy, mz = -Math.sin(yaw) * ix - Math.cos(yaw) * iy, spd = 9.6 * dt;   // the owner asked for 3x the first 3.2 units/s
-    if (!A.blocked(player.x + mx * spd, player.z, player.x, player.z)) player.x += mx * spd;
-    if (!A.blocked(player.x, player.z + mz * spd, player.x, player.z)) player.z += mz * spd;
-    const l = Math.hypot(mx, mz); player.fx = mx / l; player.fz = mz / l; player.step += dt * 18 * Math.min(1, il); player.moving = true;
-  } else { player.moving = false; player.step = 0; }
-  for (const ex of A.exits) { const [x0, z0, x1, z1] = ex.rect; if (player.x >= x0 && player.x <= x1 && player.z >= z0 && player.z <= z1) { goTo(ex); break; } }
+  if (!dlg) { heroStep(dt); enemiesStep(dt); hazardsStep(dt); pickupsStep(dt); npcsStep(dt); } else player.moving = false;
+  if (!hero.dead && !dlg) for (const ex of A.exits) { if (ex.when && !ex.when()) continue; const [x0, z0, x1, z1] = ex.rect; if (player.x >= x0 && player.x <= x1 && player.z >= z0 && player.z <= z1) {
+    if (ex.need && !has(ex.need)) { player.z += z1 - player.z + .25; sfx('no'); toast(t('toast.door', { item: t('item.' + ex.need) })); break; }   // a locked door pushes the cat back
+    goTo(ex); break;
+  } }
   nearAct = null; let best = 1e9;
-  for (const a of A.acts) { const d = Math.hypot(a.x - player.x, a.z - player.z); if (d < a.r && d < best) { best = d; nearAct = a; } }
+  if (!hero.dead) for (const a of A.acts) { if (a.when && !a.when()) continue; const d = Math.hypot(a.x - player.x, a.z - player.z); if (d < a.r && d < best) { best = d; nearAct = a; } }
   tickDialogue(dt);
 }
 
@@ -792,10 +1564,11 @@ function draw(dt) {
   const vv = Math.max(Vz, minV()), [tx, tz] = camGoal(vv), kf = 1 - Math.exp(-dt * 5);
   camT.x += (tx - camT.x) * kf; camT.z += (tz - camT.z) * kf; camT.y += (A.groundY(player.x, player.z) * .5 - camT.y) * kf;
   setCamera();
+  if (shakeT > 0) { shakeT = Math.max(0, shakeT - dt); const k = shakeT * .9; cam.position.x += (R() - .5) * k; cam.position.y += (R() - .5) * k; cam.updateMatrixWorld(); }
   for (const a of actors) a.pose();
   applyTod(1 - Math.exp(-dt * 2.2));
-  A.update(dt, player.x, player.z);
-  if (player.moving || dlg || Math.abs(yaw - yawT) > 1e-3 || Math.abs(cur.az - TODS[tod].az) + Math.abs(cur.el - TODS[tod].el) > 1e-4) shadowHold = 3;
+  A.update(dt, player.x, player.z); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); floatsDraw(dt); hudDraw(); toastTick(dt); musicTick();
+  if (player.moving || enemies.length || pickups.length || player.anim || dlg || Math.abs(yaw - yawT) > 1e-3 || Math.abs(cur.az - TODS[tod].az) + Math.abs(cur.el - TODS[tod].el) > 1e-4) shadowHold = 3;
   if (shadowHold > 0) { shadowHold--; sun.shadow.needsUpdate = true; }
   postU.uTime.value = time; postU.uStars.value = cur.stars; postU.uBgTop.value.set(cur.top[0], cur.top[1], cur.top[2]); postU.uBgBot.value.set(cur.bot[0], cur.bot[1], cur.bot[2]);
   renderer.info.reset();
@@ -817,6 +1590,81 @@ function frame(now) {
   if (fpsT >= .5) { fps = frames / fpsT; frames = 0; fpsT = 0; if (!$('menu').hidden) $('diag').textContent = t('diag', { fps: Math.round(fps), ms: (1000 / Math.max(1, fps)).toFixed(1), tris: Math.round((A ? A.tris : 0) / 1000), calls: calls + 1, build: A ? A.buildMs : 0 }); }
 }
 
+// ---- content/chapter1/areas/crypt.js
+/* ---------- the crypt under the church: an ink pool crossed with the dash, three levers, the arch to the Scribe ---------- */
+// legend: W walls, V the low front wall, o floor, w the ink pool
+const CRYPT_LEGEND = { o: { tile: 'crypt_floor' }, W: { tile: 'crypt_floor', h: 52, wall: 0x4a4250 }, V: { tile: 'crypt_floor', h: 6, wall: 0x4a4250 }, w: { tile: 'water', water: true, h: -3 } };
+AREAS.crypt_in = {
+  id: 'crypt_in', name: 'area.crypt', cell: 2, tod: 'cripta', start: [16, 45.4], camNorth: 1, music: 'crypt', halo: 0x8fa8ff,
+  legend: CRYPT_LEGEND,
+  map: [
+    'WWWWWWWWWWWWWWWW',
+    'WooooooooooooooW',   // the arch room: the way to the Scribe, the Inkwell in a chest
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WWWWWWooooWWWWWW',   // the lever gate
+    'WooooooooooooooW',   // the lever room
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WWWWWWooooWWWWWW',
+    'WwwwwwwwwwwwwwwW',   // the ink pool: too wide to walk, short enough to dash
+    'WwwwwwwwwwwwwwwW',
+    'WooooooooooooooW',   // the first hall
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'WooooooooooooooW',
+    'VVVVVVVooVVVVVVV',
+  ],
+  things: [
+    ['crypt_arch', 16, 4, 2.6, .8, { door: { to: 'crypt_boss', at: [14, 21.4], face: [0, -1] } }],
+    ['chest', 5, 6.4, undefined, undefined, { chest: { id: 'crypt_well', item: 'ink_potion', n: 2, flag: 'skill_well', lines: ['chest.well', 'chest.well2'] } }],
+    ['sarcophagus', 25.5, 5.8],
+    ['crypt_wall', 16, 10.6, 4.2, .8, { when: () => !G.flags.crypt_gate }],
+    ['lever', 5, 15.4, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: () => cryptLever(1) } }],
+    ['lever', 27, 15.4, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: () => cryptLever(2) } }],
+    ['lever', 22.4, 18.6, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: () => cryptLever(3) } }],
+    ['signpost', 9.6, 18.4, undefined, undefined, { look: { label: 'act.read', name: 'act.plaque', lines: ['plaque.1', 'plaque.2'] } }],
+    ['sarcophagus', 7, 32], ['sarcophagus', 25, 32], ['barrel', 3.4, 42.4], ['crate', 28.6, 42.6],
+  ],
+  lamps: [[3, 3, 3, 2.6, 1.3], [29, 3, 3, 2.6, 1.3], [3, 3, 13, 2.4, 1.2], [29, 3, 13, 2.4, 1.2], [3, 3, 28, 2.4, 1.2], [29, 3, 28, 2.4, 1.2], [3, 3, 40, 2.4, 1.2], [29, 3, 40, 2.4, 1.2]],
+  spawns: [['bookworm', 10, 36], ['bookworm', 22, 38], ['wax_golem', 16, 16.4], ['wax_golem', 22, 7.6, () => !G.flags.boss_done]],
+  exits: [{ rect: [14, 47.2, 18, 48], to: 'overworld', at: [45, 25.2], face: [0, 1] }],
+};
+
+// the Scribe's chamber
+AREAS.crypt_boss = {
+  id: 'crypt_boss', name: 'area.boss', cell: 2, tod: 'cripta', start: [14, 21.4], camNorth: 1, music: 'boss', halo: 0x8fa8ff,
+  legend: CRYPT_LEGEND,
+  map: [
+    'WWWWWWWWWWWWWW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'WooooooooooooW',
+    'VVVVVVooVVVVVV',
+  ],
+  things: [['sarcophagus', 5, 4.4], ['sarcophagus', 23, 4.4]],
+  lamps: [[3, 3, 3, 2.8, 1.4], [25, 3, 3, 2.8, 1.4], [3, 3, 18, 2.6, 1.2], [25, 3, 18, 2.6, 1.2]],
+  exits: [
+    { rect: [12, 23.2, 16, 24], to: 'crypt_in', at: [16, 6.8], face: [0, 1], when: () => !G.flags.boss_done },
+    { rect: [12, 23.2, 16, 24], to: 'overworld', at: [45, 25.2], face: [0, 1], when: () => !!G.flags.boss_done },
+  ],
+};
+
 // ---- content/chapter1/areas/interiors.js
 /* ---------- interiors: separate scenes entered through a door; a low front wall lets the camera look in ---------- */
 // legend: W = back and side walls (tall), V = the front wall (low), o = floor; the doorway is a gap in the front wall
@@ -830,7 +1678,8 @@ const INTERIOR_LEGEND = { o: { tile: 'wood_planks' }, W: { tile: 'crypt_floor', 
 AREAS.library_in = {
   id: 'library_in', name: 'area.library', cell: 2, tod: 'interno', start: [13, 13.4], camNorth: 1,
   legend: INTERIOR_LEGEND, map: room(12, 8, 6),
-  things: [['reading_desk', 13, 7.6], ['statue', 5, 4.6], ['chest', 19.6, 5], ['crate', 4.4, 11.6], ['barrel', 19.8, 11.4], ['bench', 13, 4.4]],
+  things: [['reading_desk', 13, 7.6, undefined, undefined, { desk: true }], ['statue', 5, 4.6], ['chest', 19.6, 5, undefined, undefined, { chest: { id: 'library', item: 'milk', n: 2 } }], ['crate', 4.4, 11.6], ['barrel', 19.8, 11.4], ['bench', 13, 4.4]],
+  npcs: [['librarian', 17.5, 8.4, [0, 1]]], music: 'library',
   lamps: [[6, 3, 8, 3, 1.2], [18, 3, 8, 3, 1.2]],
   exits: [{ rect: [10, 15.2, 16, 16], to: 'overworld', at: [32, 35.6], face: [0, 1] }],
 };
@@ -839,7 +1688,8 @@ AREAS.library_in = {
 AREAS.bakery_in = {
   id: 'bakery_in', name: 'area.bakery', cell: 2, tod: 'interno', start: [11, 11.4], camNorth: 1,
   legend: INTERIOR_LEGEND, map: room(10, 7, 5),
-  things: [['market_stall', 11, 6], ['barrel', 4, 4.6], ['barrel', 5.6, 4.6], ['crate', 16, 9.6], ['chest', 16, 4.6]],
+  things: [['market_stall', 11, 6], ['barrel', 4, 4.6], ['barrel', 5.6, 4.6], ['crate', 16, 9.6], ['chest', 16, 4.6, undefined, undefined, { chest: { id: 'bakery', item: 'coin', n: 12 } }]],
+  npcs: [['baker', 11, 8.6, [0, 1]]], music: 'library',
   lamps: [[10, 3, 7, 3, 1.3]],
   exits: [{ rect: [8, 13.2, 14, 14], to: 'overworld', at: [45, 35.6], face: [0, 1] }],
 };
@@ -871,41 +1721,351 @@ AREAS.overworld = (() => {
     ['bakery', 45, 31.5, undefined, undefined, { door: { to: 'bakery_in', at: [11, 11.4], face: [0, -1] } }],
     ['shop', 56.5, 31.5],
     ['house_a', 22, 37], ['house_b', 20, 50.5],
-    ['church', 45, 21],
+    ['church', 45, 21, undefined, undefined, { door: { to: 'crypt_in', at: [16, 45.4], face: [0, -1], need: 'crypt_key' } }],
+    ['chest', 101, 30.6, undefined, undefined, { chest: { id: 'mill', item: 'hinge' } }],
+    // the fenced garden south of the road (x 96–104, z 48–56); its gate opens by the lever
+    ['fence', 97.3, 48], ['fence', 102.5, 48], ['fence', 99.9, 48, 1.3, .25, { when: () => !G.flags.gate_open }],
+    ['fence', 97.3, 56], ['fence', 99.9, 56], ['fence', 102.5, 56],
+    ['fence', 96, 49.3, undefined, undefined, { rot: 1 }], ['fence', 96, 51.9, undefined, undefined, { rot: 1 }], ['fence', 96, 54.5, undefined, undefined, { rot: 1 }],
+    ['fence', 104, 49.3, undefined, undefined, { rot: 1 }], ['fence', 104, 51.9, undefined, undefined, { rot: 1 }], ['fence', 104, 54.5, undefined, undefined, { rot: 1 }],
+    ['lever', 92.6, 46.6, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: roadLever } }],
+    ['chest', 98.5, 51, undefined, undefined, { chest: { id: 'garden_page', item: 'page_2' } }],
+    ['chest', 101.6, 51, undefined, undefined, { chest: { id: 'garden_key', item: 'crypt_key', lines: ['chest.cryptkey'] } }],
+    ['statue', 86, 47.2, undefined, undefined, { act: { label: 'act.read', name: 'who.statue', run: statueRiddle } }],
     ['windmill', 101, 25], ['vine_row', 78, 26], ['vine_row', 88, 26], ['vine_row', 78, 31.5], ['vine_row', 88, 31.5],
-    ['well', 44, 44], ['market_stall', 53, 47], ['bench', 36, 48.5], ['reading_desk', 37.5, 36.6],
+    ['well', 44, 44], ['market_stall', 53, 47], ['bench', 36, 48.5], ['reading_desk', 37.5, 36.6, undefined, undefined, { desk: true }],
     ['lamp_post', 38, 39, .2, .2], ['lamp_post', 50, 39, .2, .2], ['lamp_post', 38, 51, .2, .2], ['lamp_post', 50, 51, .2, .2],
-    ['signpost', 62, 38.6], ['barrel', 59.4, 37.6], ['crate', 60.8, 38.2], ['statue', 44, 27.6],
+    ['signpost', 62, 38.6, undefined, undefined, { look: { label: 'act.read', name: 'act.sign', lines: ['sign.1'] } }], ['barrel', 59.4, 37.6], ['crate', 60.8, 38.2],
     ['fence', 72, 36.6], ['fence', 74.6, 36.6], ['fence', 77.2, 36.6], ['fence', 92, 36.6], ['fence', 94.6, 36.6],
   ];
-  const busy = [[26, 26, 64, 56], [36, 14, 56, 30], [70, 18, 108, 38], [58, 38, 112, 46], [52, 56, 80, 76], [14, 34, 30, 58], [18, 38, 28, 44]];
+  const busy = [[90, 44, 110, 60], [26, 26, 64, 56], [36, 14, 56, 30], [70, 18, 108, 38], [58, 38, 112, 46], [52, 56, 80, 76], [14, 34, 30, 58], [18, 38, 28, 44]];
   const free = (x, z) => !busy.some(([x0, z0, x1, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
-  const kinds = ['oak', 'olive', 'cypress', 'bush'];
+  // an olive is ten thousand triangles, a cypress fourteen hundred: olives stay few, the plateau rims get cypresses and bushes
+  const pickTree = (v, list) => { let acc = 0; for (const [k, w] of list) { acc += w; if (v < acc) return k; } return list[0][0]; };
+  const LOW = [['oak', .3], ['cypress', .35], ['bush', .25], ['olive', .1]], RIM = [['cypress', .7], ['bush', .25], ['oak', .05]];
   for (let r = 1; r < RW - 1; r++) for (let c = 1; c < C - 1; c++) {
     const ch = map[r][c], x = c * 2 + 1, z = r * 2 + 1, h = hash2(c * 13, r * 29);
-    if ((ch === 'g' || ch === 'f') && h > .955 && free(x, z)) { const k = kinds[Math.floor(hash2(c, r * 7) * 4)]; things.push([k, x, z, k === 'bush' ? undefined : .6, k === 'bush' ? undefined : .5]); }
-    else if (ch === 'X' && h > .9) { const inner = Math.min(c, C - 1 - c, r, RW - 1 - r) >= 6; if (inner) things.push([hash2(c * 3, r) > .5 ? 'cypress' : 'olive', x, z, 0, 0]); }
+    if ((ch === 'g' || ch === 'f') && h > .955 && free(x, z)) { const k = pickTree(hash2(c, r * 7), LOW); things.push([k, x, z, k === 'bush' ? undefined : .6, k === 'bush' ? undefined : .5]); }
+    else if (ch === 'X' && h > .93) { const inner = Math.min(c, C - 1 - c, r, RW - 1 - r) >= 6; if (inner) things.push([pickTree(hash2(c * 3, r), RIM), x, z, 0, 0]); }
   }
   return {
-    id: 'overworld', name: 'area.village', cell: 2, chunk: [16, 12], tod: 'giorno', start: [44, 49], camNorth: 1.5,
+    id: 'overworld', name: 'area.village', cell: 2, chunk: [12, 9], tod: 'giorno', start: [44, 49], camNorth: 1.5, music: (x) => x > 64 ? 'road' : 'village',
     legend: { g: { tile: 'grass' }, f: { tile: 'grass_flowers' }, c: { tile: 'cobblestone' }, p: { tile: 'dirt_path' }, a: { tile: 'farmland' },
       w: { tile: 'water', water: true, h: -3 }, X: { tile: 'grass', h: 56, cliff: true }, Y: { tile: 'grass_flowers', h: 56, cliff: true } },
     map, things,
+    npcs: [['shopkeeper', 53, 49.6, [0, 1]], ['child', 47.6, 45.2, [0, 1]], ['guard', 41.4, 26.2, [0, 1]]],
+    spawns: [['blot', 70, 42], ['blot', 80, 43.6], ['blot', 100, 36], ['inkfly', 88, 41.5], ['inkfly', 93, 44.5], ['inkfly', 97, 31.5], ['blot', 76, 38.4]],
     lamps: [[38, 2.6, 39], [50, 2.6, 39], [38, 2.6, 51], [50, 2.6, 51]],
   };
 })();
 
-// ---- engine/90-boot.js
-/* ---------- boot: art, atlas, materials, title screen; the game starts on New game ---------- */
-const START = { area: 'overworld', at: null };
+// ---- content/chapter1/enemies.js
+/* ---------- the inky creatures of Chapter 1 (spec §10): every strike has a tell of at least 0.35 s ---------- */
+Object.assign(ENEMIES, {
+  // a puddle of ink with two eyes: squashes flat (the tell), hops to where the cat stood, slams
+  blot: { sheet: 'enemies-1', row: 'blot', hp: 14, atk: 6, def: 0, speed: 2.4, sight: 7, reach: 2.2, windup: .5, strike: .38, recover: .8, xp: 4, coins: [0, 2], r: .5, move: 'hop', drops: [['milk', .12]] },
+  // a fat drop with paper wings: hovers, stops and shivers (the tell), dives in a line
+  inkfly: { sheet: 'enemies-1', row: 'inkfly', hp: 10, atk: 7, def: 0, speed: 3.1, sight: 9, reach: 4.2, windup: .55, strike: .42, recover: 1, xp: 5, coins: [1, 2], r: .45, move: 'lunge', fly: .8, drops: [['ink_potion', .15]] },
+  // a long worm of stacked pages: shivers in the dust (the tell), charges straight
+  bookworm: { sheet: 'enemies-2', row: 'bookworm', hp: 26, atk: 9, def: 2, speed: 2, sight: 9, reach: 5.5, windup: .65, strike: .6, recover: 1.2, xp: 9, coins: [1, 3], r: .6, move: 'lunge', drops: [['bread', .2]] },
+  // a candle-wax brute: raises both arms (the tell), smashes twice; its front is shielded, its back is not
+  wax_golem: { sheet: 'enemies-2', row: 'wax_golem', hp: 40, atk: 12, def: 3, speed: 1.5, sight: 7, reach: 1.9, windup: .75, strike: .5, recover: 1.3, xp: 15, coins: [2, 5], r: .7, move: 'smash', shield: true, drops: [['fish', .3]] },
+});
 
-function startGame() {
-  $('title').hidden = true; ui.screen = 'game';
-  if (!player) player = sheetActor('cat', { down: 'cat_down', up: 'cat_up', side: 'cat_side' }, { idle: ['idle'], walk: ['walk1', 'walk2', 'walk3', 'walk4', 'walk5'] });
-  enterArea(START.area, START.at);
+/* the Blot Scribe: phase 1 sweeps its quill and draws ink lines; below half health it splits off Blots and calls ink rain.
+   Every attack is announced: the quill drawn back, ink marks on the floor 0.6 s before they burst. */
+ENEMIES.blot_scribe = {
+  sheet: 'boss', row: 'blot_scribe', hp: 160, atk: 13, def: 3, speed: 1.6, sight: 30, reach: 3.4, xp: 60, coins: [8, 12], r: 1.1, poise: true, size: 1,
+  anims: { idle: ['idle1', 'idle2'], walk: ['idle1', 'idle2'], windup: ['sweep_windup'], attack: ['sweep'], cast: ['blot_scribe_b.rain_cast'], split: ['blot_scribe_b.split'], hurt: ['blot_scribe_b.hurt'], defeat: ['blot_scribe_b.defeat'] },
+  onHit(e) { if (!e.phase2 && e.hp < e.T.hp / 2) { e.phase2 = true; e.state = 'split'; e.st = .9; e.a.anim = 'split'; e.a.at = 0; toast(t('toast.boss2')); shake(.3); } },
+  ai(e, dt, dist, move, face) {
+    const T = e.T, a = e.a; e.cool = (e.cool || 1.5) - dt; a.at += dt;
+    switch (e.state) {
+      case 'wander': case 'notice': case 'chase': {
+        a.anim = null; face(player.x, player.z);
+        if (dist > T.reach * .8) a.moving = move(e.fx * T.speed, e.fz * T.speed);
+        if (e.cool <= 0) {
+          const pick = e.phase2 ? (R() < .5 ? 'rain' : dist < T.reach ? 'sweep' : 'lines') : (dist < T.reach ? 'sweep' : 'lines');
+          if (pick === 'sweep') { e.state = 'windup'; e.st = .65; a.anim = 'windup'; a.at = 0; }
+          else { e.state = pick; e.st = .9; a.anim = 'cast'; a.at = 0; e.done = false; }
+        }
+        break;
+      }
+      case 'windup': e.st -= dt; face(player.x, player.z); if (e.st <= 0) { e.state = 'sweep'; e.st = .4; a.anim = 'attack'; a.at = 0; e.hit = 0; sfx('swing3'); } break;
+      case 'sweep': {   // a half-circle in front, quill's length
+        e.st -= dt;
+        if (!e.hit) { e.hit = 1; fx('slash', e.x + e.fx * 1.6, e.z + e.fz * 1.6, { size: 2.4, y: A.groundY(e.x, e.z) + .6 }); const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz); if (d < T.reach + .4 && (dx * e.fx + dz * e.fz) / (d || 1) > -.1) hurtHero(T.atk, e.x, e.z); }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = e.phase2 ? 1.2 : 1.7; }
+        break;
+      }
+      case 'lines': {   // a line of marks from the Scribe toward the cat
+        e.st -= dt;
+        if (!e.done && e.st < .6) { e.done = true; const l = dist || 1, ux = (player.x - e.x) / l, uz = (player.z - e.z) / l; for (let i = 1; i <= 6; i++) hazard(e.x + ux * i * 1.3, e.z + uz * i * 1.3, .6 + i * .07, .8, T.atk - 2); }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = 1.6; }
+        break;
+      }
+      case 'rain': {   // marks around and under the cat
+        e.st -= dt;
+        if (!e.done && e.st < .6) { e.done = true; hazard(player.x, player.z, .7, .9, T.atk - 2); for (let i = 0; i < 6; i++) { const an = R() * Math.PI * 2, r = 1.5 + R() * 3.5; hazard(player.x + Math.cos(an) * r, player.z + Math.sin(an) * r, .6 + R() * .5, .9, T.atk - 2); } }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = 1.4; }
+        break;
+      }
+      case 'split': {   // phase 2 and then every so often: two Blots, never more than four
+        e.st -= dt; a.anim = 'split';
+        if (e.st <= 0) { if (enemies.filter((o) => o.type === 'blot' && o.hp > 0).length < 4) for (const s of [-1, 1]) { const b = spawnEnemy('blot', e.x + s * 1.6, e.z + 1.2); b.aware = true; b.T = Object.assign({}, b.T, { coins: [0, 0], xp: 1, drops: [] }); } e.state = 'chase'; e.cool = 1.2; e.splitT = 9; }
+        break;
+      }
+    }
+    if (e.phase2 && e.state === 'chase' && (e.splitT = (e.splitT || 9) - dt) <= 0) { e.state = 'split'; e.st = .8; a.anim = 'split'; a.at = 0; }
+    return true;
+  },
+};
+
+// ---- content/chapter1/items.js
+/* ---------- items of Chapter 1: three quills, three coats, three charms, four things to eat or drink, story items ---------- */
+// names and descriptions are language keys item.<id> and desc.<id>
+Object.assign(ITEMS, {
+  quill_sword: { slot: 'weapon', atk: 0, price: 0 },
+  steel_quill: { slot: 'weapon', atk: 3, price: 60 },
+  gold_quill: { slot: 'weapon', atk: 6, price: 0 },
+  scarf: { slot: 'armour', def: 1, hp: 4, price: 30 },
+  vest: { slot: 'armour', def: 2, price: 55 },
+  cloak: { slot: 'armour', def: 3, hp: 6, price: 0 },
+  bell_charm: { slot: 'charm', ink: 10, price: 40 },
+  clover_charm: { slot: 'charm', hp: 8, price: 0 },
+  owl_charm: { slot: 'charm', atk: 2, def: 1, price: 0 },
+  milk: { use: { hp: 10 }, price: 6 },
+  fish: { use: { hp: 22 }, price: 14 },
+  bread: { use: { hp: 15 }, price: 9 },
+  ink_potion: { use: { ink: 20 }, price: 12 },
+  page_1: { key: true }, page_2: { key: true }, page_3: { key: true },
+  bronze_key: { key: true }, crypt_key: { key: true }, glasses_case: { key: true }, letter: { key: true }, flour_sack: { key: true }, hinge: { key: true },
+});
+
+// ---- content/chapter1/music.js
+/* ---------- the music of Chapter 1: step patterns, one step = a sixteenth; '.' rests, '-' holds; drums k / s / h ---------- */
+// A voice loops on its own length. combat voices are layered in when an enemy notices the cat and fade out after.
+const bars = (...b) => b.join(' | ');
+Object.assign(MUSIC, {
+  village: {   // C major, a walk through the square
+    bpm: 100,
+    voices: {
+      p1: bars('e5 - - - g5 - c6 - b5 - a5 - g5 - - -', 'a5 - - - c6 - e6 - d6 - c6 - a5 - - -', 'f5 - - - a5 - c6 - a5 - g5 - f5 - - -', 'g5 - - - b5 - d6 - b5 - a5 - g5 - - .',
+        'e5 - g5 - e5 - d5 - c5 - - - d5 - e5 -', 'a4 - c5 - e5 - c5 - a4 - - - . . . .', 'f4 - a4 - c5 - f5 - e5 - d5 - c5 - a4 -', 'g4 - b4 - d5 - g5 - - - . . . . . .'),
+      p2: bars('c4 . e4 . g4 . e4 . c4 . e4 . g4 . e4 .', 'a3 . c4 . e4 . c4 . a3 . c4 . e4 . c4 .', 'f3 . a3 . c4 . a3 . f3 . a3 . c4 . a3 .', 'g3 . b3 . d4 . b3 . g3 . b3 . d4 . b3 .'),
+      tri: bars('c3 - - - . . c3 . g2 - - - . . g2 .', 'a2 - - - . . a2 . e2 - - - . . e2 .', 'f2 - - - . . f2 . c3 - - - . . c3 .', 'g2 - - - . . g2 . d3 - - - b2 - - -'),
+    },
+    combat: { drums: 'k . h . s . h . k k h . s . h h', p3: bars('c5 . c5 . . . c5 . . . c5 . c5 . . .', 'a4 . a4 . . . a4 . . . a4 . a4 . . .', 'f4 . f4 . . . f4 . . . f4 . f4 . . .', 'g4 . g4 . . . g4 . . . g4 . b4 . . .') },
+  },
+  road: {   // G major, brisker, out among the vines
+    bpm: 116,
+    voices: {
+      p1: bars('d5 - g5 - b5 - a5 g5 f#5 - g5 - a5 - - -', 'e5 - g5 - c6 - b5 a5 g5 - e5 - g5 - - -', 'b4 - e5 - g5 - f#5 e5 d5 - e5 - g5 - - -', 'a4 - d5 - f#5 - e5 d5 e5 - f#5 - a5 - - -'),
+      p2: bars('. g4 . b4 . g4 . b4 . g4 . b4 . g4 . b4', '. e4 . g4 . e4 . g4 . e4 . g4 . e4 . g4', '. e4 . g4 . e4 . g4 . e4 . g4 . e4 . g4', '. f#4 . a4 . f#4 . a4 . f#4 . a4 . f#4 . a4'),
+      tri: bars('g2 . g2 . d3 . g2 . g2 . d3 . g2 . b2 .', 'c3 . c3 . g2 . c3 . c3 . g2 . c3 . e3 .', 'e2 . e2 . b2 . e2 . e2 . b2 . e2 . g2 .', 'd2 . d2 . a2 . d2 . d2 . a2 . d3 . c3 .'),
+      drums: 'k . h . s . h . k . h . s . h h',
+    },
+    combat: { drums: '. . . h . . . h . . k h . . . h', p3: bars('g4 g4 . g4 . . g4 . g4 g4 . g4 . . b4 .', 'c5 c5 . c5 . . c5 . c5 c5 . c5 . . e5 .', 'e4 e4 . e4 . . e4 . e4 e4 . e4 . . g4 .', 'd4 d4 . d4 . . d4 . d4 d4 . d4 . . f#4 .') },
+  },
+  library: {   // the same tune as the village, slower and softer, for rooms
+    bpm: 84,
+    voices: {
+      p3: bars('e5 - - - g5 - c6 - b5 - a5 - g5 - - -', 'a5 - - - c6 - e6 - d6 - c6 - a5 - - -', 'f5 - - - a5 - c6 - a5 - g5 - f5 - - -', 'g5 - - - b5 - d6 - b5 - a5 - g5 - - .'),
+      tri: bars('c3 - - - - - - - g2 - - - - - - -', 'a2 - - - - - - - e2 - - - - - - -', 'f2 - - - - - - - c3 - - - - - - -', 'g2 - - - - - - - d3 - - - - - - -'),
+    },
+  },
+  crypt: {   // A minor, slow, a drone under a sparse line
+    bpm: 80,
+    voices: {
+      p3: bars('a4 - - - - - c5 - b4 - - - g#4 - - -', 'a4 - - - e5 - - - d5 - c5 - b4 - - -', 'f4 - - - - - a4 - g4 - - - e4 - - -', 'e4 - - - g#4 - - - b4 - - - - - - -'),
+      p2: bars('a3 . c4 . e4 . . . a3 . c4 . e4 . . .', 'a3 . c4 . e4 . . . a3 . c4 . e4 . . .', 'f3 . a3 . c4 . . . f3 . a3 . c4 . . .', 'e3 . g#3 . b3 . . . e3 . g#3 . b3 . . .'),
+      tri: bars('a2 - - - - - - - - - - - - - - -', 'a2 - - - - - - - - - - - - - - -', 'f2 - - - - - - - - - - - - - - -', 'e2 - - - - - - - - - - - - - - -'),
+    },
+    combat: { drums: 'k . . . s . . h k . k . s . . h' },
+  },
+  boss: {   // D minor, fast
+    bpm: 144,
+    voices: {
+      p1: bars('d5 d5 . d5 f5 . e5 d5 c5 . a4 . c5 d5 . .', 'd5 d5 . d5 f5 . g5 f5 e5 . c5 . e5 f5 . .', 'a#4 a#4 . a#4 d5 . c5 a#4 a4 . f4 . a4 a#4 . .', 'a4 a4 . a4 c#5 . e5 c#5 a4 . e5 . c#5 a4 . .'),
+      p2: bars('d4 . a4 . d4 . a4 . d4 . a4 . d4 . a4 .', 'c4 . g4 . c4 . g4 . c4 . g4 . c4 . g4 .', 'a#3 . f4 . a#3 . f4 . a#3 . f4 . a#3 . f4 .', 'a3 . e4 . a3 . e4 . a3 . c#4 . e4 . a4 .'),
+      tri: bars('d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3', 'c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3', 'a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2', 'a1 a2 a1 a2 a1 a2 a1 a2 a1 a2 a1 a2 c#2 c#3 e2 e3'),
+      drums: 'k . h . s . h k k . h . s . s h',
+    },
+  },
+});
+
+// ---- content/chapter1/people.js
+/* ---------- the people of Inkwell village and what they say; every line is a language key ---------- */
+Object.assign(SPEAKERS, {
+  cat: { name: 'who.cat', pic: 'cat_neutral' }, cat_happy: { name: 'who.cat', pic: 'cat_happy' }, cat_worried: { name: 'who.cat', pic: 'cat_worried' },
+  librarian: { name: 'who.librarian', pic: 'librarian' }, baker: { name: 'who.baker', pic: 'baker' }, shopkeeper: { name: 'who.shopkeeper', pic: 'shopkeeper' },
+  child: { name: 'who.child', pic: 'child' }, guard: { name: 'who.guard', pic: 'guard' }, scribe: { name: 'who.scribe', pic: 'blot_scribe' },
+});
+const pages = () => ['page_1', 'page_2', 'page_3'].filter((p) => has(p)).length;
+
+Object.assign(NPCS, {
+  librarian: {
+    row: 'librarian', name: 'who.librarian', pic: 'librarian', voice: 260,
+    talk() {
+      const s = qStep('main');
+      if (s <= 0) return { lines: [['librarian', 'l.intro1'], ['cat_worried', 'l.intro2'], ['librarian', 'l.intro3'], ['librarian', 'l.intro4'], ['cat', 'l.intro5']] };
+      if (s === 1) return { lines: [['librarian', 'l.blots']] };
+      if (s === 2) {
+        const hint = !has('page_1') ? 'l.hint1' : !has('page_2') ? 'l.hint2' : 'l.hint3';
+        return { lines: [['librarian', 'l.pieces', { n: pages() }], ['librarian', hint]] };
+      }
+      if (s === 3) return { lines: [['librarian', 'l.end1'], ['cat_happy', 'l.end2'], ['librarian', 'l.end3'], ['librarian', 'l.end4']], after: showEnding };
+      return { lines: [['librarian', 'l.after']] };
+    },
+  },
+  baker: {
+    row: 'baker', name: 'who.baker', pic: 'baker', voice: 300,
+    talk() {
+      const s = qStep('flap');
+      if (s < 0) return { lines: [['baker', 'b.hello1'], ['baker', 'b.hello2'], ['cat', 'b.hello3']], after: () => startQuest('flap') };
+      if (s === 0) return { lines: [['baker', 'b.wait']], shop: ['bread', 'milk'] };
+      if (s === 1) return { lines: [['baker', 'b.thanks1'], ['baker', 'b.thanks2'], ['cat_happy', 'b.thanks3']] };
+      return { lines: [['baker', 'b.after']], shop: ['bread', 'milk'] };
+    },
+  },
+  shopkeeper: {
+    row: 'shopkeeper', name: 'who.shopkeeper', pic: 'shopkeeper', voice: 220,
+    talk: () => ({ lines: [['shopkeeper', G.flags.met_shop ? 's.again' : 's.hello']], after: () => { G.flags.met_shop = true; }, shop: ['milk', 'fish', 'ink_potion', 'scarf', 'vest', 'steel_quill', 'bell_charm'] }),
+  },
+  guard: {
+    row: 'guard', name: 'who.guard', pic: 'guard', voice: 200,
+    talk() {
+      const s = qStep('glasses');
+      if (s < 0) return { lines: [['guard', 'g.hello1'], ['guard', 'g.hello2']], after: () => startQuest('glasses') };
+      if (s === 0) return { lines: [['guard', 'g.wait']] };
+      if (s === 1) return { lines: [['guard', 'g.thanks1'], ['guard', 'g.thanks2']] };
+      return { lines: [['guard', has('crypt_key') || G.flags.boss_done ? 'g.crypt2' : 'g.crypt']] };
+    },
+  },
+  child: {
+    row: 'child', name: 'who.child', pic: 'child', voice: 420,
+    talk() {
+      const k = qStep('main') <= 1 ? 'c.1' : !G.flags.skill_dash ? 'c.2' : !G.flags.skill_well ? 'c.3' : 'c.4';
+      return { lines: [['child', k]] };
+    },
+  },
+});
+
+// ---- content/chapter1/story.js
+/* ---------- Chapter 1, The Missing Page: quests, the intro, the statue's riddle, levers, the boss, the ending ---------- */
+Object.assign(QUESTS, {
+  main: {
+    name: 'q.main', main: true,
+    steps: [
+      { text: 'q.main.0', on: ['talk', 'librarian'] },
+      { text: 'q.main.1', on: ['defeat', 'blot', 2] },
+      { text: 'q.main.2', on: ['check', () => has('page_1') && has('page_2') && has('page_3')] },
+      { text: 'q.main.3', on: ['talk', 'librarian'] },
+    ],
+    reward: { xp: 30 },
+  },
+  flap: {
+    name: 'q.flap',
+    steps: [
+      { text: 'q.flap.0', on: ['collect', 'hinge'] },
+      { text: 'q.flap.1', on: ['talk', 'baker'], then: () => takeItem('hinge') },
+    ],
+    reward: { item: 'page_1', coins: 15, xp: 12 },
+  },
+  glasses: {
+    name: 'q.glasses',
+    steps: [
+      { text: 'q.glasses.0', on: ['collect', 'glasses_case'] },
+      { text: 'q.glasses.1', on: ['talk', 'guard'], then: () => takeItem('glasses_case') },
+    ],
+    reward: { item: 'clover_charm', xp: 10 },
+  },
+});
+
+CHAPTER.intro = () => openDialogue({ name: 'who.cat', lines: [['cat_worried', 'i.1'], ['cat', 'i.2']], after: () => startQuest('main') });
+
+// build the current area again (a gate opened): a short fade, the cat stays where it is
+async function reopen() {
+  transitioning = true; await fade(1); enterArea(A.def.id, [player.x, player.z]); saveGame(); await fade(0); transitioning = false;
+}
+
+/* the road's statue: a riddle; the right answer teaches the Ink dash */
+function statueRiddle() {
+  if (G.flags.skill_dash) { openDialogue({ name: 'who.statue', lines: ['st.done'] }); return; }
+  const wrong = () => { sfx('no'); openDialogue({ name: 'who.statue', lines: ['st.wrong'] }); };
+  openDialogue({ name: 'who.statue', lines: ['st.1', 'st.2'], choices: [['st.a1', wrong], ['st.a2', () => {
+    setFlag('skill_dash'); sfx('level'); toast(t('toast.skill', { s: t('skill.dash') }));
+    openDialogue({ name: 'who.statue', lines: ['st.right', coarse ? 'st.how.touch' : 'st.how'] });
+  }], ['st.a3', wrong]] });
+}
+
+/* the lever by the walled garden on the road opens its gate */
+function roadLever() {
+  if (G.flags.gate_open) { openDialogue({ name: 'act.lever', lines: ['lever.done'] }); return; }
+  sfx('door'); setFlag('gate_open'); toast(t('toast.gate')); reopen();
+}
+
+/* the crypt's three levers: the plaque gives the order; a wrong pull resets them and wakes a bookworm */
+const LEVER_ORDER = [3, 1, 2];
+let leverDone = [];
+function cryptLever(n) {
+  if (G.flags.crypt_gate) { openDialogue({ name: 'act.lever', lines: ['lever.done'] }); return; }
+  if (leverDone.includes(n)) { sfx('no'); return; }
+  if (LEVER_ORDER[leverDone.length] !== n) {
+    leverDone = []; sfx('no'); toast(t('toast.levers.wrong')); shake(.2);
+    if (enemies.filter((e) => e.hp > 0).length < 3) { const w = spawnEnemy('bookworm', 12, 14); w.aware = true; }
+    return;
+  }
+  leverDone.push(n); sfx('door'); toast(t('toast.levers', { n: leverDone.length }));
+  if (leverDone.length === 3) { setFlag('crypt_gate'); leverDone = []; reopen(); }
+}
+
+/* hooks run each time an area is built */
+Object.assign(AREA_HOOKS, {
+  overworld() {
+    if (qStep('glasses') === 0 && !has('glasses_case')) drop('glasses_case', 104, 31.4);
+    if (qStep('main') === 1) for (const [x, z] of [[40, 50.5], [48, 50.5]]) spawnEnemy('blot', x, z);
+  },
+  crypt_in() { leverDone = []; },
+  crypt_boss() {
+    if (G.flags.boss_done) return;
+    const b = spawnEnemy('blot_scribe', 14, 7);
+    b.onDefeat = () => { setFlag('boss_done'); drop('page_3', b.x, b.z + 1); toast(t('toast.boss.done')); combatMusic(false); };
+    setTimeout(() => { if (A && A.def.id === 'crypt_boss' && !dlg) openDialogue({ name: 'who.scribe', lines: [['scribe', 'sc.1'], ['cat_worried', 'sc.2'], ['scribe', 'sc.3']] }); }, 700);
+  },
+});
+
+/* the ending: the page is mended; the world stays open afterwards */
+function showEnding() {
+  setFlag('chapter_done'); saveGame(); sfx('quest'); playTrack('village');
+  ui.screen = 'end'; showScreen('end');
+}
+
+// ---- engine/90-boot.js
+/* ---------- boot: art, atlas, materials, title screen; play starts from New game, Continue or a save code ---------- */
+const START = { area: 'library_in', at: null };
+
+const CAT_ANIMS = {
+  idle: ['idle'], walk: ['walk1', 'walk2', 'walk3', 'walk4', 'walk5'], attack1: ['attack1'], attack2: ['attack2'], attack3: ['attack3'],
+  hurt: { down: ['cat_extra.hurt_down'], up: ['cat_extra.hurt_up'], side: ['cat_extra.hurt_side'] },
+  dodge: { down: ['cat_extra.dodge_down'], up: ['cat_extra.dodge_up'], side: ['cat_extra.dodge_side'] },
+};
+function beginPlay() {
+  ui.screen = 'game'; showScreen(null); $('hud').hidden = false; $('touch').hidden = false;
+  if (!player) player = sheetActor('cat', { down: 'cat_down', up: 'cat_up', side: 'cat_side' }, CAT_ANIMS);
+  if (G.hp <= 0) G.hp = stats().hp;
+  resetHero(); hudKey = ''; audioInit();
+  enterArea(G.area, G.x !== null && G.x !== undefined ? [G.x, G.z] : null);
   intro = reduceMotion ? 1 : 0;
   canvas.focus({ preventScroll: true });
+  if (!G.flags.intro && CHAPTER.intro) { G.flags.intro = true; setTimeout(CHAPTER.intro, reduceMotion ? 50 : 2200); }
 }
+function startGame() { newGame(); beginPlay(); }
+function continueGame() { const s = loadSave(); if (!s) { refreshTitle(); return; } G = s; beginPlay(); }
+function gameOver() { ui.screen = 'over'; showScreen('over'); combatMusic(false); }
+function toTitle() { ui.screen = 'title'; clearEnemies(); clearNpcs(); refreshTitle(); showScreen('title'); $('hud').hidden = true; $('touch').hidden = true; }
+function refreshTitle() { $('bContinue').hidden = !hasSave(); }
+function closeShop() { ui.screen = 'game'; showScreen(null); }
 
 (async function boot() {
   applyLang();
@@ -914,9 +2074,22 @@ function startGame() {
   try { await loadArt(); } catch (e) { $('fallback').textContent = e.message; $('fallback').hidden = false; return; }
   buildSprites(); makeAtlasTextures(); makeMaterials();
   new ResizeObserver(resize).observe(canvas); resize();
-  $('bStart').onclick = startGame;
-  $('bOptions').onclick = () => { $('menu').hidden = false; ui.screen = 'menu-title'; $('menu').querySelector('button').focus({ preventScroll: true }); };
-  $('bResume').onclick = () => { if (ui.screen === 'menu-title') { $('menu').hidden = true; ui.screen = 'title'; $('bStart').focus({ preventScroll: true }); } else openMenu(false); };
+  drawPic($('titleArt'), 'title', 'title');
+  $('bStart').onclick = () => { sfx('ok'); startGame(); };
+  $('bContinue').onclick = () => { sfx('ok'); continueGame(); };
+  $('bLoad').onclick = () => { sfx('ok'); openCodeBox(); };
+  $('bOptions').onclick = () => openMenu(true, true);
+  $('bCodeOk').onclick = submitCode; $('bCodeCancel').onclick = () => { ui.screen = 'title'; showScreen('title'); };
+  $('codeIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitCode(); } });
+  $('bShopClose').onclick = closeShop;
+  $('bRetry').onclick = () => { const s = loadSave(); if (s) G = s; else newGame(); G.hp = stats().hp; beginPlay(); };
+  $('bToTitle').onclick = toTitle; $('bEndTitle').onclick = toTitle;
+  $('bKeep').onclick = () => { ui.screen = 'game'; showScreen(null); };
+  $('dialog').addEventListener('click', () => input.queue.push('interact'));
+  // audio may start only after a person acts (the mobile rule)
+  const wake = () => { audioInit(); if (AU && AU.ctx.state === 'suspended') AU.ctx.resume(); };
+  addEventListener('pointerdown', wake, { once: true }); addEventListener('keydown', wake, { once: true });
+  document.addEventListener('visibilitychange', () => { if (AU) document.hidden ? AU.ctx.suspend() : AU.ctx.resume(); });
   // drag turns the view, the wheel zooms (as in the dioramas)
   let drag = null;
   canvas.addEventListener('pointerdown', (e) => { drag = { id: e.pointerId, x: e.clientX }; canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); });
@@ -924,14 +2097,21 @@ function startGame() {
   const endDrag = (e) => { if (drag && drag.id === e.pointerId) { drag = null; yawT = Math.round(yawT / (Math.PI / 2)) * (Math.PI / 2); } };
   canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); VT = clamp(VT * Math.exp(e.deltaY * .0012), 7, 26); }, { passive: false });
-  $('title').hidden = false; $('bStart').focus({ preventScroll: true });
+  addEventListener('pagehide', () => { if (ui.screen === 'game' && G && !hero.dead) saveGame(); });
+  refreshTitle(); ui.screen = 'title'; showScreen('title');
   requestAnimationFrame(frame);
-  // read-only hooks for the headless checks
+  // hooks for the headless checks
   window.__game = {
-    state: () => ({ screen: ui.screen, area: A && A.def.id, x: player && player.x, z: player && player.z, fps, tris: A && A.tris, buildMs: A && A.buildMs, sprites: SPRITES.length }),
+    state: () => ({ screen: ui.screen, area: A && A.def.id, x: player && player.x, z: player && player.z, fps, tris: A && A.tris, buildMs: A && A.buildMs, sprites: SPRITES.length,
+      hp: G && G.hp, ink: G && G.ink, xp: G && G.xp, level: G && G.level, coins: G && G.coins, enemies: enemies.map((e) => [e.type, e.state, e.hp, +e.x.toFixed(1), +e.z.toFixed(1)]), dlg: !!dlg, near: nearAct && nearAct.label, quests: G && G.quests }),
     start: () => startGame(),
     place: (x, z) => { player.x = x; player.z = z; },
     walk: (x, y) => { input.stickX = x; input.stickY = y; },
+    act: (a) => input.queue.push(a),
+    spawn: (type, x, z) => { spawnEnemy(type, x, z); },
+    flag: (f) => setFlag(f),
+    spriteTris: () => Object.fromEntries(SPRITES.map((s) => [s.key, 2 * (s.layF.length + s.layB.length + s.strips.length)])),
+    G: () => G, code: () => saveCode(), read: (c) => readCode(c), enter: (n, at) => enterArea(n, at),
     area: () => A,
   };
 })();

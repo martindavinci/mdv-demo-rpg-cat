@@ -8,67 +8,172 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <style>
-:root{color-scheme:dark;--void:#17121c;--panel:rgba(16,13,26,.9);--line:#4a4360;--ink:#f4ecd8;--dim:#a79fb8;--amber:#ffb85c;
+:root{color-scheme:dark;--void:#17121c;--panel:rgba(16,13,26,.92);--line:#4a4360;--ink:#f4ecd8;--dim:#a79fb8;--amber:#ffb85c;--hp:#e0564f;--inkc:#5a7fe0;
   --display:"Pixelify Sans","Courier New",monospace;--mono:"DM Mono",ui-monospace,Menlo,Consolas,monospace}
 [hidden]{display:none!important}
+body:not(.playing) .top,body:not(.playing) #hint,body:not(.playing) #touch{display:none}
 html,body{height:100%;margin:0}
 body{background:var(--void);color:var(--ink);font-family:var(--mono);font-size:12px;overflow:hidden}
 #stage{position:fixed;inset:0;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
 #gl{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}
 button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-bottom-width:3px;padding:8px 12px;cursor:pointer;line-height:1.2;min-height:40px}
-button:hover{border-color:var(--amber)}
-button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
-button[aria-pressed="true"]{color:var(--amber);border-color:var(--amber)}
+button:hover:not([disabled]){border-color:var(--amber)}
+button:focus-visible,textarea:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button[aria-pressed="true"],button[aria-selected="true"]{color:var(--amber);border-color:var(--amber)}
+button[disabled]{opacity:.45;cursor:default}
+button.small{min-height:32px;padding:4px 8px;font-size:11px}
 .top{position:absolute;inset:0 0 auto 0;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));pointer-events:none}
-.top h2{margin:0;font-family:var(--display);font-weight:600;font-size:20px;text-shadow:0 2px 0 rgba(0,0,0,.6)}
+.top h2{margin:0 0 6px;font-family:var(--display);font-weight:600;font-size:20px;text-shadow:0 2px 0 rgba(0,0,0,.6)}
 .top button{pointer-events:auto}
+#hud{display:grid;grid-template-columns:auto 120px auto;gap:3px 6px;align-items:center;font-size:11px;text-shadow:0 1px 0 #000}
+#hud .bar{height:9px;background:rgba(0,0,0,.55);border:1px solid var(--line)}
+#hud .bar i{display:block;height:100%;transition:width .15s}
+#hpBar{background:var(--hp)}#inkBar{background:var(--inkc)}
+#hud .tags{grid-column:1/4;display:flex;gap:10px;color:var(--amber)}
 #hint{position:absolute;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));width:fit-content;max-width:calc(100% - 24px);margin:0 auto;padding:6px 12px;background:var(--panel);border:1px solid var(--line);color:var(--dim);font-size:11px;text-align:center;pointer-events:none}
-#dialog{position:absolute;left:50%;bottom:calc(52px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(560px,calc(100% - 24px));box-sizing:border-box;padding:12px 14px;background:var(--panel);border:1px solid var(--line);cursor:pointer}
+#toast{position:absolute;top:calc(56px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);padding:8px 14px;background:var(--panel);border:1px solid var(--amber);font-family:var(--display);font-size:14px;pointer-events:none;white-space:nowrap;max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis}
+#floats{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.float{position:absolute;left:0;top:0;font-family:var(--display);font-size:16px;font-weight:600;color:#fff;text-shadow:0 2px 0 #000,1px 0 0 #000,-1px 0 0 #000;white-space:nowrap}
+.float.bad{color:#ff7a6e}.float.gold{color:var(--amber)}.float.heal{color:#8be08b}.float.ink{color:#9bb5ff}.float.dim{color:var(--dim);font-size:13px}
+#dialog{position:absolute;left:50%;bottom:calc(52px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(600px,calc(100% - 24px));box-sizing:border-box;padding:12px 14px;background:var(--panel);border:1px solid var(--line);cursor:pointer;display:flex;gap:12px;align-items:flex-start}
+#dPic{width:72px;height:auto;image-rendering:pixelated;border:1px solid var(--line);background:#0c0a12;flex:none}
+#dialog div{flex:1;min-width:0}
 #dialog b{display:block;font-family:var(--display);font-size:15px;color:var(--amber);margin-bottom:6px}
 #dialog p{margin:0;font-size:13px;line-height:1.5;min-height:3em}
 #dMore{position:absolute;right:10px;bottom:6px;color:var(--amber)}
-.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(23,18,28,.82);padding:24px;box-sizing:border-box;text-align:center}
-.screen h1{margin:0;font-family:var(--display);font-size:clamp(30px,7vw,56px);line-height:1;text-shadow:0 3px 0 rgba(0,0,0,.6)}
+#dChoices{margin-top:8px}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(23,18,28,.86);padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));box-sizing:border-box;text-align:center;overflow:auto}
+.screen h1{margin:0;font-family:var(--display);font-size:clamp(28px,7vw,56px);line-height:1;text-shadow:0 3px 0 rgba(0,0,0,.6)}
 .screen .sub{margin:0 0 10px;color:var(--dim);font-size:13px}
 .screen .col{display:flex;flex-direction:column;gap:8px;min-width:220px}
-#menu .opts{display:grid;grid-template-columns:auto auto;gap:10px 14px;align-items:center;text-align:left}
+#titleArt{width:min(560px,92vw);height:auto;image-rendering:pixelated}
+.panel{width:min(640px,100%);text-align:left;background:var(--panel);border:1px solid var(--line);padding:12px;box-sizing:border-box}
+#tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
+#tabs button{flex:1 1 auto;min-width:72px}
+.panel p{margin:0 0 8px}
+.dim{color:var(--dim)}.line{font-family:var(--display);font-size:14px;color:var(--amber)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:6px;margin-bottom:10px}
+.cell{position:relative;padding:4px;min-height:52px}
+.cell .n{position:absolute;right:3px;bottom:2px;font-size:10px;color:var(--amber)}
+.icon{width:32px;height:auto;image-rendering:pixelated;vertical-align:middle}
+.info{border-top:1px solid var(--line);padding-top:8px;min-height:4em}
+.info b{font-family:var(--display);font-size:14px;color:var(--amber)}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+.slot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+.slot .dim:first-child{min-width:70px}
+.quest{border-bottom:1px solid var(--line);padding:6px 0}.quest b{font-family:var(--display);font-size:14px}.quest.done{opacity:.6}
+.map{width:100%;max-width:420px;image-rendering:pixelated;border:1px solid var(--line);display:block;margin-bottom:6px}
+textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13px;color:var(--ink);background:#0c0a12;border:1px solid var(--line);padding:8px;resize:vertical;letter-spacing:.04em}
+#menu .opts{display:grid;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center}
 .seg{display:flex;gap:4px;flex-wrap:wrap}
-.seg button{min-width:52px}
-#diag{max-width:46ch;color:var(--dim);font-size:11px;min-height:2.6em;font-variant-numeric:tabular-nums}
+.seg button{min-width:48px}
+#diag{color:var(--dim);font-size:11px;min-height:2.6em;font-variant-numeric:tabular-nums;margin-top:10px}
+#codeErr{color:#ff7a6e;min-height:1.2em}
 #fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .25s}
 #fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;font-size:14px;background:var(--void)}
 .touch{display:none}
 @media (pointer:coarse){
   .touch{display:block}
-  #stick{position:absolute;left:calc(22px + env(safe-area-inset-left));bottom:calc(56px + env(safe-area-inset-bottom));width:120px;height:120px;border-radius:50%;background:rgba(16,13,26,.45);border:1px solid var(--line);touch-action:none}
-  #knob{position:absolute;left:38px;top:38px;width:44px;height:44px;border-radius:50%;background:rgba(244,236,216,.35)}
-  #bAct{position:absolute;right:calc(24px + env(safe-area-inset-right));bottom:calc(76px + env(safe-area-inset-bottom));width:72px;height:72px;border-radius:50%;font-size:20px}
+  #stick{position:absolute;left:calc(22px + env(safe-area-inset-left));bottom:calc(40px + env(safe-area-inset-bottom));width:124px;height:124px;border-radius:50%;background:rgba(16,13,26,.45);border:1px solid var(--line);touch-action:none}
+  #knob{position:absolute;left:40px;top:40px;width:44px;height:44px;border-radius:50%;background:rgba(244,236,216,.35)}
+  .pad{position:absolute;right:calc(18px + env(safe-area-inset-right));bottom:calc(36px + env(safe-area-inset-bottom));width:176px;height:150px}
+  .pad button{position:absolute;border-radius:50%;padding:0;font-size:11px;background:rgba(16,13,26,.7)}
+  #bAtk{right:0;bottom:30px;width:76px;height:76px;font-size:13px;font-family:var(--display)}
+  #bDodge{right:86px;bottom:0;width:56px;height:56px}
+  #bDash{right:84px;bottom:66px;width:52px;height:52px}
+  #bWell{right:22px;bottom:110px;width:48px;height:48px}
   #hint{display:none}
+  #dialog{bottom:calc(196px + env(safe-area-inset-bottom))}
 }
-@media (prefers-reduced-motion:reduce){#fade{transition:none}}
+@media (pointer:coarse) and (orientation:landscape){#dialog{bottom:calc(12px + env(safe-area-inset-bottom));width:min(520px,calc(100% - 380px))}}
+@media (prefers-reduced-motion:reduce){#fade,#hud .bar i{transition:none}}
+@media (max-width:520px){.top h2{font-size:16px}#hud{grid-template-columns:auto 84px auto}}
 </style>
 </head>
 <body>
 <div id="stage">
   <canvas id="gl" tabindex="0" aria-label="Game view"></canvas>
-  <div class="top"><h2 id="areaName"></h2><button type="button" data-action="menu" data-t="btn.menu">Menu</button></div>
+  <div id="floats" aria-hidden="true"></div>
+  <div class="top">
+    <div><h2 id="areaName"></h2>
+      <div id="hud" hidden>
+        <span data-t="hud.hp">Health</span><span class="bar"><i id="hpBar"></i></span><span id="hpNum"></span>
+        <span data-t="hud.ink">Ink</span><span class="bar"><i id="inkBar"></i></span><span id="inkNum"></span>
+        <span class="tags"><span id="hLv"></span><span id="hCoins"></span></span>
+      </div>
+    </div>
+    <button type="button" data-action="menu" data-t="btn.menu">Menu</button>
+  </div>
+  <div id="toast" hidden role="status"></div>
   <div id="hint" aria-live="polite"></div>
-  <div id="dialog" hidden role="dialog" aria-live="polite"><b id="dWho"></b><p id="dText"></p><span id="dMore" hidden>▼</span></div>
-  <div class="touch"><div id="stick" aria-hidden="true"><div id="knob"></div></div><button type="button" id="bAct" data-action="interact" data-t-aria="btn.act" aria-label="Interact">●</button></div>
+  <div id="dialog" hidden role="dialog" aria-live="polite"><canvas id="dPic" hidden></canvas><div><b id="dWho"></b><p id="dText"></p><div id="dChoices" class="row" hidden></div></div><span id="dMore" hidden>▼</span></div>
+  <div class="touch" id="touch" hidden><div id="stick" aria-hidden="true"><div id="knob"></div></div>
+    <div class="pad">
+      <button type="button" id="bAtk" data-action="attack" data-t="btn.atk">Hit</button>
+      <button type="button" id="bDodge" data-action="dodge" data-t="btn.dodge">Dodge</button>
+      <button type="button" id="bDash" data-action="skill1" data-t="btn.dash" hidden>Dash</button>
+      <button type="button" id="bWell" data-action="skill2" data-t="btn.well" hidden>Well</button>
+    </div>
+  </div>
   <div id="title" class="screen" hidden>
+    <canvas id="titleArt" aria-hidden="true"></canvas>
     <h1 data-t="title.game">The Scholar Cat</h1><p class="sub" data-t="title.chapter">Chapter 1 · The Missing Page</p>
-    <div class="col"><button type="button" id="bStart" data-t="menu.new">New game</button><button type="button" id="bOptions" data-t="menu.options">Options</button></div>
+    <div class="col">
+      <button type="button" id="bContinue" data-t="menu.continue" hidden>Continue</button>
+      <button type="button" id="bStart" data-t="menu.new">New game</button>
+      <button type="button" id="bLoad" data-t="menu.load">Load code</button>
+      <button type="button" id="bOptions" data-t="menu.options">Options</button>
+    </div>
   </div>
   <div id="menu" class="screen" hidden role="dialog" aria-labelledby="menuTitle">
-    <h1 id="menuTitle" data-t="menu.title">Options</h1>
-    <div class="opts">
-      <span data-t="opt.lang">Language</span><div class="seg" id="optLang"><button type="button" data-v="en">English</button><button type="button" data-v="it">Italiano</button></div>
-      <span data-t="opt.fps">Frame rate</span><div class="seg" id="optFps"><button type="button" data-v="30">30</button><button type="button" data-v="60">60</button><button type="button" data-v="120">120</button></div>
-      <span data-t="opt.shadows">Shadows</span><div class="seg" id="optShadows"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
-      <span data-t="opt.sound">Sound</span><div class="seg" id="optSound"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+    <div class="panel">
+      <h1 id="menuTitle" class="sr" hidden data-t="menu.title">Menu</h1>
+      <div id="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="items" data-t="tab.items">Items</button>
+        <button type="button" role="tab" data-tab="equip" data-t="tab.equip">Equipment</button>
+        <button type="button" role="tab" data-tab="quests" data-t="tab.quests">Quests</button>
+        <button type="button" role="tab" data-tab="map" data-t="tab.map">Map</button>
+        <button type="button" role="tab" data-tab="options" data-t="tab.options">Options</button>
+        <button type="button" role="tab" data-tab="code" data-t="tab.code">Save code</button>
+      </div>
+      <section id="tab-items" role="tabpanel"></section>
+      <section id="tab-equip" role="tabpanel" hidden></section>
+      <section id="tab-quests" role="tabpanel" hidden></section>
+      <section id="tab-map" role="tabpanel" hidden></section>
+      <section id="tab-options" role="tabpanel" hidden>
+        <div class="opts">
+          <span data-t="opt.lang">Language</span><div class="seg" id="optLang"><button type="button" data-v="en">English</button><button type="button" data-v="it">Italiano</button></div>
+          <span data-t="opt.fps">Frame rate</span><div class="seg" id="optFps"><button type="button" data-v="30">30</button><button type="button" data-v="60">60</button><button type="button" data-v="120">120</button></div>
+          <span data-t="opt.music">Music</span><div class="seg" id="optMusic"><button type="button" data-v="0" data-t="opt.off">Off</button><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button></div>
+          <span data-t="opt.sound">Effects</span><div class="seg" id="optSound"><button type="button" data-v="0" data-t="opt.off">Off</button><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button></div>
+          <span data-t="opt.shake">Screen shake</span><div class="seg" id="optShake"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+          <span data-t="opt.shadows">Shadows</span><div class="seg" id="optShadows"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+        </div>
+        <p id="diag" aria-live="off"></p>
+      </section>
+      <section id="tab-code" role="tabpanel" hidden></section>
     </div>
-    <p id="diag" aria-live="off"></p>
     <div class="col"><button type="button" id="bResume" data-t="menu.resume">Back</button></div>
+  </div>
+  <div id="shop" class="screen" hidden role="dialog" aria-labelledby="shopTitle">
+    <div class="panel"><h1 id="shopTitle" data-t="shop.title" style="font-size:24px;margin-bottom:6px">Shop</h1><p class="line" id="shopCoins"></p><div id="shopList"></div></div>
+    <div class="col"><button type="button" id="bShopClose" data-t="menu.resume">Back</button></div>
+  </div>
+  <div id="codeBox" class="screen" hidden role="dialog" aria-labelledby="codeTitle">
+    <div class="panel"><h1 id="codeTitle" data-t="menu.load" style="font-size:24px;margin-bottom:8px">Load code</h1><p class="dim" data-t="code.help">Paste a save code.</p>
+      <textarea id="codeIn" rows="4" data-t-aria="menu.load" aria-label="Save code" spellcheck="false" autocomplete="off"></textarea><p id="codeErr" role="alert"></p>
+      <div class="row"><button type="button" id="bCodeOk" data-t="code.ok">Load</button><button type="button" id="bCodeCancel" data-t="menu.resume">Back</button></div></div>
+  </div>
+  <div id="over" class="screen" hidden role="alertdialog" aria-labelledby="overTitle">
+    <h1 id="overTitle" data-t="over.title">The ink took the cat</h1><p class="sub" data-t="over.sub">The page is still missing.</p>
+    <div class="col"><button type="button" id="bRetry" data-t="over.retry">Retry from the last save</button><button type="button" id="bToTitle" data-t="over.title2">Title screen</button></div>
+  </div>
+  <div id="end" class="screen" hidden role="dialog" aria-labelledby="endTitle">
+    <h1 id="endTitle" data-t="end.title">The page is mended</h1>
+    <p class="sub" data-t="end.1">The ink returns to the old codex, line by line.</p>
+    <p class="sub" data-t="end.2">On the last page a corner of a map is missing.</p>
+    <p class="line" data-t="end.3">Chapter 2 · The Missing Map</p>
+    <div class="col"><button type="button" id="bKeep" data-t="end.keep">Keep exploring</button><button type="button" id="bEndTitle" data-t="over.title2">Title screen</button></div>
   </div>
   <div id="fade"></div>
   <div id="fallback" hidden data-t="fallback">This browser could not start WebGL, so the game cannot be drawn.</div>
