@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>The Scholar Cat</title>
+<meta name="description" content="A retro pixel action-RPG in a 2.5D diorama: the scholar cat looks for the missing page of an old codex. Runs in the browser, no account, no network.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<style>
+:root{color-scheme:dark;--void:#17121c;--panel:rgba(16,13,26,.9);--line:#4a4360;--ink:#f4ecd8;--dim:#a79fb8;--amber:#ffb85c;
+  --display:"Pixelify Sans","Courier New",monospace;--mono:"DM Mono",ui-monospace,Menlo,Consolas,monospace}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--void);color:var(--ink);font-family:var(--mono);font-size:12px;overflow:hidden}
+#stage{position:fixed;inset:0;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+#gl{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}
+button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-bottom-width:3px;padding:8px 12px;cursor:pointer;line-height:1.2;min-height:40px}
+button:hover{border-color:var(--amber)}
+button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button[aria-pressed="true"]{color:var(--amber);border-color:var(--amber)}
+.top{position:absolute;inset:0 0 auto 0;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));pointer-events:none}
+.top h2{margin:0;font-family:var(--display);font-weight:600;font-size:20px;text-shadow:0 2px 0 rgba(0,0,0,.6)}
+.top button{pointer-events:auto}
+#hint{position:absolute;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));width:fit-content;max-width:calc(100% - 24px);margin:0 auto;padding:6px 12px;background:var(--panel);border:1px solid var(--line);color:var(--dim);font-size:11px;text-align:center;pointer-events:none}
+#dialog{position:absolute;left:50%;bottom:calc(52px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(560px,calc(100% - 24px));box-sizing:border-box;padding:12px 14px;background:var(--panel);border:1px solid var(--line);cursor:pointer}
+#dialog b{display:block;font-family:var(--display);font-size:15px;color:var(--amber);margin-bottom:6px}
+#dialog p{margin:0;font-size:13px;line-height:1.5;min-height:3em}
+#dMore{position:absolute;right:10px;bottom:6px;color:var(--amber)}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(23,18,28,.82);padding:24px;box-sizing:border-box;text-align:center}
+.screen h1{margin:0;font-family:var(--display);font-size:clamp(30px,7vw,56px);line-height:1;text-shadow:0 3px 0 rgba(0,0,0,.6)}
+.screen .sub{margin:0 0 10px;color:var(--dim);font-size:13px}
+.screen .col{display:flex;flex-direction:column;gap:8px;min-width:220px}
+#menu .opts{display:grid;grid-template-columns:auto auto;gap:10px 14px;align-items:center;text-align:left}
+.seg{display:flex;gap:4px;flex-wrap:wrap}
+.seg button{min-width:52px}
+#diag{max-width:46ch;color:var(--dim);font-size:11px;min-height:2.6em;font-variant-numeric:tabular-nums}
+#fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .25s}
+#fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;font-size:14px;background:var(--void)}
+.touch{display:none}
+@media (pointer:coarse){
+  .touch{display:block}
+  #stick{position:absolute;left:calc(22px + env(safe-area-inset-left));bottom:calc(56px + env(safe-area-inset-bottom));width:120px;height:120px;border-radius:50%;background:rgba(16,13,26,.45);border:1px solid var(--line);touch-action:none}
+  #knob{position:absolute;left:38px;top:38px;width:44px;height:44px;border-radius:50%;background:rgba(244,236,216,.35)}
+  #bAct{position:absolute;right:calc(24px + env(safe-area-inset-right));bottom:calc(76px + env(safe-area-inset-bottom));width:72px;height:72px;border-radius:50%;font-size:20px}
+  #hint{display:none}
+}
+@media (prefers-reduced-motion:reduce){#fade{transition:none}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl" tabindex="0" aria-label="Game view"></canvas>
+  <div class="top"><h2 id="areaName"></h2><button type="button" data-action="menu" data-t="btn.menu">Menu</button></div>
+  <div id="hint" aria-live="polite"></div>
+  <div id="dialog" hidden role="dialog" aria-live="polite"><b id="dWho"></b><p id="dText"></p><span id="dMore" hidden>▼</span></div>
+  <div class="touch"><div id="stick" aria-hidden="true"><div id="knob"></div></div><button type="button" id="bAct" data-action="interact" data-t-aria="btn.act" aria-label="Interact">●</button></div>
+  <div id="title" class="screen" hidden>
+    <h1 data-t="title.game">The Scholar Cat</h1><p class="sub" data-t="title.chapter">Chapter 1 · The Missing Page</p>
+    <div class="col"><button type="button" id="bStart" data-t="menu.new">New game</button><button type="button" id="bOptions" data-t="menu.options">Options</button></div>
+  </div>
+  <div id="menu" class="screen" hidden role="dialog" aria-labelledby="menuTitle">
+    <h1 id="menuTitle" data-t="menu.title">Options</h1>
+    <div class="opts">
+      <span data-t="opt.lang">Language</span><div class="seg" id="optLang"><button type="button" data-v="en">English</button><button type="button" data-v="it">Italiano</button></div>
+      <span data-t="opt.fps">Frame rate</span><div class="seg" id="optFps"><button type="button" data-v="30">30</button><button type="button" data-v="60">60</button><button type="button" data-v="120">120</button></div>
+      <span data-t="opt.shadows">Shadows</span><div class="seg" id="optShadows"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+      <span data-t="opt.sound">Sound</span><div class="seg" id="optSound"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+    </div>
+    <p id="diag" aria-live="off"></p>
+    <div class="col"><button type="button" id="bResume" data-t="menu.resume">Back</button></div>
+  </div>
+  <div id="fade"></div>
+  <div id="fallback" hidden data-t="fallback">This browser could not start WebGL, so the game cannot be drawn.</div>
+</div>
+<script src="vendor/three/three.min.js"></script>
+<script src="lang.js"></script>
+<script src="art.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
