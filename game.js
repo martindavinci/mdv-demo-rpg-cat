@@ -1243,6 +1243,17 @@ const QUESTS = {}, NPCS = {}, SPEAKERS = {}, AREA_HOOKS = {};
 const CHAPTER = {};   // content: { intro?() } — what happens the first time a new game starts
 const npcs = [];
 
+// tips: def.tips = [{ rect: [x0, z0, x1, z1], text: () => key }]; shown once per visit when the cat steps into the rect
+let tipsShown = new Set();
+function tipsStep() {
+  if (!A.def.tips || dlg) return;
+  for (const tip of A.def.tips) {
+    const [x0, z0, x1, z1] = tip.rect, inside = player.x >= x0 && player.x <= x1 && player.z >= z0 && player.z <= z1;
+    if (inside && !tipsShown.has(tip)) { tipsShown.add(tip); toast(t(tip.text())); }
+    else if (!inside && tipsShown.has(tip) && Math.min(player.x - x0, x1 - player.x, player.z - z0, z1 - player.z) < -3) tipsShown.delete(tip);   // well away: may show again
+  }
+}
+
 const qState = (id) => G.quests[id] || null;                      // { s: step, n: count } or null (not started)
 const qStep = (id) => { const q = qState(id); return q ? q.s : -1; };
 const qDone = (id) => !!QUESTS[id] && qStep(id) >= QUESTS[id].steps.length;
@@ -1321,6 +1332,7 @@ function populate(def) {
     if (o.act) A.acts.push(Object.assign({ x, z: front, r: 1.4 }, o.act));
   }
   for (const [id, x, z, face, when] of def.npcs || []) if (!when || when()) spawnNpc(id, x, z, face);
+  tipsShown = new Set();
   for (const [type, x, z, when] of def.spawns || []) if (!when || when()) spawnEnemy(type, x, z);
   if (AREA_HOOKS[def.id]) AREA_HOOKS[def.id]();
   if (G) { G.seen[def.id] = true; questEvent('reach', def.id); }
@@ -1581,7 +1593,7 @@ function step(dt) {
     else if (act === 'rotateL') rotate(-1); else if (act === 'rotateR') rotate(1);
   }
   if (ui.screen !== 'game' || transitioning || !A) { if (player) player.moving = false; return; }
-  if (!dlg) { heroStep(dt); enemiesStep(dt); hazardsStep(dt); pickupsStep(dt); npcsStep(dt); } else player.moving = false;
+  if (!dlg) { heroStep(dt); enemiesStep(dt); hazardsStep(dt); pickupsStep(dt); npcsStep(dt); tipsStep(); } else player.moving = false;
   if (!hero.dead && !dlg) for (const ex of A.exits) { if (ex.when && !ex.when()) continue; const [x0, z0, x1, z1] = ex.rect; if (player.x >= x0 && player.x <= x1 && player.z >= z0 && player.z <= z1) {
     if (ex.need && !has(ex.need)) { player.z += z1 - player.z + .25; sfx('no'); toast(t('toast.door', { item: t('item.' + ex.need) })); break; }   // a locked door pushes the cat back
     goTo(ex); break;
@@ -1629,7 +1641,7 @@ function frame(now) {
 
 // ---- content/chapter1/areas/crypt.js
 /* ---------- the crypt under the church: an ink pool crossed with the dash, three levers, the arch to the Scribe ---------- */
-// legend: W walls, V the low front wall, o floor, w the ink pool
+// legend: W walls, V low walls (the front, and walls across the room the camera must see past), o floor, w the ink pool
 const CRYPT_LEGEND = { o: { tile: 'crypt_floor' }, W: { tile: 'crypt_floor', h: 52, wall: 0x4a4250 }, V: { tile: 'crypt_floor', h: 6, wall: 0x4a4250 }, w: { tile: 'water', water: true, h: -3 } };
 AREAS.crypt_in = {
   id: 'crypt_in', name: 'area.crypt', cell: 2, tod: 'cripta', start: [16, 45.4], camNorth: 1, music: 'crypt', halo: 0x8fa8ff,
@@ -1640,12 +1652,12 @@ AREAS.crypt_in = {
     'WooooooooooooooW',
     'WooooooooooooooW',
     'WooooooooooooooW',
-    'WWWWWWooooWWWWWW',   // the lever gate
+    'VVVVVVooooVVVVVV',   // the lever gate (inner walls are low, so the camera sees over them)
     'WooooooooooooooW',   // the lever room
     'WooooooooooooooW',
     'WooooooooooooooW',
     'WooooooooooooooW',
-    'WWWWWWooooWWWWWW',
+    'VVVVVVooooVVVVVV',
     'WwwwwwwwwwwwwwwW',   // the ink pool: too wide to walk, short enough to dash
     'WwwwwwwwwwwwwwwW',
     'WooooooooooooooW',   // the first hall
@@ -1674,6 +1686,8 @@ AREAS.crypt_in = {
   lamps: [[3, 3, 3, 2.6, 1.3], [29, 3, 3, 2.6, 1.3], [3, 3, 13, 2.4, 1.2], [29, 3, 13, 2.4, 1.2], [3, 3, 28, 2.4, 1.2], [29, 3, 28, 2.4, 1.2], [3, 3, 40, 2.4, 1.2], [29, 3, 40, 2.4, 1.2]],
   spawns: [['bookworm', 10, 36], ['bookworm', 22, 38], ['wax_golem', 16, 16.4], ['wax_golem', 22, 7.6, () => !G.flags.boss_done]],
   exits: [{ rect: [14, 47.2, 18, 48], to: 'overworld', at: [45, 25.2], face: [0, 1] }],
+  // at the pool's edge, from either side: how to cross
+  tips: [{ rect: [2, 25.6, 30, 28.6], text: poolTip }, { rect: [12, 19, 20, 22], text: poolTip }],
 };
 
 // the Scribe's chamber
@@ -2057,6 +2071,9 @@ function cryptLever(n) {
   leverDone.push(n); sfx('door'); toast(t('toast.levers', { n: leverDone.length }));
   if (leverDone.length === 3) { setFlag('crypt_gate'); leverDone = []; reopen(); }
 }
+
+// what the cat thinks at the crypt's ink pool
+function poolTip() { return !G.flags.skill_dash ? 'tip.pool.nodash' : coarse ? 'tip.pool.touch' : 'tip.pool'; }   // a declaration: the crypt's area file is read before this one
 
 /* hooks run each time an area is built */
 Object.assign(AREA_HOOKS, {
