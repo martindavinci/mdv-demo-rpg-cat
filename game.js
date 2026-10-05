@@ -1602,7 +1602,19 @@ function enterArea(name, at, face) {
   tod = Math.max(0, TODS.findIndex((x) => x.label === (def.tod || 'giorno'))); applyTod(1);
   $('areaName').textContent = t(def.name); hintState = null; shadowHold = 8; dlg = null; $('dialog').hidden = true;
   if (G) G.area = name;
-  populate(def); playTrack(areaTrack());
+  populate(def); unstick(def); playTrack(areaTrack());
+}
+// a save from an older layout (or any arrival) may put the cat inside something that moved there since: step out to
+// the nearest free spot, searched in rings of a quarter unit out to 8 units; failing that, the area's start
+function unstick(def) {
+  if (!A.blocked(player.x, player.z)) return;
+  const y0 = A.groundY(player.x, player.z);
+  for (let r = .25; r <= 8; r += .25) for (let k = 0, n = Math.ceil(r * 8); k < n; k++) {
+    const a = k / n * Math.PI * 2, x = player.x + Math.cos(a) * r, z = player.z + Math.sin(a) * r;
+    const inExit = A.exits.some(({ rect: [x0, z0, x1, z1] }) => x >= x0 - .4 && x <= x1 + .4 && z >= z0 - .4 && z <= z1 + .4);
+    if (!A.blocked(x, z) && !inExit && Math.abs(A.groundY(x, z) - y0) < .25) { player.x = x; player.z = z; return; }   // same level, not in a doorway
+  }
+  player.x = def.start[0]; player.z = def.start[1];
 }
 async function goTo(exit) {
   transitioning = true; player.moving = false; sfx('door');
