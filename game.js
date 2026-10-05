@@ -2301,6 +2301,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     clearEnemies: () => clearEnemies(),
     internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS }),
     view: (y) => { yaw = yawT = y; intro = 1; },
+    zoom: (v) => { VT = Vz = v; },
     draw: () => draw(1 / 60),
   };
 })();
