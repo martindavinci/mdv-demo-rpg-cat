@@ -517,6 +517,20 @@ function openArea(def) {
   const wallCol = (t, a, y) => { const g = GT[t]; if (g.cliff) return edgeCol(t, a, y, g.h); const c = g.wall !== undefined ? g.wall : shade(avg(g), .62); return (Math.floor(y / 4) + Math.floor(a / 8)) % 2 ? c : shade(c, .9); };
   const STRATA = [0x6b4a32, 0x5e4230, 0x6f5238, 0x52392a];
   const edgeCol = (t, k, y, top) => top - y <= 2 ? shade(avg(GT[t]), .8) : STRATA[Math.floor((top - y + (k % 7)) / 7) % STRATA.length];
+  // every drop too tall to walk is drawn on the ground: a light lip along the top, a dark line at the foot. From the
+  // default view the cliff faces turned away from the camera cannot be seen, and both levels wear the same grass.
+  const DROP = STEP * PPU, N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const mix = (c, d, k) => (Math.round((c >> 16 & 255) * (1 - k) + (d >> 16 & 255) * k) << 16) | (Math.round((c >> 8 & 255) * (1 - k) + (d >> 8 & 255) * k) << 8) | Math.round((c & 255) * (1 - k) + (d & 255) * k);
+  const edgeShade = (gx, gz, c) => {
+    const hh = hPx(gx, gz); let lip = 0, foot = 0;
+    for (const [a, b] of N4) for (let d = 1; d <= 3; d++) {
+      const nx = gx + a * d, nz = gz + b * d, n = hPx(nx, nz);
+      if (d <= 2 && hh - n > DROP && !GT[tyPx(nx, nz)].water) lip = Math.max(lip, 3 - d);   // 2 at the edge, 1 a pixel in
+      if (n - hh > DROP) foot = Math.max(foot, 4 - d);                                        // 3 at the foot, fading out
+    }
+    if (lip) return lip === 2 ? mix(c, 0xf2eeb4, .6) : mix(c, 0xf2eeb4, .28);
+    return foot ? shade(c, [1, .8, .62, .42][foot]) : c;
+  };
   function buildChunk(ci, cj) {
     const x0 = ci * CW, z0 = cj * CH, w = Math.min(CW, PXW - x0), h = Math.min(CH, PXD - z0);
     const group = new THREE.Group(); scene.add(group);
@@ -529,7 +543,7 @@ function openArea(def) {
     for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) {
       const i = z * w + x, gx = x0 + x, gz = z0 + z, g = GT[tyPx(gx, gz)];
       if (g.water) { water.push(i); if (nearOther(gx, gz, (k) => !GT[k].water) && hash2(gx * 3, gz * 7) < .7) foam[i] = 1; put1(i, waterColor(i, 0)); }
-      else put1(i, tilePx(g, gx, gz));
+      else put1(i, edgeShade(gx, gz, tilePx(g, gx, gz)));
     }
     gCtx.putImageData(gImg, 0, 0);
     // walls: each face belongs to the higher pixel; the map's outer edges get the diorama's earth sides
