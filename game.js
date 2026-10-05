@@ -12,7 +12,8 @@ const GLOW = 0xffe7a0;                              // the prompts' night-glow c
 
 function hash2(x, y) { let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
 function rng(a) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-const R = rng(4071);
+let R = rng(4071);   // gameplay randomness; the checks reseed it for repeatable runs
+const reseed = (n) => { R = rng(n); };
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const lerp = (a, b, t) => a + (b - a) * t;
 const shade = (c, k) => (Math.min(255, Math.round((c >> 16 & 255) * k)) << 16) | (Math.min(255, Math.round((c >> 8 & 255) * k)) << 8) | Math.min(255, Math.round((c & 255) * k));
@@ -422,10 +423,17 @@ function camGoal(vv) {
     return [clamp(x, Math.min(ex, A.W / 2), Math.max(A.W - ex, A.W / 2)), clamp(z, Math.min(ez, A.D / 2), Math.max(A.D - ez, A.D / 2))];
   }
   const W = A.W, D = A.D, f = clamp(1.45 - vv / 26, .4, .9); return [W / 2 + (player.x - W / 2) * f, D / 2 - (A.camNorth || 1.5) + (player.z - D / 2) * f * .6]; }
-// the ground the view covers, turned with the view, grown by m units: [x0, z0, x1, z1]
-function viewFoot(m) {
-  const vv = Math.max(Vz, VT, minV()), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2, c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw));
-  const ex = hx * c + hz * sn + m, ez = hz * c + hx * sn + m; return [camT.x - ex, camT.z - ez, camT.x + ex, camT.z + ez];
+// the ground the view covers, as a box in world x/z: [x0, z0, x1, z1]. In view terms it grows by side units left and
+// right, far units away from the camera and near units toward it (a tall tree standing below the view's bottom edge
+// still reaches into it: a 7-unit tree up to 10 units out).
+function viewFoot(side, far, near) {
+  const vv = Math.max(Vz, VT, minV()), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2;
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw), tx = Math.sin(yaw), tz = Math.cos(yaw);   // screen right; toward the camera
+  let x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9;
+  for (const a of [-(hx + side), hx + side]) for (const b of [-(hz + far), hz + near]) {
+    const x = camT.x + rx * a + tx * b, z = camT.z + rz * a + tz * b; x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+  }
+  return [x0, z0, x1, z1];
 }
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH), v = Math.max(Vz, minV());
@@ -563,8 +571,10 @@ function openArea(def) {
     const gTex = nearest(new THREE.CanvasTexture(gCan)); gTex.flipY = false; gTex.encoding = THREE.sRGBEncoding;
     const hTex = nearest(new THREE.DataTexture(gPack, w, h, THREE.LuminanceAlphaFormat, THREE.UnsignedByteType)); hTex.unpackAlignment = 1; hTex.needsUpdate = true;
     groundTex = gTex; heightTex = hTex; const matGround = voxelMaterial('ground');
-    const staticMesh = new THREE.Mesh(B.geometry(), matStatic); staticMesh.castShadow = staticMesh.receiveShadow = true; staticMesh.frustumCulled = false; group.add(staticMesh);
-    const slabMesh = new THREE.Mesh(S.geometry(), matSlab); slabMesh.castShadow = slabMesh.receiveShadow = true; slabMesh.frustumCulled = false; slabMesh.customDepthMaterial = slabDepth; group.add(slabMesh);
+    // chunks are culled against the view (one kept off screen costs nothing); the bounds are padded a little
+    const cull = (m) => { const g = m.geometry; if (!g.attributes.position || !g.attributes.position.count) { m.visible = false; return m; } g.computeBoundingSphere(); g.boundingSphere.radius += 1; return m; };
+    const staticMesh = cull(new THREE.Mesh(B.geometry(), matStatic)); staticMesh.castShadow = staticMesh.receiveShadow = true; group.add(staticMesh);
+    const slabMesh = cull(new THREE.Mesh(S.geometry(), matSlab)); slabMesh.castShadow = slabMesh.receiveShadow = true; slabMesh.customDepthMaterial = slabDepth; group.add(slabMesh);
     const pos = [], uv = [], idx = [], open = new Map(), rects = [];
     for (let z = 0; z < h; z++) {
       const seen = new Map(); let x = 0;
@@ -574,12 +584,12 @@ function openArea(def) {
     for (const r of rects) { const v = pos.length / 3, y = r.h * P; pos.push((x0 + r.x0) * P, y, (z0 + r.z1) * P, (x0 + r.x1) * P, y, (z0 + r.z1) * P, (x0 + r.x1) * P, y, (z0 + r.z0) * P, (x0 + r.x0) * P, y, (z0 + r.z0) * P); uv.push(r.x0 / w, r.z1 / h, r.x1 / w, r.z1 / h, r.x1 / w, r.z0 / h, r.x0 / w, r.z0 / h); idx.push(v, v + 1, v + 2, v, v + 2, v + 3); }
     const gg = new THREE.BufferGeometry(), nrm = new Float32Array(pos.length); for (let i = 1; i < nrm.length; i += 3) nrm[i] = 1;
     gg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); gg.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); gg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); gg.setIndex(idx);
-    const gm = new THREE.Mesh(gg, matGround); gm.receiveShadow = true; gm.frustumCulled = false; group.add(gm);
+    const gm = cull(new THREE.Mesh(gg, matGround)); gm.receiveShadow = true; group.add(gm);
     const halos = lampSpots.filter((p) => p.x * PPU >= x0 && p.x * PPU < x0 + w && p.z * PPU >= z0 && p.z * PPU < z0 + h).map((p) => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, color: def.halo || 0xff9440, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0 })); s.position.set(p.x, p.y, p.z); s.scale.setScalar(p.r); group.add(s); return s; });
     const tris = B.tris + S.tris + idx.length / 3;
     S = prevS; B = prevB;
     return {
-      ci, cj, group, halos, tris,
+      ci, cj, group, halos, tris, meshes: [staticMesh, slabMesh, gm],
       water(tick) { if (!water.length) return; for (const i of water) put1(i, waterColor(i, tick)); gCtx.putImageData(gImg, 0, 0); gTex.needsUpdate = true; },
       dispose() { scene.remove(group); group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material !== matStatic && o.material !== matSlab) o.material.dispose(); }); gTex.dispose(); hTex.dispose(); matGround.dispose(); },
     };
@@ -587,19 +597,19 @@ function openArea(def) {
 
   /* streaming: the chunks under the view and around the cat stay built (one new chunk per frame); far ones are freed */
   const chunks = new Map(), ckey = (i, j) => i + ',' + j;
-  const area = { def, id: def.id, name: def.name, W, D, camNorth: def.camNorth, solids, acts, exits, groundY, isWater, blocked, clear, lampLight, tris: 0, buildMs: 0, chunks };
+  const area = { def, id: def.id, name: def.name, W, D, camNorth: def.camNorth, solids, acts, exits, groundY, isWater, blocked, clear, lampLight, tris: 0, buildMs: 0, chunkMs: 0, chunks };
   const cwu = ccw * cell, chu = cch * cell;
   const span = ([x0, z0, x1, z1]) => [clamp(Math.floor(x0 / cwu), 0, NI - 1), clamp(Math.floor(z0 / chu), 0, NJ - 1), clamp(Math.floor(x1 / cwu), 0, NI - 1), clamp(Math.floor(z1 / chu), 0, NJ - 1)];
   const want = (x, z) => {
-    const pi = Math.floor(x / cwu), pj = Math.floor(z / chu), [i0, j0, i1, j1] = span(viewFoot(6)), out = [];
+    const pi = Math.floor(x / cwu), pj = Math.floor(z / chu), [i0, j0, i1, j1] = span(viewFoot(3, 1, 9)), out = [];
     for (let j = Math.min(j0, pj); j <= Math.max(j1, pj); j++) for (let i = Math.min(i0, pi); i <= Math.max(i1, pi); i++) if (i >= 0 && j >= 0 && i < NI && j < NJ) out.push([i, j, Math.abs(i - pi) + Math.abs(j - pj)]);
     return out.sort((a, b) => a[2] - b[2]);
   };
-  const sync = () => { lamps = [...chunks.values()].flatMap((c) => c.halos); area.tris = [...chunks.values()].reduce((a, c) => a + c.tris, 0); };
+  const sync = () => { lamps = [...chunks.values()].flatMap((c) => c.halos); area.allTris = [...chunks.values()].reduce((a, c) => a + c.tris, 0); };
   area.stream = (x, z, all) => {
     let built = 0;
-    for (const [i, j] of want(x, z)) { const k = ckey(i, j); if (chunks.has(k)) continue; chunks.set(k, buildChunk(i, j)); built++; if (!all) break; }
-    const [i0, j0, i1, j1] = span(viewFoot(24));
+    for (const [i, j] of want(x, z)) { const k = ckey(i, j); if (chunks.has(k)) continue; const t0 = performance.now(); chunks.set(k, buildChunk(i, j)); area.chunkMs = Math.max(area.chunkMs, performance.now() - t0); built++; if (!all) break; }
+    const [i0, j0, i1, j1] = span(viewFoot(20, 20, 26));
     for (const [k, c] of chunks) if (c.ci < i0 || c.ci > i1 || c.cj < j0 || c.cj > j1) { c.dispose(); chunks.delete(k); built++; }
     if (built) sync();
   };
@@ -611,6 +621,9 @@ function openArea(def) {
     const snap = 2 * SHADOW_HALF / 2048 * 8, sx = Math.round(camT.x / snap) * snap, sz = Math.round(camT.z / snap) * snap;
     if (sx !== sunX || sz !== sunZ) { sunX = sx; sunZ = sz; area.sunX = sx; area.sunZ = sz; sun.target.position.set(sx, 0, sz); shadowHold = 3; }
   };
+  // triangles the view draws (main pass): the chunk meshes inside the camera's frustum
+  const meshTris = (m) => { const g = m.geometry; return g.index ? g.index.count / 3 : g.attributes.position ? g.attributes.position.count / 3 : 0; };
+  area.visibleTris = (frustum) => { let n = 0; for (const c of chunks.values()) for (const m of c.meshes) if (m.visible && frustum.intersectsObject(m)) n += meshTris(m); return n; };
   area.dispose = () => { for (const c of chunks.values()) c.dispose(); chunks.clear(); lamps = []; };
   area.sunX = W / 2; area.sunZ = D / 2;
   Object.assign(sun.shadow.camera, { left: -SHADOW_HALF, right: SHADOW_HALF, top: SHADOW_HALF, bottom: -SHADOW_HALF, near: 1, far: 160 }); sun.shadow.camera.updateProjectionMatrix();
@@ -818,6 +831,8 @@ const SWINGS = [
 const SKILLS = { dash: { ink: 10 }, well: { ink: 15 } };
 const hero = { swing: -1, st: 0, queued: false, grace: 0, last: -1, hitSet: null, dodge: 0, cd: 0, dx: 0, dz: 0, dash: false, inv: 0, hurt: 0, kx: 0, kz: 0, dead: 0 };
 let shakeT = 0, combatT = 0;
+const INK_REGEN = 2;
+const POISE_CD = 1.2;   // seconds after a stagger before the next one   // ink per second while nothing is fighting the cat
 
 const dmgRoll = (atk, def, mult) => Math.max(1, Math.round((atk * (mult || 1) - def) * (.9 + R() * .2)));
 const near = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -873,6 +888,7 @@ const screenToWorld = (ix, iy) => [Math.cos(yaw) * ix - Math.sin(yaw) * iy, -Mat
 function heroStep(dt) {
   const s = stats();
   hero.inv = Math.max(0, hero.inv - dt); hero.cd = Math.max(0, hero.cd - dt); hero.grace = Math.max(0, hero.grace - dt);
+  if (combatT <= 0 && !hero.dead && G.ink < s.ink) G.ink = Math.min(s.ink, G.ink + dt * INK_REGEN);   // ink seeps back out of combat, so a dash is never out of reach for good
   player.blink = hero.inv > 0 && hero.dodge <= 0 && Math.floor(hero.inv * 16) % 2 === 1;
   if (player.anim) player.at += dt;
   const go = (vx, vz) => { const nx = player.x + vx * dt, nz = player.z + vz * dt; if (!A.blocked(nx, player.z, player.x, player.z)) player.x = nx; if (!A.blocked(player.x, nz, player.x, player.z)) player.z = nz; };
@@ -927,7 +943,9 @@ function hitEnemy(e, d, push, inkGain, blocked) {
   fx('hit_spark', e.x, e.z, { y: A.groundY(e.x, e.z) + .5 + (e.T.fly || 0), size: .9 }); sfx(blocked ? 'no' : 'hit'); shake(.08);
   if (inkGain && !blocked) G.ink = Math.min(stats().ink, G.ink + 3);
   if (e.hp <= 0) { setState(e, 'defeat', .55); e.a.anim = 'defeat'; sfx('defeat'); return; }
-  if (!e.T.poise && (!blocked || e.state === 'windup')) setState(e, 'hurt', .24);   // a hit during the tell cancels the strike
+  // a stagger (which also cancels a tell) leaves the enemy unstaggerable for POISE_CD: hits still hurt, but pressing
+  // Hit without pause no longer stun-locks it (tools/fair-check.mjs: mashing beat timing on every enemy before)
+  if (!e.T.poise && simTime - (e.staggerAt ?? -9) >= POISE_CD && (!blocked || e.state === 'windup')) { setState(e, 'hurt', .24); e.staggerAt = simTime; }
   e.aware = true; if (e.T.onHit) e.T.onHit(e);
 }
 
@@ -1355,10 +1373,10 @@ function toastTick(dt) { if (toastT > 0 && (toastT -= dt) <= 0) $('toast').hidde
 /* HUD: health, ink, level, coins; the DOM is touched only when a number changes */
 let hudKey = '';
 function hudDraw() {
-  if (!G) return; const s = stats(), key = [G.hp, s.hp, G.ink, s.ink, G.level, G.coins, G.flags.skill_dash, G.flags.skill_well, settings.lang].join();
+  if (!G) return; const s = stats(), ink = Math.floor(G.ink), key = [G.hp, s.hp, ink, s.ink, G.level, G.coins, G.flags.skill_dash, G.flags.skill_well, settings.lang].join();
   if (key === hudKey) return; hudKey = key;
-  $('hpBar').style.width = (100 * G.hp / s.hp).toFixed(1) + '%'; $('inkBar').style.width = (100 * G.ink / s.ink).toFixed(1) + '%';
-  $('hpNum').textContent = G.hp + '/' + s.hp; $('inkNum').textContent = G.ink + '/' + s.ink;
+  $('hpBar').style.width = (100 * G.hp / s.hp).toFixed(1) + '%'; $('inkBar').style.width = (100 * ink / s.ink).toFixed(1) + '%';
+  $('hpNum').textContent = G.hp + '/' + s.hp; $('inkNum').textContent = ink + '/' + s.ink;
   $('hLv').textContent = t('hud.lv', { n: G.level }); $('hCoins').textContent = t('hud.coins', { n: G.coins });
   $('bDash').hidden = !G.flags.skill_dash; $('bWell').hidden = !G.flags.skill_well;
 }
@@ -1501,6 +1519,9 @@ function submitCode() {
 // ---- engine/80-loop.js
 /* ---------- loop: simulation at a fixed 120 Hz, drawing capped at the chosen 30 / 60 / 120 fps ---------- */
 const SIM = 1 / 120;
+let frozen = false;
+const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4();
+let simTime = 0;   // the simulation's own clock (time below is the drawing clock)
 let player = null, shadowHold = 8, time = 0, intro = 1, transitioning = false;
 let last = performance.now(), acc = 0, drawAcc = 0, frames = 0, fpsT = 0, fps = 0, calls = 0;
 const rotate = (d) => { yawT = Math.round(yawT / (Math.PI / 2)) * (Math.PI / 2) + d * Math.PI / 2; };
@@ -1527,6 +1548,7 @@ async function goTo(exit) {
 const areaTrack = () => typeof A.def.music === 'function' ? A.def.music(player.x, player.z) : A.def.music || 'village';
 
 function step(dt) {
+  simTime += dt;
   while (input.queue.length) {
     const act = input.queue.shift();
     if (act === 'menu') {
@@ -1564,6 +1586,7 @@ function draw(dt) {
   const vv = Math.max(Vz, minV()), [tx, tz] = camGoal(vv), kf = 1 - Math.exp(-dt * 5);
   camT.x += (tx - camT.x) * kf; camT.z += (tz - camT.z) * kf; camT.y += (A.groundY(player.x, player.z) * .5 - camT.y) * kf;
   setCamera();
+  _frustum.setFromProjectionMatrix(_pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse)); A.tris = A.visibleTris(_frustum);
   if (shakeT > 0) { shakeT = Math.max(0, shakeT - dt); const k = shakeT * .9; cam.position.x += (R() - .5) * k; cam.position.y += (R() - .5) * k; cam.updateMatrixWorld(); }
   for (const a of actors) a.pose();
   applyTod(1 - Math.exp(-dt * 2.2));
@@ -1580,7 +1603,7 @@ function draw(dt) {
 function frame(now) {
   requestAnimationFrame(frame);
   const real = Math.min(.25, (now - last) / 1000); last = now;
-  if (document.hidden) return;
+  if (document.hidden || frozen) return;   // frozen: a check drives the simulation itself
   pollPad();
   acc += real; let n = 0; while (acc >= SIM && n < 30) { step(SIM); acc -= SIM; n++; } if (n === 30) acc = 0;
   // the cap keeps its phase: on a 144 Hz screen a 60 cap draws 60 times a second, not every third refresh
@@ -1740,12 +1763,13 @@ AREAS.overworld = (() => {
   ];
   const busy = [[90, 44, 110, 60], [26, 26, 64, 56], [36, 14, 56, 30], [70, 18, 108, 38], [58, 38, 112, 46], [52, 56, 80, 76], [14, 34, 30, 58], [18, 38, 28, 44]];
   const free = (x, z) => !busy.some(([x0, z0, x1, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
-  // an olive is ten thousand triangles, a cypress fourteen hundred: olives stay few, the plateau rims get cypresses and bushes
+  // an olive is ten thousand triangles, a cypress fourteen hundred (tools/budget-check.mjs): no olives in the scatter,
+  // the plateau rims get cypresses and bushes
   const pickTree = (v, list) => { let acc = 0; for (const [k, w] of list) { acc += w; if (v < acc) return k; } return list[0][0]; };
-  const LOW = [['oak', .3], ['cypress', .35], ['bush', .25], ['olive', .1]], RIM = [['cypress', .7], ['bush', .25], ['oak', .05]];
+  const LOW = [['oak', .3], ['cypress', .45], ['bush', .25]], RIM = [['cypress', .7], ['bush', .25], ['oak', .05]];
   for (let r = 1; r < RW - 1; r++) for (let c = 1; c < C - 1; c++) {
     const ch = map[r][c], x = c * 2 + 1, z = r * 2 + 1, h = hash2(c * 13, r * 29);
-    if ((ch === 'g' || ch === 'f') && h > .955 && free(x, z)) { const k = pickTree(hash2(c, r * 7), LOW); things.push([k, x, z, k === 'bush' ? undefined : .6, k === 'bush' ? undefined : .5]); }
+    if ((ch === 'g' || ch === 'f') && h > .962 && free(x, z)) { const k = pickTree(hash2(c, r * 7), LOW); things.push([k, x, z, k === 'bush' ? undefined : .6, k === 'bush' ? undefined : .5]); }
     else if (ch === 'X' && h > .93) { const inner = Math.min(c, C - 1 - c, r, RW - 1 - r) >= 6; if (inner) things.push([pickTree(hash2(c * 3, r), RIM), x, z, 0, 0]); }
   }
   return {
@@ -1763,19 +1787,19 @@ AREAS.overworld = (() => {
 /* ---------- the inky creatures of Chapter 1 (spec §10): every strike has a tell of at least 0.35 s ---------- */
 Object.assign(ENEMIES, {
   // a puddle of ink with two eyes: squashes flat (the tell), hops to where the cat stood, slams
-  blot: { sheet: 'enemies-1', row: 'blot', hp: 14, atk: 6, def: 0, speed: 2.4, sight: 7, reach: 2.2, windup: .5, strike: .38, recover: .8, xp: 4, coins: [0, 2], r: .5, move: 'hop', drops: [['milk', .12]] },
+  blot: { sheet: 'enemies-1', row: 'blot', hp: 30, atk: 6, def: 0, speed: 2.4, sight: 7, reach: 2.2, windup: .5, strike: .38, recover: .8, xp: 4, coins: [0, 2], r: .5, move: 'hop', drops: [['milk', .12]] },
   // a fat drop with paper wings: hovers, stops and shivers (the tell), dives in a line
-  inkfly: { sheet: 'enemies-1', row: 'inkfly', hp: 10, atk: 7, def: 0, speed: 3.1, sight: 9, reach: 4.2, windup: .55, strike: .42, recover: 1, xp: 5, coins: [1, 2], r: .45, move: 'lunge', fly: .8, drops: [['ink_potion', .15]] },
+  inkfly: { sheet: 'enemies-1', row: 'inkfly', hp: 24, atk: 7, def: 0, speed: 3.1, sight: 9, reach: 4.2, windup: .55, strike: .42, recover: 1, xp: 5, coins: [1, 2], r: .45, move: 'lunge', fly: .8, drops: [['ink_potion', .15]] },
   // a long worm of stacked pages: shivers in the dust (the tell), charges straight
-  bookworm: { sheet: 'enemies-2', row: 'bookworm', hp: 26, atk: 9, def: 2, speed: 2, sight: 9, reach: 5.5, windup: .65, strike: .6, recover: 1.2, xp: 9, coins: [1, 3], r: .6, move: 'lunge', drops: [['bread', .2]] },
+  bookworm: { sheet: 'enemies-2', row: 'bookworm', hp: 38, atk: 9, def: 2, speed: 2, sight: 9, reach: 5.5, windup: .65, strike: .6, recover: 1.2, xp: 9, coins: [1, 3], r: .6, move: 'lunge', drops: [['bread', .2]] },
   // a candle-wax brute: raises both arms (the tell), smashes twice; its front is shielded, its back is not
-  wax_golem: { sheet: 'enemies-2', row: 'wax_golem', hp: 40, atk: 12, def: 3, speed: 1.5, sight: 7, reach: 1.9, windup: .75, strike: .5, recover: 1.3, xp: 15, coins: [2, 5], r: .7, move: 'smash', shield: true, drops: [['fish', .3]] },
+  wax_golem: { sheet: 'enemies-2', row: 'wax_golem', hp: 60, atk: 12, def: 3, speed: 1.5, sight: 7, reach: 1.9, windup: .75, strike: .5, recover: 1.3, xp: 15, coins: [2, 5], r: .7, move: 'smash', shield: true, drops: [['fish', .3]] },
 });
 
 /* the Blot Scribe: phase 1 sweeps its quill and draws ink lines; below half health it splits off Blots and calls ink rain.
    Every attack is announced: the quill drawn back, ink marks on the floor 0.6 s before they burst. */
 ENEMIES.blot_scribe = {
-  sheet: 'boss', row: 'blot_scribe', hp: 160, atk: 13, def: 3, speed: 1.6, sight: 30, reach: 3.4, xp: 60, coins: [8, 12], r: 1.1, poise: true, size: 1,
+  sheet: 'boss', row: 'blot_scribe', hp: 900, atk: 13, def: 3, speed: 1.6, sight: 30, reach: 3.4, xp: 60, coins: [8, 12], r: 1.1, poise: true, size: 1,
   anims: { idle: ['idle1', 'idle2'], walk: ['idle1', 'idle2'], windup: ['sweep_windup'], attack: ['sweep'], cast: ['blot_scribe_b.rain_cast'], split: ['blot_scribe_b.split'], hurt: ['blot_scribe_b.hurt'], defeat: ['blot_scribe_b.defeat'] },
   onHit(e) { if (!e.phase2 && e.hp < e.T.hp / 2) { e.phase2 = true; e.state = 'split'; e.st = .9; e.a.anim = 'split'; e.a.at = 0; toast(t('toast.boss2')); shake(.3); } },
   ai(e, dt, dist, move, face) {
@@ -2103,7 +2127,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   // hooks for the headless checks
   window.__game = {
     state: () => ({ screen: ui.screen, area: A && A.def.id, x: player && player.x, z: player && player.z, fps, tris: A && A.tris, buildMs: A && A.buildMs, sprites: SPRITES.length,
-      hp: G && G.hp, ink: G && G.ink, xp: G && G.xp, level: G && G.level, coins: G && G.coins, enemies: enemies.map((e) => [e.type, e.state, e.hp, +e.x.toFixed(1), +e.z.toFixed(1)]), dlg: !!dlg, near: nearAct && nearAct.label, quests: G && G.quests }),
+      calls, chunkMs: A && Math.round(A.chunkMs), hp: G && G.hp, ink: G && Math.floor(G.ink), xp: G && G.xp, level: G && G.level, coins: G && G.coins, enemies: enemies.map((e) => [e.type, e.state, e.hp, +e.x.toFixed(1), +e.z.toFixed(1)]), dlg: !!dlg, near: nearAct && nearAct.label, quests: G && G.quests }),
     start: () => startGame(),
     place: (x, z) => { player.x = x; player.z = z; },
     walk: (x, y) => { input.stickX = x; input.stickY = y; },
@@ -2113,6 +2137,14 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     spriteTris: () => Object.fromEntries(SPRITES.map((s) => [s.key, 2 * (s.layF.length + s.layB.length + s.strips.length)])),
     G: () => G, code: () => saveCode(), read: (c) => readCode(c), enter: (n, at) => enterArea(n, at),
     area: () => A,
+    // for the checks: stop the frame loop, reseed, and run the 120 Hz simulation by hand (bot is called before each step)
+    freeze: (on) => { frozen = !!on; if (!on) last = performance.now(); },
+    reseed: (n) => reseed(n),
+    sim: (secs, bot) => { const n = Math.round(secs / SIM); for (let i = 0; i < n; i++) { if (bot && bot(i * SIM) === false) return i * SIM; step(SIM); flatsDraw(SIM); } return secs; },
+    clearEnemies: () => clearEnemies(),
+    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS }),
+    view: (y) => { yaw = yawT = y; intro = 1; },
+    draw: () => draw(1 / 60),
   };
 })();
 })();
