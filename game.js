@@ -110,7 +110,10 @@ function depthPic(S, r) {
     c[i] = col; f[i] = clamp(mid - zf[i], -63, 63); b[i] = clamp(mid - zb[i], -64, 62);
     if (Math.abs((col >> 16) - (GLOW >> 16)) + Math.abs((col >> 8 & 255) - (GLOW >> 8 & 255)) + Math.abs((col & 255) - (GLOW & 255)) < 30) fl[i] |= F_GLOW;
   }
-  return { w: r.w, h: r.h, d: r.depth.d, c, f, b, fl };
+  // the side view (when the pipeline kept one): its colours colour the side walls; x = depth from the front
+  let side = null;
+  if (r.side) { const s = r.side; side = { w: s.w, h: s.h, c: new Int32Array(s.w * s.h).fill(-1) }; for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) { const o = ((s.y + y) * S.w + s.x + x) * 4; if (S.px[o + 3] >= 128) side.c[y * s.w + x] = (S.px[o] << 16) | (S.px[o + 1] << 8) | S.px[o + 2]; } }
+  return { w: r.w, h: r.h, d: r.depth.d, c, f, b, fl, side };
 }
 
 // ---- engine/20-sprites.js
@@ -124,12 +127,54 @@ function buildSprites() {
   const order = DEFS.slice().sort((a, b) => b.pic.h - a.pic.h || (a.key < b.key ? -1 : 1));
   let x = 1, y = 1, rowH = 0;
   for (const d of order) { if (x + d.pic.w + 1 > AW) { x = 1; y += rowH + 1; rowH = 0; } d.ax = x; d.ay = y; x += d.pic.w + 1; rowH = Math.max(rowH, d.pic.h); }
+  // a sprite with a side view also gets two more regions: the side view (for its side walls) and a plain back
+  const extra = DEFS.filter((d) => d.pic.side).flatMap((d) => [{ d, kind: 'side', w: d.pic.side.w, h: d.pic.side.h }, { d, kind: 'back', w: d.pic.w, h: d.pic.h }]);
+  for (const e of extra) { if (x + e.w + 1 > AW) { x = 1; y += rowH + 1; rowH = 0; } e.x = x; e.y = y; x += e.w + 1; rowH = Math.max(rowH, e.h); }
   AH = y + rowH + 1;
-  for (const d of DEFS) AP.sprites[d.key] = { name: d.name, r: [d.ax, d.ay, d.pic.w, d.pic.h], d: d.pic.d };
+  for (const d of DEFS) AP.sprites[d.key] = { name: d.name, r: [d.ax, d.ay, d.pic.w, d.pic.h], d: d.pic.d, mid: Math.round(d.pic.d / 2) };
+  for (const e of extra) AP.sprites[e.d.key][e.kind] = [e.x, e.y, e.w, e.h];
   propsPx = new Uint8ClampedArray(AW * AH * 4); zfPl = new Uint8Array(AW * AH); zbPl = new Uint8Array(AW * AH); flPl = new Uint8Array(AW * AH);
   for (const d of DEFS) { const p = d.pic; for (let yy = 0; yy < p.h; yy++) for (let xx = 0; xx < p.w; xx++) { const i = yy * p.w + xx; if (p.c[i] < 0) continue; const q = (d.ay + yy) * AW + d.ax + xx, c = p.c[i]; propsPx[q * 4] = c >> 16 & 255; propsPx[q * 4 + 1] = c >> 8 & 255; propsPx[q * 4 + 2] = c & 255; propsPx[q * 4 + 3] = 255; zfPl[q] = p.f[i] + 64; zbPl[q] = p.b[i] + 64; flPl[q] = p.fl[i]; } }
   atlasPx = new Uint8Array(AW2 * AH * 4); auxPx = new Uint8Array(AW2 * AH * 4);
   for (const key in AP.sprites) new Spr(key);
+  for (const e of extra) (e.kind === 'side' ? writeSide : writeBack)(e);
+}
+
+/* side views and plain backs (no art was made for the back of anything) */
+const atlasSet = (x, y, c, k) => { const o = (y * AW2 + x) * 4; for (const h of [0, AW * 4]) { atlasPx[o + h] = c >> 16 & 255; atlasPx[o + h + 1] = c >> 8 & 255; atlasPx[o + h + 2] = c & 255; atlasPx[o + h + 3] = k === undefined ? 255 : k; } };
+// a side view's empty pixels take the nearest colour along their row (the view and the depth never agree to the pixel),
+// a row with none at all the front's colour at that height
+function sideFilled(p) {
+  const s = p.side, out = new Int32Array(s.w * s.h);
+  for (let y = 0; y < s.h; y++) {
+    let fb = -1; for (let x = 0; x < p.w && fb < 0; x++) fb = p.c[y * p.w + x];
+    for (let x = 0; x < s.w; x++) {
+      let c = s.c[y * s.w + x];
+      for (let r = 1; c < 0 && r < s.w; r++) { const a = s.c[y * s.w + x - r], b = s.c[y * s.w + x + r]; if (x - r >= 0 && a >= 0) c = a; else if (x + r < s.w && b >= 0) c = b; }
+      out[y * s.w + x] = c >= 0 ? c : fb >= 0 ? fb : 0x806040;
+    }
+  }
+  return out;
+}
+function writeSide(e) { const c = sideFilled(e.d.pic); for (let y = 0; y < e.h; y++) for (let x = 0; x < e.w; x++) atlasSet(e.x + x, e.y + y, c[y * e.w + x]); }
+// the back: each row takes the colours the side view has at that height (the wall's or the roof's material, without
+// the doors and windows of the front), skipping its dark outline: its two commonest, so the wall reads plain;
+// the depth codes are copied from the front region, which the back faces' layer test reads
+function writeBack(e) {
+  const p = e.d.pic, s = p.side, lum = (c) => ((c >> 16 & 255) * .3 + (c >> 8 & 255) * .59 + (c & 255) * .11);
+  for (let y = 0; y < e.h; y++) {
+    let pool = []; for (let x = 0; x < s.w; x++) { const c = s.c[y * s.w + x]; if (c >= 0 && lum(c) >= 50) pool.push(c); }
+    if (!pool.length) for (let x = 0; x < p.w; x++) { const c = p.c[y * p.w + x]; if (c >= 0 && lum(c) >= 50) pool.push(c); }   // no side colour at this height: the front's
+    if (!pool.length) pool = [0x6a5040];
+    // the row's two commonest colours (the material and its shade), 3 to 1: plain, with a little grain
+    const n = new Map(); for (const c of pool) n.set(c, (n.get(c) || 0) + 1); const top = [...n].sort((a, b) => b[1] - a[1]).map((q) => q[0]);
+    pool = top.length > 1 ? [top[0], top[0], top[0], top[1]] : top;
+    for (let x = 0; x < e.w; x++) {
+      const i = y * p.w + x, o = ((e.d.ay + y) * AW2 + e.d.ax + x) * 4, q = ((e.y + y) * AW2 + e.x + x) * 4;
+      atlasSet(e.x + x, e.y + y, p.c[i] >= 0 ? pool[Math.floor(hash2(x >> 1, y) * pool.length)] : 0, p.c[i] >= 0 ? 255 : 0);
+      for (let k = 0; k < 4; k++) auxPx[q + k] = auxPx[o + k];
+    }
+  }
 }
 
 /* ---------- sprite 2D: un ritaglio del foglio, con due profondità per pixel (davanti e dietro) già disegnate insieme ai colori ---------- */
@@ -137,7 +182,7 @@ const SPRITES = [], sp = {};
 class Spr {
   constructor(key) {
     const meta = AP.sprites[key], [ax, ay, w, h] = meta.r, n = w * h;
-    Object.assign(this, { key, name: meta.name, ax, ay, w, h, base: h, px: meta.px === undefined ? Math.round(w / 2) : meta.px, count: 0, texKey: meta.tex, gable: meta.gable, cross: !!meta.cross, tileN: meta.tex ? 16 : TILE_N });
+    Object.assign(this, { key, name: meta.name, side: meta.side, back: meta.back, mid: meta.mid, ax, ay, w, h, base: h, px: meta.px === undefined ? Math.round(w / 2) : meta.px, count: 0, texKey: meta.tex, gable: meta.gable, cross: !!meta.cross, tileN: meta.tex ? 16 : TILE_N });
     this.data = new Uint8ClampedArray(n * 4); this.glow = new Uint8Array(n); this.fl = new Uint8Array(n);
     this.zf = new Int8Array(n); this.zb = new Int8Array(n); this.cls = new Uint8Array(n);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -215,14 +260,15 @@ class Spr {
           };
           cut(a, Math.min(b, dB), true); cut(Math.max(a, dB), b, false);
         };
-        if (!s.on(X, Y)) run(zb, zf);
+        if (!s.on(X, Y) && nx && s.side) { const cl = (v) => clamp(v, 0, s.side[2]); add(k, line, pos, zb, zf, cl(s.mid - zb), cl(s.mid - zf), 2, ov); }   // a side wall: the side view, column = depth from the front
+        else if (!s.on(X, Y)) run(zb, zf);
         else { const j = Y * w + X, zfn = s.zf[j], zbn = s.zb[j]; if (zfn < zf) run(Math.max(zfn, zb), zf); if (zbn > zb) run(zb, Math.min(zbn, zf)); }
       }
     });
     // strisce in coordinate dello sprite: quattro angoli, normale, coordinate nell'atlante
     const NRM = [[-1, 0, 0], [1, 0, 0], [0, 1, 0], [0, -1, 0]];
     s.strips = segs.map((q) => {
-      const fix = q.row !== undefined, r = q.row, n = NRM[q.dir], uo = (fix ? 0 : s.ax) + q.half * AW, vo = fix ? 0 : s.ay; let P_, uv;
+      const fix = q.row !== undefined, r = q.row, n = NRM[q.dir], sv = q.half === 2, uo = sv ? s.side[0] : (fix ? 0 : s.ax) + q.half * AW, vo = sv ? s.side[1] : fix ? 0 : s.ay; let P_, uv;
       if (q.dir < 2) { const Xp = (q.dir === 0 ? q.line : q.line + 1) - px, Yt = base - q.p0, Yb = base - q.p1; P_ = [Xp, Yb, q.d0, Xp, Yt, q.d0, Xp, Yt, q.d1, Xp, Yb, q.d1]; uv = fix ? [q.tA, r + 1, q.tA, r, q.tB, r, q.tB, r + 1] : [q.tA, q.p1, q.tA, q.p0, q.tB, q.p0, q.tB, q.p1]; }
       else { const Yp = q.dir === 2 ? base - q.line : base - q.line - 1, X0 = q.p0 - px, X1 = q.p1 - px; P_ = [X0, Yp, q.d0, X1, Yp, q.d0, X1, Yp, q.d1, X0, Yp, q.d1]; uv = fix ? [q.tA, r + .5, q.tA, r + .5, q.tB, r + .5, q.tB, r + .5] : [q.p0, q.tA, q.p1, q.tA, q.p1, q.tB, q.p0, q.tB]; }
       for (let k = 0; k < 4; k++) { uv[k * 2] = (uo + uv[k * 2]) / AW2; uv[k * 2 + 1] = (vo + uv[k * 2 + 1]) / AH; }
@@ -309,7 +355,8 @@ function put(s, x, z, o) {
   const slab = (L, front) => {
     const code = L[0], x0 = L[1], y0 = L[2], x1 = L[3], y1 = L[4], zz = (code & 127) - 64, sg = front ? 1 : -1;
     tp(x0 - px, base - y1, zz, 0); tp(x1 - px, base - y1, zz, 3); tp(x1 - px, base - y0, zz, 6); tp(x0 - px, base - y0, zz, 9);
-    const u0 = (s.ax + x0) / AW2, u1 = (s.ax + x1) / AW2, v0 = (s.ay + y0) / AH, v1 = (s.ay + y1) / AH;
+    const bx = !front && s.back ? s.back[0] : s.ax, by = !front && s.back ? s.back[1] : s.ay;   // a back face: the plain back, when there is one
+    const u0 = (bx + x0) / AW2, u1 = (bx + x1) / AW2, v0 = (by + y0) / AH, v1 = (by + y1) / AH;
     tn([0, 0, sg], g3); tn(code > 127 ? (front ? ROOF_F : ROOF_B) : [0, 0, sg], s3);
     S.quad(pts, g3[0], g3[1], g3[2], [u0, v1, u1, v1, u1, v0, u0, v0], sg * code, s3[0], s3[1], s3[2]);
   };
@@ -2301,6 +2348,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     clearEnemies: () => clearEnemies(),
     internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS }),
     view: (y) => { yaw = yawT = y; intro = 1; },
+    atlas: () => ({ AW2, AH, sprites: AP.sprites, px: (x, y) => [...atlasPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)], aux: (x, y) => [...auxPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)] }),
     zoom: (v) => { VT = Vz = v; },
     draw: () => draw(1 / 60),
   };
