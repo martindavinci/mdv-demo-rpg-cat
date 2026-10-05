@@ -455,7 +455,8 @@ function resize() {
 // def: { id, name, cell (world units per map cell, default 2 = one 32 px tile), map: rows of legend chars,
 //        legend: { ch: { tile, h (art px), water, wall (colour), cliff (earth strata) } }, chunk: [cols, rows] per chunk (default: the whole map),
 //        things: [[key, x, z, hx?, hz?, opts?]] (opts.door: { to, at, face } makes a doorway in front of it),
-//        lamps: [[x, y, z, r, k]], exits: [{ rect: [x0, z0, x1, z1], to, at, face }], solids, start, tod, camNorth }
+//        lamps: [[x, y, z, r, k]], exits: [{ rect: [x0, z0, x1, z1], to, at, face }], solids, start, tod, camNorth,
+//        keep: build every chunk on entry and keep the area built while the cat is elsewhere (no streaming, no hitch) }
 const AREAS = {};
 let A = null;   // the current area
 
@@ -465,9 +466,13 @@ function openArea(def) {
   const keys = Object.keys(def.legend), GT = keys.map((k) => Object.assign({ h: 0 }, def.legend[k], { tex: TILES[def.legend[k].tile] }));
   for (const g of GT) if (!g.tex) throw new Error(`area ${def.id}: tile "${g.tile}" is not in the art`);
   const typeOf = new Map(keys.map((k, i) => [k, i]));
-  const cellType = (c, r) => { const row = def.map[clamp(r, 0, rows - 1)]; const t = typeOf.get(row[clamp(c, 0, cols - 1)]); return t === undefined ? 0 : t; };
-  const tyPx = (x, z) => cellType(Math.floor(x / cellPx), Math.floor(z / cellPx));
-  const hPx = (x, z) => GT[tyPx(x, z)].h;
+  // the map's cell types and heights as flat arrays: these are read for every ground pixel, many times over
+  const cellT = new Uint8Array(cols * rows), cellH = new Int16Array(cols * rows);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const t = typeOf.get(def.map[r][c]); cellT[r * cols + c] = t === undefined ? 0 : t; cellH[r * cols + c] = GT[cellT[r * cols + c]].h; }
+  const cellIdx = (x, z) => { let c = Math.floor(x / cellPx), r = Math.floor(z / cellPx); c = c < 0 ? 0 : c >= cols ? cols - 1 : c; r = r < 0 ? 0 : r >= rows ? rows - 1 : r; return r * cols + c; };
+  const cellType = (c, r) => cellT[clamp(r, 0, rows - 1) * cols + clamp(c, 0, cols - 1)];
+  const tyPx = (x, z) => cellT[cellIdx(x, z)];
+  const hPx = (x, z) => cellH[cellIdx(x, z)];
   const groundY = (x, z) => hPx(Math.floor(x * PPU), Math.floor(z * PPU)) * P;
   const isWater = (x, z) => !!GT[tyPx(Math.floor(x * PPU), Math.floor(z * PPU))].water;
   const tilePx = (g, x, z) => { const tw = g.tex.w, th = g.tex.h, o = ((((z % th) + th) % th) * tw + (((x % tw) + tw) % tw)) * 4, p = g.tex.px; return (p[o] << 16) | (p[o + 1] << 8) | p[o + 2]; };
@@ -476,9 +481,9 @@ function openArea(def) {
 
   /* lamps, solids, things, doors and places to look at: global, computed once */
   const lampSpots = (def.lamps || []).map(([x, y, z, r, k]) => ({ x, y, z, r: r || 2.4, k: k || 1, halo: true }));
-  function lampLight(x, y, z, nx, ny, nz) {
+  function lampLight(x, y, z, nx, ny, nz, list) {
     let L = 0;
-    for (const p of lampSpots) { const lx = p.x - x, ly = p.y - y, lz = p.z + .3 - z, d = Math.hypot(lx, ly, lz); if (d >= 6.5 || d < 1e-4) continue; const ndl = (nx * lx + ny * ly + nz * lz) / d; if (ndl > 0) L += Math.pow(1 - d / 6.5, 1.6) * ndl * p.k; }
+    for (const p of list || lampSpots) { const lx = p.x - x, ly = p.y - y, lz = p.z + .3 - z, d = Math.hypot(lx, ly, lz); if (d >= 6.5 || d < 1e-4) continue; const ndl = (nx * lx + ny * ly + nz * lz) / d; if (ndl > 0) L += Math.pow(1 - d / 6.5, 1.6) * ndl * p.k; }
     return L;
   }
   const solids = [], acts = [], exits = (def.exits || []).slice(), things = [];
@@ -522,6 +527,8 @@ function openArea(def) {
   const DROP = STEP * PPU, N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const mix = (c, d, k) => (Math.round((c >> 16 & 255) * (1 - k) + (d >> 16 & 255) * k) << 16) | (Math.round((c >> 8 & 255) * (1 - k) + (d >> 8 & 255) * k) << 8) | Math.round((c & 255) * (1 - k) + (d & 255) * k);
   const edgeShade = (gx, gz, c) => {
+    const ex = ((gx % cellPx) + cellPx) % cellPx, ez = ((gz % cellPx) + cellPx) % cellPx;
+    if (ex > 2 && ex < cellPx - 3 && ez > 2 && ez < cellPx - 3) return c;   // heights change only between cells
     const hh = hPx(gx, gz); let lip = 0, foot = 0;
     for (const [a, b] of N4) for (let d = 1; d <= 3; d++) {
       const nx = gx + a * d, nz = gz + b * d, n = hPx(nx, nz);
@@ -534,6 +541,9 @@ function openArea(def) {
   function buildChunk(ci, cj) {
     const x0 = ci * CW, z0 = cj * CH, w = Math.min(CW, PXW - x0), h = Math.min(CH, PXD - z0);
     const group = new THREE.Group(); scene.add(group);
+    // only the lamps that reach into this chunk (a lamp lights 6.5 units; things may lean a few units out of the chunk)
+    const near = lampSpots.filter((p) => p.x > x0 * P - 10 && p.x < (x0 + w) * P + 10 && p.z > z0 * P - 10 && p.z < (z0 + h) * P + 10);
+    const chunkLight = near.length ? (x, y, z, nx, ny, nz) => lampLight(x, y, z, nx, ny, nz, near) : () => 0;
     const prevS = S, prevB = B; S = new SlabBuilder(8000); B = new Builder(8000);
     // ground pixels
     const gCan = document.createElement('canvas'); gCan.width = w; gCan.height = h;
@@ -541,7 +551,7 @@ function openArea(def) {
     const put1 = (i, c) => { gImg.data[i * 4] = c >> 16 & 255; gImg.data[i * 4 + 1] = c >> 8 & 255; gImg.data[i * 4 + 2] = c & 255; gImg.data[i * 4 + 3] = 255; };
     const waterColor = (i, tick) => { const x = x0 + i % w, z = z0 + ((i / w) | 0); return foam[i] && (x + z + tick) % 3 ? 0xd8eef0 : tilePx(GT[tyPx(x, z)], x + tick, z); };
     for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) {
-      const i = z * w + x, gx = x0 + x, gz = z0 + z, g = GT[tyPx(gx, gz)];
+      const i = z * w + x, gx = x0 + x, gz = z0 + z, g = GT[cellT[((gz / cellPx) | 0) * cols + ((gx / cellPx) | 0)]];   // inside the map: no clamping
       if (g.water) { water.push(i); if (nearOther(gx, gz, (k) => !GT[k].water) && hash2(gx * 3, gz * 7) < .7) foam[i] = 1; put1(i, waterColor(i, 0)); }
       else put1(i, edgeShade(gx, gz, tilePx(g, gx, gz)));
     }
@@ -551,6 +561,7 @@ function openArea(def) {
     const bands = (y0, y1, colorAt) => { const out = []; let s = y0, c = colorAt(y0); for (let y = y0 + 1; y <= y1; y++) { const cy = y < y1 ? colorAt(y) : -2; if (cy !== c) { out.push(s, y, c); s = y; c = cy; } } return out; };
     const col = (dir, line, pos, y0, y1, colorAt) => { if (y1 <= y0) return; const key = dir + '|' + line; let L = cols2.get(key); if (!L) cols2.set(key, L = []); L.push({ pos, b: bands(y0, y1, colorAt) }); };
     for (let z = z0; z < z0 + h; z++) for (let x = x0; x < x0 + w; x++) {
+      const ex = x % cellPx, ez = z % cellPx; if (ex && ex !== cellPx - 1 && ez && ez !== cellPx - 1) continue;   // a wall stands only on a cell's edge
       const hh = hPx(x, z), t = tyPx(x, z);
       if (x > 0 && hPx(x - 1, z) < hh) col(0, x, z, hPx(x - 1, z), hh, (y) => wallCol(t, z, y));
       if (x < PXW - 1 && hPx(x + 1, z) < hh) col(1, x + 1, z, hPx(x + 1, z), hh, (y) => wallCol(t, z, y));
@@ -579,9 +590,9 @@ function openArea(def) {
     // things whose foot stands in this chunk
     for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); put(th.s, th.x, th.z, o); }
     // baked light, meshes
-    B.bakeLamps(lampLight); S.bakeLamps(lampLight);
+    B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
     const gPack = new Uint8Array(w * h * 2);
-    for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) gPack[(z * w + x) * 2 + 1] = Math.min(255, Math.round(lampLight((x0 + x + .5) * P, hPx(x0 + x, z0 + z) * P, (z0 + z + .5) * P, 0, 1, 0) * 127.5));
+    if (near.length) for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) gPack[(z * w + x) * 2 + 1] = Math.min(255, Math.round(chunkLight((x0 + x + .5) * P, hPx(x0 + x, z0 + z) * P, (z0 + z + .5) * P, 0, 1, 0) * 127.5));
     const gTex = nearest(new THREE.CanvasTexture(gCan)); gTex.flipY = false; gTex.encoding = THREE.sRGBEncoding;
     const hTex = nearest(new THREE.DataTexture(gPack, w, h, THREE.LuminanceAlphaFormat, THREE.UnsignedByteType)); hTex.unpackAlignment = 1; hTex.needsUpdate = true;
     groundTex = gTex; heightTex = hTex; const matGround = voxelMaterial('ground');
@@ -590,11 +601,14 @@ function openArea(def) {
     const staticMesh = cull(new THREE.Mesh(B.geometry(), matStatic)); staticMesh.castShadow = staticMesh.receiveShadow = true; group.add(staticMesh);
     const slabMesh = cull(new THREE.Mesh(S.geometry(), matSlab)); slabMesh.castShadow = slabMesh.receiveShadow = true; slabMesh.customDepthMaterial = slabDepth; group.add(slabMesh);
     const pos = [], uv = [], idx = [], open = new Map(), rects = [];
-    for (let z = 0; z < h; z++) {
+    // flat rectangles of equal height, merged cell by cell (a chunk starts on a cell boundary), then sized in pixels
+    const cw = Math.ceil(w / cellPx), chh = Math.ceil(h / cellPx), cx0 = x0 / cellPx, cz0 = z0 / cellPx, ch = (x, z) => cellH[(cz0 + z) * cols + cx0 + x];
+    for (let z = 0; z < chh; z++) {
       const seen = new Map(); let x = 0;
-      while (x < w) { const hh = hPx(x0 + x, z0 + z); let e = x + 1; while (e < w && hPx(x0 + e, z0 + z) === hh) e++; const key = x + ',' + e + ',' + hh, r = open.get(key); if (r && r.z1 === z) { r.z1 = z + 1; seen.set(key, r); } else { const n = { x0: x, x1: e, z0: z, z1: z + 1, h: hh }; rects.push(n); seen.set(key, n); } x = e; }
+      while (x < cw) { const hh = ch(x, z); let e = x + 1; while (e < cw && ch(e, z) === hh) e++; const key = x + ',' + e + ',' + hh, r = open.get(key); if (r && r.z1 === z) { r.z1 = z + 1; seen.set(key, r); } else { const n = { x0: x, x1: e, z0: z, z1: z + 1, h: hh }; rects.push(n); seen.set(key, n); } x = e; }
       open.clear(); for (const [k, v] of seen) open.set(k, v);
     }
+    for (const r of rects) { r.x0 *= cellPx; r.z0 *= cellPx; r.x1 = Math.min(w, r.x1 * cellPx); r.z1 = Math.min(h, r.z1 * cellPx); }
     for (const r of rects) { const v = pos.length / 3, y = r.h * P; pos.push((x0 + r.x0) * P, y, (z0 + r.z1) * P, (x0 + r.x1) * P, y, (z0 + r.z1) * P, (x0 + r.x1) * P, y, (z0 + r.z0) * P, (x0 + r.x0) * P, y, (z0 + r.z0) * P); uv.push(r.x0 / w, r.z1 / h, r.x1 / w, r.z1 / h, r.x1 / w, r.z0 / h, r.x0 / w, r.z0 / h); idx.push(v, v + 1, v + 2, v, v + 2, v + 3); }
     const gg = new THREE.BufferGeometry(), nrm = new Float32Array(pos.length); for (let i = 1; i < nrm.length; i += 3) nrm[i] = 1;
     gg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); gg.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); gg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); gg.setIndex(idx);
@@ -621,6 +635,7 @@ function openArea(def) {
   };
   const sync = () => { lamps = [...chunks.values()].flatMap((c) => c.halos); area.allTris = [...chunks.values()].reduce((a, c) => a + c.tris, 0); };
   area.stream = (x, z, all) => {
+    if (def.keep) { if (chunks.size < NI * NJ) { for (let j = 0; j < NJ; j++) for (let i = 0; i < NI; i++) if (!chunks.has(ckey(i, j))) chunks.set(ckey(i, j), buildChunk(i, j)); sync(); } return; }
     let built = 0;
     for (const [i, j] of want(x, z)) { const k = ckey(i, j); if (chunks.has(k)) continue; const t0 = performance.now(); chunks.set(k, buildChunk(i, j)); area.chunkMs = Math.max(area.chunkMs, performance.now() - t0); built++; if (!all) break; }
     const [i0, j0, i1, j1] = span(viewFoot(20, 20, 26));
@@ -630,6 +645,10 @@ function openArea(def) {
   let waterT = 0, waterTick = 0, sunX = -1e9, sunZ = -1e9;
   area.update = (dt, x, z) => {
     area.stream(x, z, false);
+    if (def.keep) {   // all built: draw (and shadow) only the chunks under the view
+      const [i0, j0, i1, j1] = span(viewFoot(3, 1, 9));
+      for (const c of chunks.values()) c.group.visible = c.ci >= i0 && c.ci <= i1 && c.cj >= j0 && c.cj <= j1;
+    }
     waterT += dt; if (waterT >= .4 && !reduceMotion) { waterT = 0; waterTick++; for (const c of chunks.values()) c.water(waterTick); }
     // the shadow box follows the view in steps of a few shadow texels, so shadows do not shimmer
     const snap = 2 * SHADOW_HALF / 2048 * 8, sx = Math.round(camT.x / snap) * snap, sz = Math.round(camT.z / snap) * snap;
@@ -637,11 +656,17 @@ function openArea(def) {
   };
   // triangles the view draws (main pass): the chunk meshes inside the camera's frustum
   const meshTris = (m) => { const g = m.geometry; return g.index ? g.index.count / 3 : g.attributes.position ? g.attributes.position.count / 3 : 0; };
-  area.visibleTris = (frustum) => { let n = 0; for (const c of chunks.values()) for (const m of c.meshes) if (m.visible && frustum.intersectsObject(m)) n += meshTris(m); return n; };
+  area.visibleTris = (frustum) => { let n = 0; for (const c of chunks.values()) if (c.group.visible) for (const m of c.meshes) if (m.visible && frustum.intersectsObject(m)) n += meshTris(m); return n; };
   area.dispose = () => { for (const c of chunks.values()) c.dispose(); chunks.clear(); lamps = []; };
+  // a kept area is hidden, not freed, while the cat is elsewhere; what the area file adds later (villagers, chests) is
+  // cut back to what the map itself made, so populating it again does not stack copies
+  const base = { solids: solids.length, acts: acts.length };
+  area.hide = () => { for (const c of chunks.values()) c.group.visible = false; lamps = []; };
+  area.show = () => { for (const c of chunks.values()) c.group.visible = true; solids.length = base.solids; acts.length = base.acts; sync(); };
+  area.sig = (def.things || []).filter((th) => th[5] && th[5].when).map((th) => th[5].when() ? 1 : 0).join('');   // which conditional things it was built with
   area.sunX = W / 2; area.sunZ = D / 2;
   Object.assign(sun.shadow.camera, { left: -SHADOW_HALF, right: SHADOW_HALF, top: SHADOW_HALF, bottom: -SHADOW_HALF, near: 1, far: 160 }); sun.shadow.camera.updateProjectionMatrix();
-  area.open = (x, z) => { area.stream(x, z, true); area.buildMs = Math.round(performance.now() - T0); };
+  area.open = (x, z) => { const fresh = !chunks.size; area.stream(x, z, true); if (fresh) area.buildMs = Math.round(performance.now() - T0); };
   return area;
 }
 const SHADOW_HALF = 30;
@@ -993,7 +1018,7 @@ function enemiesStep(dt) {
         if (e.st <= 0) { const ang = R() * Math.PI * 2, r = 1 + R() * 2.5; e.tx = e.hx + Math.cos(ang) * r; e.tz = e.hz + Math.sin(ang) * r; e.st = 2 + R() * 2.5; }
         if (Math.hypot(e.tx - e.x, e.tz - e.z) > .2) { face(e.tx, e.tz); a.moving = move(e.fx * sp * .45, e.fz * sp * .45); }
         break;
-      case 'notice': if (e.st <= 0) setState(e, 'chase', 0); break;
+      case 'notice': engaged = true; if (e.st <= 0) setState(e, 'chase', 0); break;
       case 'chase': {
         engaged = true; face(player.x, player.z);
         if (Math.hypot(e.x - e.hx, e.z - e.hz) > 16 || dist > T.sight * 1.8 || hero.dead) { setState(e, 'return', 0); e.aware = false; break; }
@@ -1041,7 +1066,6 @@ function enemiesStep(dt) {
     if (e.state === 'wander' || e.state === 'return' || e.state === 'chase') a.lift = (T.fly || 0) + (T.fly ? Math.sin(time * 5 + e.hx) * .12 : 0);
   }
   if (engaged) combatT = 2.5; else combatT = Math.max(0, combatT - dt);
-  combatMusic(combatT > 0);
 }
 function enemyDefeated(e) {
   gainXp(e.T.xp);
@@ -1086,7 +1110,7 @@ function hazardsStep(dt) {
 // Everything is made here in code; nothing is loaded. Audio starts on the first input (the mobile rule); any error turns
 // sound off and the game goes on.
 let AU = null;   // { ctx, fx, mus, layer, waves, noise }
-const MUSIC = {};   // content: name → { bpm, steps, voices: { p1, p2, tri, drums }, combat?: { … same voices } }
+const MUSIC = {};   // content: name → { bpm, voices: { p1, p2, p3, tri, drums } }
 const VOL = [0, .35, .7, 1];
 
 function audioInit() {
@@ -1158,18 +1182,18 @@ function playTrack(name) {
   const c = AU.ctx, old = AU.track;
   if (old) { old.gain.gain.setTargetAtTime(0, c.currentTime, .3); setTimeout(() => old.gain.disconnect(), 1500); }
   const T = MUSIC[name]; if (!T) { AU.track = null; return; }
-  const gain = c.createGain(), layer = c.createGain(); gain.connect(AU.mus); layer.connect(gain); layer.gain.value = 0;
+  const gain = c.createGain(); gain.connect(AU.mus);
   gain.gain.setValueAtTime(0, c.currentTime); gain.gain.setTargetAtTime(1, c.currentTime, .4);
   const v = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, s]) => [k, parseVoice(s)]));
-  AU.track = { name, T, gain, layer, voices: v(T.voices), combat: v(T.combat), step: 0, next: c.currentTime + .1, dur: 60 / T.bpm / 4 };
+  AU.track = { name, T, gain, voices: v(T.voices), step: 0, next: c.currentTime + .1, dur: 60 / T.bpm / 4 };
 }
-function combatMusic(on) { if (AU && AU.track) AU.track.layer.gain.setTargetAtTime(on ? 1 : 0, AU.ctx.currentTime, on ? .15 : .8); }
 function musicTick() {
   if (!AU || !AU.track || !settings.music) return;
   const tr = AU.track, c = AU.ctx; if (c.state === 'suspended') return;
   if (tr.next < c.currentTime - .5) tr.next = c.currentTime + .05;   // after a pause: start again, do not race to catch up
   while (tr.next < c.currentTime + .25) {
-    for (const [set, dest] of [[tr.voices, tr.gain], [tr.combat, tr.layer]]) for (const [k, notes] of Object.entries(set)) {
+    const dest = tr.gain;
+    for (const [k, notes] of Object.entries(tr.voices)) {
       if (!notes.length) continue; const tok = notes[tr.step % notes.length];
       if (k === 'drums') { if (tok === 'k') tone(dest, 'sine', 140, 45, tr.next, .12, .7); else if (tok === 's') hiss(dest, tr.next, .1, .45, 1800, .8); else if (tok === 'h') hiss(dest, tr.next, .03, .25, 8000, 1); continue; }
       const f = freq(tok); if (!f) continue;
@@ -1324,6 +1348,7 @@ function interact(act) {
 /* the area's living layer: villagers, enemies, chests, desks, hooks; called after the ground is built */
 function populate(def) {
   clearEnemies(); clearNpcs(); clearFlats(); clearFloats();
+  A.show && A.show();
   for (const [key, x, z, , , o] of def.things || []) {
     if (!o || (o.when && !o.when())) continue;
     const d = AP.sprites[key].d || 8, front = z + d * P / 2 + .5;
@@ -1405,6 +1430,16 @@ function hudDraw() {
   $('hpNum').textContent = G.hp + '/' + s.hp; $('inkNum').textContent = ink + '/' + s.ink;
   $('hLv').textContent = t('hud.lv', { n: G.level }); $('hCoins').textContent = t('hud.coins', { n: G.coins });
   $('bDash').hidden = !G.flags.skill_dash; $('bWell').hidden = !G.flags.skill_well;
+}
+
+/* the boss's health, across the top while a boss (T.boss: its name key) is alive; the mark is where its second phase starts */
+let bossKey = '';
+function bossDraw() {
+  const b = enemies.find((e) => e.T.boss && e.hp > 0);
+  const key = b ? Math.ceil(b.hp) + '/' + settings.lang : '';
+  if (key === bossKey) return; bossKey = key; $('bossBar').hidden = !b; if (!b) return;
+  $('bossName').textContent = t(b.T.boss); $('bossFill').style.width = (100 * Math.max(0, b.hp) / b.T.hp).toFixed(1) + '%';
+  $('bossBar').setAttribute('aria-valuenow', String(Math.round(100 * b.hp / b.T.hp)));
 }
 
 /* fade between areas: out, swap, in */
@@ -1546,6 +1581,7 @@ function submitCode() {
 /* ---------- loop: simulation at a fixed 120 Hz, drawing capped at the chosen 30 / 60 / 120 fps ---------- */
 const SIM = 1 / 120;
 let frozen = false;
+const kept = {};   // areas kept built while the cat is elsewhere (def.keep)
 const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4();
 let simTime = 0;   // the simulation's own clock (time below is the drawing clock)
 let player = null, shadowHold = 8, time = 0, intro = 1, transitioning = false;
@@ -1554,8 +1590,11 @@ const rotate = (d) => { yawT = Math.round(yawT / (Math.PI / 2)) * (Math.PI / 2) 
 
 function enterArea(name, at, face) {
   const def = AREAS[name]; if (!def) throw new Error('no area "' + name + '"');
-  if (A) A.dispose();
-  A = openArea(def);
+  if (A) { if (A.def.keep) A.hide(); else A.dispose(); }
+  // a kept area (the open world) is reused unless a conditional thing on it changed (a gate opened)
+  const old = kept[name], sig = (def.things || []).filter((th) => th[5] && th[5].when).map((th) => th[5].when() ? 1 : 0).join('');
+  if (old && old.sig !== sig) { old.dispose(); delete kept[name]; }
+  A = kept[name] || openArea(def); if (def.keep) kept[name] = A;
   player.x = at ? at[0] : def.start[0]; player.z = at ? at[1] : def.start[1];
   const [tx, tz] = camGoal(Math.max(VT, minV())); camT.set(tx, A.groundY(player.x, player.z) * .5, tz);
   A.open(player.x, player.z);
@@ -1571,7 +1610,11 @@ async function goTo(exit) {
   transitioning = false;
 }
 
-const areaTrack = () => typeof A.def.music === 'function' ? A.def.music(player.x, player.z) : A.def.music || 'village';
+// the zone's track, or the battle track while an enemy has noticed the cat (and for a moment after); the boss keeps its own
+const areaTrack = () => {
+  const zone = typeof A.def.music === 'function' ? A.def.music(player.x, player.z) : A.def.music || 'village';
+  return combatT > 0 && zone !== 'boss' && MUSIC.battle ? 'battle' : zone;
+};
 
 function step(dt) {
   simTime += dt;
@@ -1616,7 +1659,7 @@ function draw(dt) {
   if (shakeT > 0) { shakeT = Math.max(0, shakeT - dt); const k = shakeT * .9; cam.position.x += (R() - .5) * k; cam.position.y += (R() - .5) * k; cam.updateMatrixWorld(); }
   for (const a of actors) a.pose();
   applyTod(1 - Math.exp(-dt * 2.2));
-  A.update(dt, player.x, player.z); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); floatsDraw(dt); hudDraw(); toastTick(dt); musicTick();
+  A.update(dt, player.x, player.z); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); floatsDraw(dt); hudDraw(); bossDraw(); toastTick(dt); musicTick();
   if (player.moving || enemies.length || pickups.length || player.anim || dlg || Math.abs(yaw - yawT) > 1e-3 || Math.abs(cur.az - TODS[tod].az) + Math.abs(cur.el - TODS[tod].el) > 1e-4) shadowHold = 3;
   if (shadowHold > 0) { shadowHold--; sun.shadow.needsUpdate = true; }
   postU.uTime.value = time; postU.uStars.value = cur.stars; postU.uBgTop.value.set(cur.top[0], cur.top[1], cur.top[2]); postU.uBgBot.value.set(cur.bot[0], cur.bot[1], cur.bot[2]);
@@ -1692,7 +1735,7 @@ AREAS.crypt_in = {
 
 // the Scribe's chamber
 AREAS.crypt_boss = {
-  id: 'crypt_boss', name: 'area.boss', cell: 2, tod: 'cripta', start: [14, 21.4], camNorth: 1, music: 'boss', halo: 0x8fa8ff,
+  id: 'crypt_boss', name: 'area.boss', cell: 2, tod: 'cripta', start: [14, 21.4], camNorth: 1, music: () => G.flags.boss_done ? 'crypt' : 'boss', halo: 0x8fa8ff,
   legend: CRYPT_LEGEND,
   map: [
     'WWWWWWWWWWWWWW',
@@ -1801,7 +1844,7 @@ AREAS.overworld = (() => {
     else if (ch === 'X' && h > .93) { const inner = Math.min(c, C - 1 - c, r, RW - 1 - r) >= 6; if (inner) things.push([pickTree(hash2(c * 3, r), RIM), x, z, 0, 0]); }
   }
   return {
-    id: 'overworld', name: 'area.village', cell: 2, chunk: [12, 9], tod: 'giorno', start: [44, 49], camNorth: 1.5, music: (x) => x > 64 ? 'road' : 'village',
+    id: 'overworld', name: 'area.village', cell: 2, chunk: [12, 9], keep: true, tod: 'giorno', start: [44, 49], camNorth: 1.5, music: (x) => x > 64 ? 'road' : 'village',
     legend: { g: { tile: 'grass' }, f: { tile: 'grass_flowers' }, c: { tile: 'cobblestone' }, p: { tile: 'dirt_path' }, a: { tile: 'farmland' },
       w: { tile: 'water', water: true, h: -3 }, X: { tile: 'grass', h: 56, cliff: true }, Y: { tile: 'grass_flowers', h: 56, cliff: true } },
     map, things,
@@ -1827,7 +1870,7 @@ Object.assign(ENEMIES, {
 /* the Blot Scribe: phase 1 sweeps its quill and draws ink lines; below half health it splits off Blots and calls ink rain.
    Every attack is announced: the quill drawn back, ink marks on the floor 0.6 s before they burst. */
 ENEMIES.blot_scribe = {
-  sheet: 'boss', row: 'blot_scribe', hp: 900, atk: 13, def: 3, speed: 1.6, sight: 30, reach: 3.4, xp: 60, coins: [8, 12], r: 1.1, poise: true, size: 1,
+  sheet: 'boss', row: 'blot_scribe', hp: 900, atk: 13, def: 3, speed: 1.6, sight: 30, reach: 3.4, xp: 60, coins: [8, 12], r: 1.1, poise: true, size: 1, boss: 'who.scribe',
   anims: { idle: ['idle1', 'idle2'], walk: ['idle1', 'idle2'], windup: ['sweep_windup'], attack: ['sweep'], cast: ['blot_scribe_b.rain_cast'], split: ['blot_scribe_b.split'], hurt: ['blot_scribe_b.hurt'], defeat: ['blot_scribe_b.defeat'] },
   onHit(e) { if (!e.phase2 && e.hp < e.T.hp / 2) { e.phase2 = true; e.state = 'split'; e.st = .9; e.a.anim = 'split'; e.a.at = 0; toast(t('toast.boss2')); shake(.3); } },
   ai(e, dt, dist, move, face) {
@@ -1896,8 +1939,8 @@ Object.assign(ITEMS, {
 
 // ---- content/chapter1/music.js
 /* ---------- the music of Chapter 1: step patterns, one step = a sixteenth; '.' rests, '-' holds; drums k / s / h ---------- */
-// A voice loops on its own length. combat voices are layered in when an enemy notices the cat and fade out after.
-const bars = (...b) => b.join(' | ');
+// A voice loops on its own length. The battle track replaces the zone's track while an enemy is after the cat.
+const bars = (...b) => b.join(' | '), rep = (s, n) => Array(n).fill(s).join(' ');
 Object.assign(MUSIC, {
   village: {   // C major, a walk through the square
     bpm: 100,
@@ -1907,7 +1950,6 @@ Object.assign(MUSIC, {
       p2: bars('c4 . e4 . g4 . e4 . c4 . e4 . g4 . e4 .', 'a3 . c4 . e4 . c4 . a3 . c4 . e4 . c4 .', 'f3 . a3 . c4 . a3 . f3 . a3 . c4 . a3 .', 'g3 . b3 . d4 . b3 . g3 . b3 . d4 . b3 .'),
       tri: bars('c3 - - - . . c3 . g2 - - - . . g2 .', 'a2 - - - . . a2 . e2 - - - . . e2 .', 'f2 - - - . . f2 . c3 - - - . . c3 .', 'g2 - - - . . g2 . d3 - - - b2 - - -'),
     },
-    combat: { drums: 'k . h . s . h . k k h . s . h h', p3: bars('c5 . c5 . . . c5 . . . c5 . c5 . . .', 'a4 . a4 . . . a4 . . . a4 . a4 . . .', 'f4 . f4 . . . f4 . . . f4 . f4 . . .', 'g4 . g4 . . . g4 . . . g4 . b4 . . .') },
   },
   road: {   // G major, brisker, out among the vines
     bpm: 116,
@@ -1917,7 +1959,6 @@ Object.assign(MUSIC, {
       tri: bars('g2 . g2 . d3 . g2 . g2 . d3 . g2 . b2 .', 'c3 . c3 . g2 . c3 . c3 . g2 . c3 . e3 .', 'e2 . e2 . b2 . e2 . e2 . b2 . e2 . g2 .', 'd2 . d2 . a2 . d2 . d2 . a2 . d3 . c3 .'),
       drums: 'k . h . s . h . k . h . s . h h',
     },
-    combat: { drums: '. . . h . . . h . . k h . . . h', p3: bars('g4 g4 . g4 . . g4 . g4 g4 . g4 . . b4 .', 'c5 c5 . c5 . . c5 . c5 c5 . c5 . . e5 .', 'e4 e4 . e4 . . e4 . e4 e4 . e4 . . g4 .', 'd4 d4 . d4 . . d4 . d4 d4 . d4 . . f#4 .') },
   },
   library: {   // the same tune as the village, slower and softer, for rooms
     bpm: 84,
@@ -1933,7 +1974,15 @@ Object.assign(MUSIC, {
       p2: bars('a3 . c4 . e4 . . . a3 . c4 . e4 . . .', 'a3 . c4 . e4 . . . a3 . c4 . e4 . . .', 'f3 . a3 . c4 . . . f3 . a3 . c4 . . .', 'e3 . g#3 . b3 . . . e3 . g#3 . b3 . . .'),
       tri: bars('a2 - - - - - - - - - - - - - - -', 'a2 - - - - - - - - - - - - - - -', 'f2 - - - - - - - - - - - - - - -', 'e2 - - - - - - - - - - - - - - -'),
     },
-    combat: { drums: 'k . . . s . . h k . k . s . . h' },
+  },
+  battle: {   // E minor, quick: any fight outside the boss's chamber
+    bpm: 150,
+    voices: {
+      p1: bars('e5 . e5 g5 . e5 b5 . a5 g5 . f#5 e5 . d5 .', 'e5 . e5 g5 . e5 b5 . c6 b5 . a5 g5 . a5 .', 'c5 . c5 e5 . c5 g5 . f#5 e5 . d5 c5 . b4 .', 'b4 . b4 d#5 . f#5 b5 . a5 . g5 . f#5 . d#5 .'),
+      p2: bars(rep('e4 b4', 8), rep('e4 b4', 8), rep('c4 g4', 8), rep('b3 f#4', 8)),
+      tri: bars(rep('e2 . e3 .', 4), rep('e2 . e3 .', 4), rep('c2 . c3 .', 4), rep('b1 . b2 .', 4)),
+      drums: 'k . h . s . h k k . h . s . s h',
+    },
   },
   boss: {   // D minor, fast
     bpm: 144,
@@ -2085,7 +2134,7 @@ Object.assign(AREA_HOOKS, {
   crypt_boss() {
     if (G.flags.boss_done) return;
     const b = spawnEnemy('blot_scribe', 14, 7);
-    b.onDefeat = () => { setFlag('boss_done'); drop('page_3', b.x, b.z + 1); toast(t('toast.boss.done')); combatMusic(false); };
+    b.onDefeat = () => { setFlag('boss_done'); drop('page_3', b.x, b.z + 1); toast(t('toast.boss.done')); };
     setTimeout(() => { if (A && A.def.id === 'crypt_boss' && !dlg) openDialogue({ name: 'who.scribe', lines: [['scribe', 'sc.1'], ['cat_worried', 'sc.2'], ['scribe', 'sc.3']] }); }, 700);
   },
 });
@@ -2117,7 +2166,7 @@ function beginPlay() {
 }
 function startGame() { newGame(); beginPlay(); }
 function continueGame() { const s = loadSave(); if (!s) { refreshTitle(); return; } G = s; beginPlay(); }
-function gameOver() { ui.screen = 'over'; showScreen('over'); combatMusic(false); }
+function gameOver() { ui.screen = 'over'; showScreen('over'); }
 function toTitle() { ui.screen = 'title'; clearEnemies(); clearNpcs(); refreshTitle(); showScreen('title'); $('hud').hidden = true; $('touch').hidden = true; }
 function refreshTitle() { $('bContinue').hidden = !hasSave(); }
 function closeShop() { ui.screen = 'game'; showScreen(null); }
