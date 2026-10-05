@@ -63,11 +63,41 @@ function loadArt() {
         else if (r.depth) DEFS.push({ key, name: key, sheet, pic: depthPic(S, r) });
       }
     }
+    const chest = DEFS.find((d) => d.key === 'chest'); if (chest) DEFS.push({ key: 'chest_open', name: 'chest_open', sheet: chest.sheet, pic: openChest(chest.pic) });
   });
 }
 
 const crop = (S, r) => { const out = new Uint8ClampedArray(r.w * r.h * 4); for (let y = 0; y < r.h; y++) out.set(S.px.subarray(((r.y + y) * S.w + r.x) * 4, ((r.y + y) * S.w + r.x + r.w) * 4), y * r.w * 4); return out; };
 const b64 = (s) => Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+
+// an open chest, drawn from the closed one (no art was made for it): the body (rows 11 down) stays; the lid's lower band
+// becomes the front lip of the opening, with the dark inside above it; the lid's dome, in 8 rows, stands at
+// the back, swung open, seen from behind: no lock, and much darker (45 %), since it faces away from the light. Row numbers fit the
+// chest of props-1 (24 × 21, lid rows 0-10); the sheet's manifest names it, so a redrawn chest needs a fresh look here.
+function openChest(p) {
+  const { w, h } = p, LID = 8, GAP = 3, SEAM = 10, top = h - (h - SEAM - 1) - GAP - LID, n = w * h;
+  const c = new Int32Array(n).fill(-1), f = new Int8Array(n), b = new Int8Array(n), fl = new Uint8Array(n);
+  const at = (x, y) => y * w + x, on = (x, y) => x >= 0 && x < w && p.c[at(x, y)] >= 0;
+  const set = (x, y, col, fr, bk, g) => { const i = at(x, y); c[i] = col; f[i] = fr; b[i] = Math.min(bk, fr - 1); fl[i] = g || 0; };
+  const dark = (col, k) => (Math.round((col >> 16 & 255) * k) << 16) | (Math.round((col >> 8 & 255) * k) << 8) | Math.round((col & 255) * k);
+  for (let y = SEAM + 1; y < h; y++) for (let x = 0; x < w; x++) if (on(x, y)) { const i = at(x, y); set(x, y, p.c[i], p.f[i], p.b[i], p.fl[i]); }   // the body
+  const lipY = top + LID + GAP - 1, backB = (x) => p.b[at(x, SEAM + 1)];
+  for (let x = 0; x < w; x++) if (on(x, SEAM)) { const i = at(x, SEAM); set(x, lipY, p.c[i], p.f[i], p.f[i] - 2); }   // the front lip: a thin rim, so from above the mouth shows dark
+  for (let k = 0; k < GAP - 1; k++) for (let x = 0; x < w; x++) {   // the inside, darkest at the back; its side walls in the band's colour
+    if (!on(x, SEAM)) continue; const side = !on(x - 1, SEAM) || !on(x + 1, SEAM) || x < 2 || x > w - 3, i = at(x, SEAM);
+    // above luminance 42: darker pixels lend their sides and tops the nearest bright colour (Spr.finish), which here was gold
+    const col = side ? dark(p.c[i], .8) : ((60 + k * 12) << 16) | ((40 + k * 8) << 8) | (30 + k * 4);
+    set(x, top + LID + k, col, side ? p.f[i] : p.f[i] - 2, backB(x));
+  }
+  for (let y = 0; y < LID; y++) {   // the lid, standing at the back
+    const src = Math.round(y * (SEAM - 1) / (LID - 1));
+    for (let x = 0; x < w; x++) {
+      if (!on(x, src)) continue; const lock = x >= 9 && x <= 14 && src >= 6, i = at(lock ? (x < 12 ? 5 : 18) : x, src);   // the lock, covered with plain plank
+      if (p.c[i] < 0) continue; const bb = backB(x) || p.b[i]; set(x, top + y, dark(p.c[i], .45), bb + 3, bb);
+    }
+  }
+  return { w, h, d: p.d, c, f, b, fl };
+}
 
 // the pipeline gives depth from the front (0 = front face, growing backward); the extruder wants signed depths
 // around the sprite's plane, front > back, in −64…63
@@ -587,8 +617,8 @@ function openArea(def) {
         k = e;
       }
     }
-    // things whose foot stands in this chunk
-    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); put(th.s, th.x, th.z, o); }
+    // things whose foot stands in this chunk (chests are not baked: they are props, see propMesh)
+    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); put(th.s, th.x, th.z, o); }
     // baked light, meshes
     B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
     const gPack = new Uint8Array(w * h * 2);
@@ -670,6 +700,21 @@ function openArea(def) {
   return area;
 }
 const SHADOW_HALF = 30;
+
+// things outside the baked ground, as one small mesh: for things that change in play (chests that open).
+// items: [[key, x, z, o]]
+function propMesh(items) {
+  const prevS = S, prevB = B; S = new SlabBuilder(256); B = new Builder(256);
+  for (const [key, x, z, o] of items) { const oo = Object.assign({}, o || {}); if (oo.y === undefined) oo.y = A.groundY(x, z); put(sp[key], x, z, oo); }
+  B.bakeLamps(A.lampLight); S.bakeLamps(A.lampLight);
+  const group = new THREE.Group();
+  for (const [bld, mat, depth] of [[B, matStatic], [S, matSlab, slabDepth]]) {
+    const g = bld.geometry(); if (!g.attributes.position || !g.attributes.position.count) continue;
+    const m = new THREE.Mesh(g, mat); m.castShadow = m.receiveShadow = true; if (depth) m.customDepthMaterial = depth; group.add(m);
+  }
+  S = prevS; B = prevB; scene.add(group); shadowHold = 3;
+  return { group, dispose() { scene.remove(group); group.traverse((m) => { if (m.geometry) m.geometry.dispose(); }); } };
+}
 
 // halo texture for lamps: built once
 const haloTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'), g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(.25, 'rgba(255,255,255,.45)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
@@ -1311,8 +1356,27 @@ function spawnNpc(id, x, z, face) {
   A.acts.push({ x, z, r: 1.7, label: 'act.talk', npc: n, name: N.name });
   npcs.push(n); return n;
 }
+/* chests: kept out of the baked ground, all of an area's chests in one mesh (rebuilt when one opens: a few chests,
+   a millisecond); a closed chest shows a faint sparkle while something is inside, an opened one its open sprite */
+const chests = new Map(); let chestMesh = null;
+function chestProp(id, key, x, z, o) {
+  const sparkle = G.opened[id] ? null : fx('sparkle', x, z, { loop: true, size: .7, fps: 3, y: A.groundY(x, z) + 1.5 });
+  if (sparkle && player) sparkle.mesh.visible = Math.hypot(x - player.x, z - player.z) < 14;
+  chests.set(id, { id, key, x, z, o, sparkle });
+}
+function chestsBuild() {
+  if (chestMesh) chestMesh.dispose(); chestMesh = null; if (!chests.size) return;
+  chestMesh = propMesh([...chests.values()].map((c) => [G.opened[c.id] ? 'chest_open' : c.key, c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
+}
+function openChestProp(id) {
+  const c = chests.get(id); if (!c) return;
+  if (c.sparkle) { c.sparkle.dispose(); c.sparkle = null; } chestsBuild();
+  fx('sparkle', c.x, c.z, { size: 1.2, fps: 8, y: A.groundY(c.x, c.z) + 1 });
+}
+function clearChests() { if (chestMesh) chestMesh.dispose(); chestMesh = null; chests.clear(); }
 function clearNpcs() { for (const n of npcs) n.a.dispose(); npcs.length = 0; }
 function npcsStep(dt) {
+  for (const c of chests.values()) if (c.sparkle) c.sparkle.mesh.visible = Math.hypot(c.x - player.x, c.z - player.z) < 14;   // sparkles only near the cat: each one is a draw call
   for (const n of npcs) {
     const d = near(n, player);
     if (d < 2.6) { const l = d || 1; n.a.fx = (player.x - n.x) / l; n.a.fz = (player.z - n.z) / l; } else { n.a.fx = n.home[0]; n.a.fz = n.home[1]; }
@@ -1330,7 +1394,7 @@ function interact(act) {
   if (act.chest) {
     const c = act.chest; if (G.opened[c.id]) { openDialogue({ name: 'act.chest', lines: ['chest.empty'] }); return; }
     if (c.need && !has(c.need)) { sfx('no'); openDialogue({ name: 'act.chest', lines: [c.needLine || 'chest.locked'] }); return; }
-    G.opened[c.id] = true; addItem(c.item, c.n || 1); sfx('chest'); if (c.flag) G.flags[c.flag] = true;
+    G.opened[c.id] = true; addItem(c.item, c.n || 1); sfx('chest'); if (c.flag) G.flags[c.flag] = true; openChestProp(c.id);
     const found = [t('chest.found', { item: c.item === 'coin' ? t('item.coins', { n: c.n }) : t('item.' + c.item) })].concat((c.lines || []).map((k) => t(k)));
     openDialogue({ name: 'act.chest', lines: found, raw: true, after: () => { questEvent('collect', c.item); if (c.flag) questEvent('flag', c.flag); saveGame(); } });
     return;
@@ -1347,15 +1411,16 @@ function interact(act) {
 
 /* the area's living layer: villagers, enemies, chests, desks, hooks; called after the ground is built */
 function populate(def) {
-  clearEnemies(); clearNpcs(); clearFlats(); clearFloats();
+  clearEnemies(); clearNpcs(); clearFlats(); clearFloats(); clearChests();
   A.show && A.show();
   for (const [key, x, z, , , o] of def.things || []) {
     if (!o || (o.when && !o.when())) continue;
     const d = AP.sprites[key].d || 8, front = z + d * P / 2 + .5;
-    if (o.chest) A.acts.push({ x, z: front, r: 1.4, label: 'act.open', chest: o.chest, name: 'act.chest' });
+    if (o.chest) { A.acts.push({ x, z: front, r: 1.4, label: 'act.open', chest: o.chest, name: 'act.chest', when: () => !G.opened[o.chest.id] }); chestProp(o.chest.id, key, x, z, o); }
     if (o.desk) A.acts.push({ x, z: front, r: 1.4, label: 'act.read', desk: true, name: 'act.desk' });
     if (o.act) A.acts.push(Object.assign({ x, z: front, r: 1.4 }, o.act));
   }
+  chestsBuild();
   for (const [id, x, z, face, when] of def.npcs || []) if (!when || when()) spawnNpc(id, x, z, face);
   tipsShown = new Set();
   for (const [type, x, z, when] of def.spawns || []) if (!when || when()) spawnEnemy(type, x, z);
@@ -2234,7 +2299,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     reseed: (n) => reseed(n),
     sim: (secs, bot) => { const n = Math.round(secs / SIM); for (let i = 0; i < n; i++) { if (bot && bot(i * SIM) === false) return i * SIM; step(SIM); flatsDraw(SIM); } return secs; },
     clearEnemies: () => clearEnemies(),
-    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS }),
+    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS }),
     view: (y) => { yaw = yawT = y; intro = 1; },
     draw: () => draw(1 / 60),
   };
