@@ -1738,7 +1738,8 @@ const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4();
 let simTime = 0;   // the simulation's own clock (time below is the drawing clock)
 let player = null, shadowHold = 8, time = 0, intro = 1, transitioning = false;
 let last = performance.now(), acc = 0, drawAcc = 0, frames = 0, fpsT = 0, fps = 0, calls = 0;
-const rotate = (d) => { yawT = Math.round(yawT / (Math.PI / 2)) * (Math.PI / 2) + d * Math.PI / 2; };
+const TURN = Math.PI / 4;   // the view turns and settles in steps of 45 degrees
+const rotate = (d) => { yawT = Math.round(yawT / TURN) * TURN + d * TURN; };
 
 function enterArea(name, at, face) {
   const def = AREAS[name]; if (!def) throw new Error('no area "' + name + '"');
@@ -2362,7 +2363,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   let drag = null;
   canvas.addEventListener('pointerdown', (e) => { drag = { id: e.pointerId, x: e.clientX }; canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); });
   canvas.addEventListener('pointermove', (e) => { if (!drag || drag.id !== e.pointerId) return; const dx = e.clientX - drag.x; drag.x = e.clientX; yawT -= dx * .007; yaw = yawT; });
-  const endDrag = (e) => { if (drag && drag.id === e.pointerId) { drag = null; yawT = Math.round(yawT / (Math.PI / 2)) * (Math.PI / 2); } };
+  const endDrag = (e) => { if (drag && drag.id === e.pointerId) { drag = null; yawT = Math.round(yawT / TURN) * TURN; } };
   canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); VT = clamp(VT * Math.exp(e.deltaY * .0012), 7, 26); }, { passive: false });
   addEventListener('pagehide', () => { if (ui.screen === 'game' && G && !hero.dead) saveGame(); });
