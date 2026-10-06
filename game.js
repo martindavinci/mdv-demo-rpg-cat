@@ -783,12 +783,20 @@ if (renderer) { renderer.setPixelRatio(1); renderer.shadowMap.enabled = true; re
 const nearest = (t) => { t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; };
 let groundTex = null, heightTex = null, atlasTex = null, auxTex = null;   // ground: per area; atlas: once at boot
 function makeAtlasTextures() {
-  atlasTex = nearest(new THREE.DataTexture(atlasPx, AW2, AH, THREE.RGBAFormat, THREE.UnsignedByteType)); atlasTex.encoding = THREE.sRGBEncoding; atlasTex.needsUpdate = true;
+  atlasTex = new THREE.DataTexture(atlasPx, AW2, AH, THREE.RGBAFormat, THREE.UnsignedByteType); atlasTex.encoding = THREE.sRGBEncoding; atlasFilter();
   auxTex = nearest(new THREE.DataTexture(auxPx, AW2, AH, THREE.RGBAFormat, THREE.UnsignedByteType)); auxTex.needsUpdate = true;
 }
 
 /* Materiale: colore per pixel, bagliore, e ombre lette al centro della cella da 1/16 (ombre a scalini sulla griglia) */
-const uGlow = { value: 0 }, uLampCol = { value: new THREE.Vector3() }, diag = { flat: false }, allMats = [];
+const uGlow = { value: 0 }, uLampCol = { value: new THREE.Vector3() }, diag = { flat: false, aa: window.__aa !== false }, allMats = [];
+// things' and the ground's pixels sharp but smooth-edged ("sharp bilinear"): each texel is read whole, except within half a screen pixel
+// of its border, where the filter blends the two. Slopes, curves and 45° views drew stair-stepped texel borders that
+// crawled as the view turned; far away, where a texel is under a pixel, it is plain bilinear instead of a flicker.
+// The cut-out (the layer test) still reads the exact texel, so outlines stay hard
+const AA_MAP = '#ifdef USE_MAP\nvec2 vxT = vUv * uAtlas, vxS = floor(vxT + 0.5);\nvxT = vxS + clamp((vxT - vxS) / max(fwidth(vxT), vec2(1e-4)), -0.5, 0.5);\nvec4 texelColor = mapTexelToLinear(texture2D(map, vxT / uAtlas));\ndiffuseColor *= texelColor;\n#endif\n';
+const aaFilter = (t) => { if (!t) return t; t.magFilter = t.minFilter = diag.aa ? THREE.LinearFilter : THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true; return t; };
+function atlasFilter() { aaFilter(atlasTex); }
+function setAA(on) { diag.aa = !!on; atlasFilter(); for (const m of allMats) { if (m.userData.aa) aaFilter(m.map); m.needsUpdate = true; } }
 const LIGHTS = THREE.ShaderChunk.lights_fragment_begin.split('vDirectionalShadowCoord[ i ]').join('vxShadowCoord');
 // layer CUT (300): discard the pixels the art left empty (aux r is 0 there); other layers: the old depth-layer test
 const LAYER_TEST = 'vec4 vxA = texture2D(uAux, vUv); if (vLayer > 299.5) { if (vxA.r < 0.5 / 255.0) discard; } else if (abs(vLayer) > 0.5 && abs((vLayer < 0.0 ? vxA.g : vxA.r) * 255.0 - abs(vLayer)) > 0.5) discard;';
@@ -801,15 +809,16 @@ function voxelMaterial(kind, o) {
     sh.uniforms.uLampCol = uLampCol;
     if (ground) sh.uniforms.uHeightTex = { value: heightTex };
     if (slab) sh.uniforms.uAux = { value: auxTex };
+    if (slab || ground) { const im = m.map.image; sh.uniforms.uAtlas = { value: new THREE.Vector2(im.width, im.height) }; }
     if (sprite) { sh.uniforms.uProbe = { value: o.probe }; sh.uniforms.uRow = { value: o.row }; sh.uniforms.uLampL = o.lampL; }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm;\n' + (ground || sprite ? '' : slab ? 'attribute float aLayer; varying float vLayer; attribute float aLamp; varying float vLamp;' : 'attribute vec4 aCol; varying vec4 vCol; attribute float aLamp; varying float vLamp;'))
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWNrm = normalize(mat3(modelMatrix) * normal);\n' + (ground || sprite ? '' : slab ? 'vLayer = aLayer; vLamp = aLamp;' : 'vCol = aCol; vLamp = aLamp;'));
-    let f = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm; uniform mat4 uShadowMat; uniform float uGlow; uniform vec3 uLampCol;\n' + (ground ? 'uniform sampler2D uHeightTex;' : sprite ? 'uniform vec3 uProbe; uniform vec2 uRow; uniform float uLampL;' : slab ? 'uniform sampler2D uAux; varying float vLayer; varying float vLamp;' : 'varying vec4 vCol; varying float vLamp;'));
+    let f = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm; uniform mat4 uShadowMat; uniform float uGlow; uniform vec3 uLampCol;\n' + (ground ? 'uniform sampler2D uHeightTex; uniform vec2 uAtlas;' : sprite ? 'uniform vec3 uProbe; uniform vec2 uRow; uniform float uLampL;' : slab ? 'uniform sampler2D uAux; uniform vec2 uAtlas; varying float vLayer; varying float vLamp;' : 'varying vec4 vCol; varying float vLamp;'));
     f = f.replace('void main() {', 'void main() {\n' + (ground ? 'float vxLamp = texture2D(uHeightTex, vUv).a * 2.0;' : sprite ? 'float vxLamp = uLampL;' : slab ? LAYER_TEST + ' float vxLamp = vLamp * 2.0;' : 'float vxLamp = vLamp * 2.0;'));
     // a solid surface is opaque even where its texel is not: the post pass shows the sky through any alpha below 1
-    if (slab) f = f.replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.a = 1.0;').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vxA.b * uGlow * 1.5;');
-    else if (ground) f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * texture2D(uHeightTex, vUv).r * uGlow * 1.6;');
+    if (slab) f = f.replace('#include <map_fragment>', (diag.aa ? AA_MAP : '#include <map_fragment>') + '\ndiffuseColor.a = 1.0;').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vxA.b * uGlow * 1.5;');
+    else if (ground) f = f.replace('#include <map_fragment>', diag.aa ? AA_MAP : '#include <map_fragment>').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * texture2D(uHeightTex, vUv).r * uGlow * 1.6;');
     else if (!ground && !sprite) f = f.replace('#include <color_fragment>', '#include <color_fragment>\nvec3 vxBase = pow(vCol.rgb, vec3(2.2)); diffuseColor.rgb *= vxBase;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vxBase * vCol.a * uGlow * 1.5;');
     // things (slab) cast shadows on the ground but receive none: their shadow lookup falls outside the map, which reads
@@ -821,7 +830,8 @@ function voxelMaterial(kind, o) {
       ? f.replace('#include <lights_fragment_begin>', '').replace('#include <lights_fragment_maps>', '').replace('#include <lights_fragment_end>', '').replace(/vec3 outgoingLight = [^;]+;/, 'vec3 outgoingLight = diffuseColor.rgb * 0.8 + totalEmissiveRadiance;')
       : f.replace('#include <lights_fragment_begin>', coord + LIGHTS).replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.directDiffuse += material.diffuseColor * uLampCol * vxLamp;');
   };
-  m.customProgramCacheKey = () => 'vx-' + kind + (diag.flat ? '-flat' : '');
+  if (slab || ground) { m.extensions = { derivatives: true }; m.userData.aa = true; }   // fwidth, for AA_MAP (WebGL1: OES_standard_derivatives)
+  m.customProgramCacheKey = () => 'vx-' + kind + (diag.flat ? '-flat' : '') + (m.userData.aa && diag.aa ? '-aa' : '');
   allMats.push(m);
   return m;
 }
@@ -1110,7 +1120,7 @@ function openArea(def) {
     B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
     const gPack = new Uint8Array(w * h * 2);
     if (near.length) for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) gPack[(z * w + x) * 2 + 1] = Math.min(255, Math.round(chunkLight((x0 + x + .5) * P, hPx(x0 + x, z0 + z) * P, (z0 + z + .5) * P, 0, 1, 0) * 127.5));
-    const gTex = nearest(new THREE.CanvasTexture(gCan)); gTex.flipY = false; gTex.encoding = THREE.sRGBEncoding;
+    const gTex = aaFilter(new THREE.CanvasTexture(gCan)); gTex.flipY = false; gTex.encoding = THREE.sRGBEncoding;
     const hTex = nearest(new THREE.DataTexture(gPack, w, h, THREE.LuminanceAlphaFormat, THREE.UnsignedByteType)); hTex.unpackAlignment = 1; hTex.needsUpdate = true;
     groundTex = gTex; heightTex = hTex; const matGround = voxelMaterial('ground');
     // chunks are culled against the view (one kept off screen costs nothing); the bounds are padded a little
@@ -3008,6 +3018,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     // the triangle edges of every thing drawn over it (for the review): every triangle, also those whose pixels the
     // material discards, since they cost the same
     wire: (on) => { settings.wire = !!on; applyWire(); },
+    aa: (on) => setAA(on),
     strips: (k) => { const s = sp[k]; return s.strips.map((q) => { const xs = [0, 3, 6, 9].map((o) => q.p[o]), ys = [1, 4, 7, 10].map((o) => q.p[o]); return [(Math.min(...xs) + Math.max(...xs)) / 2 + s.px, s.base - (Math.min(...ys) + Math.max(...ys)) / 2, q.n[0], q.n[1]]; }); },
     parts: (k) => { const s = sp[k]; return s.pixel ? { front: 2 * s.layF.length, back: 2 * s.layB.length, sides: 2 * s.strips.length, roof: 2 * s.low.length } : { faces: 2 * s.low.length }; },
     low: (k) => sp[k].low.map((q) => ({ n: q.n.map((v) => +v.toFixed(2)), y: q.p.map((p) => p[1]), layer: q.layer })),
