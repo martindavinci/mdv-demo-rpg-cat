@@ -7,7 +7,7 @@ const PPU = 16, P = 1 / PPU;                        // 16 art pixels per world u
 const PITCH = 0.62, SPR_Y = 1 / Math.cos(PITCH);    // figures stand upright; stretched by 1/cos so pixels stay square on screen
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const coarse = matchMedia('(pointer: coarse)').matches;
-const F_ROOF = 1, F_GLOW = 2, F_WRAP = 4, F_TEXTOP = 8, F_TEXALL = 16, F_OWN = 32;
+const F_ROOF = 1, F_GLOW = 2, F_WRAP = 4, F_TEXTOP = 8, F_TEXALL = 16, F_OWN = 32, F_GHOST = 64;   // F_GHOST: in the atlas only (a smooth part reads it), never extruded
 const GLOW = 0xffe7a0;                              // the prompts' night-glow colour
 
 function hash2(x, y) { let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
@@ -279,6 +279,7 @@ class Spr {
       atlasPx[kr] = sc[j * 3]; atlasPx[kr + 1] = sc[j * 3 + 1]; atlasPx[kr + 2] = sc[j * 3 + 2]; atlasPx[kr + 3] = 255;
       if (on) { auxPx[kl] = cf[i]; auxPx[kl + 1] = cb[i]; auxPx[kl + 2] = auxPx[kr + 2] = this.glow[i] ? 255 : 0; }
     }
+    this.each((x, y, i) => { if (this.fl[i] & F_GHOST) { d[i * 4 + 3] = 0; const kl = ((this.ay + y) * AW2 + this.ax + x) * 4; auxPx[kl] = auxPx[kl + 1] = 0; } });   // ghosts: colour only
     if (this.pixel) { this.layF = this.layers(cf); this.layB = this.layers(cb); this.sides(); }
     return this;
   }
@@ -577,7 +578,7 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
 // roof tiles drawn in code (courses along the eaves, counted down from the ridge), the fascia along the front and back
 // edges and the eave ends in the tiles' dark joint colour. A few quads instead of a staircase of 1-pixel steps
 function roofQuads(s) {
-  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes) return out;
+  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes && !s.pic.discs) return out;
   const uv = (u, v) => [(T[0] + clamp(u, 0, T[2])) / AW2, (T[1] + clamp(v, 0, T[3])) / AH];
   const q = (pts, n, uvs) => out.push({ p: pts.map(([x, y, z]) => [x - s.px, y, z]), n, uv: uvs.flat(), layer: 0 });
   // sloping panels (an awning): the panel reads the sprite's own front pixels by height, the two ends are triangles
@@ -586,6 +587,19 @@ function roofQuads(s) {
     const dy = a.yTop - a.yBot, dz = a.zBot - a.zTop, l = Math.hypot(dy, dz), n = [0, dz / l, dy / l];
     q([[a.x0, a.yBot, a.zBot], [a.x1, a.yBot, a.zBot], [a.x1, a.yTop, a.zTop], [a.x0, a.yTop, a.zTop]], n, [fuv(a.x0, a.yBot + .5), fuv(a.x1, a.yBot + .5), fuv(a.x1, a.yTop - .5), fuv(a.x0, a.yTop - .5)]);
     for (const [x, sx, u] of [[a.x0, -1, a.x0 + .5], [a.x1, 1, a.x1 - .5]]) q([[x, a.yTop, a.zTop], [x, a.yBot, a.zBot], [x, a.yBot, a.zTop], [x, a.yBot, a.zTop]], [sx, 0, 0], [fuv(u, a.yTop - .5), fuv(u, a.yBot + .5), fuv(u, a.yBot + .5), fuv(u, a.yBot + .5)]);
+  }
+  // discs (a round sign): a short cylinder of n sides, axis toward the camera; both caps read the sprite's own front
+  // pixels (drawn as F_GHOST), the rim the colour just inside the edge. Caps as fans of quads (two triangles each)
+  for (const c of s.pic.discs || []) {
+    const n = c.n || 12, P_ = (k, rr) => [c.cx + Math.cos(k / n * Math.PI * 2) * rr, c.cy + Math.sin(k / n * Math.PI * 2) * rr];
+    for (const [z, nz] of [[c.zf, 1], [c.zb, -1]]) for (let k = 0; k < n; k += 2) {
+      const pts = [[c.cx, c.cy], P_(k, c.r), P_(k + 1, c.r), P_(k + 2, c.r)];
+      q(pts.map(([x, y]) => [x, y, z]), [0, 0, nz], pts.map(([x, y]) => fuv(x, y)));
+    }
+    for (let k = 0; k < n; k++) {
+      const [ax, ay] = P_(k, c.r), [bx, by] = P_(k + 1, c.r), m = (k + .5) / n * Math.PI * 2, [ux, uy] = P_(k + .5, c.r - .8);
+      q([[ax, ay, c.zf], [bx, by, c.zf], [bx, by, c.zb], [ax, ay, c.zb]], [Math.cos(m), Math.sin(m), 0], [fuv(ux, uy), fuv(ux, uy), fuv(ux, uy), fuv(ux, uy)]);
+    }
   }
   for (const r of s.pic.roofs || []) {
     const top = (y) => y + 1, d = r.zf - r.zb, dark = 3.5;
@@ -2297,6 +2311,7 @@ AREAS.overworld = (() => {
 // The bakery, after the ChatGPT design: a front-gable house in ochre plaster on a stone plinth, a shop window full of
 // bread under a green and cream awning, an arched door, a round attic window, a bread sign on an iron bracket, a brick
 // chimney near the back. 108 × 74 art pixels, 60 deep.
+const SIGN_N = 12;
 CODE_ART.bakery = () => {
   const W = 108, H = 74, p = new Pic(W, H), hd = 30, cx = 56;
   const PLASTER = 0xe6bf78, STONE = 0xb9ad96, WOOD = 0x6e4628, ROOF = 0xc2603a, BRICK = 0xa2553a, GREEN = 0x3f8650, CREAM = 0xf0e6cf;
@@ -2372,9 +2387,10 @@ CODE_ART.bakery = () => {
   for (let r = 19; r <= 31; r++) for (let x = 0; x <= 9; x++) {
     const d = Math.hypot(x + .5 - 5, r + .5 - 25); if (d > 5.6) continue;
     const loaf = Math.abs(x + .5 - 5) < 3.2 && Math.abs(r + .5 - 25) < 1.6;
-    p.at(x, r, d > 4.6 ? WOOD : loaf ? 0xe0a454 : 0xead7a8, hd + 3, hd + 1);
+    p.at(x, r, d > 4.6 ? WOOD : loaf ? 0xe0a454 : 0xead7a8, hd + 3, hd + 1, F_GHOST);   // the board's colours, for the disc
   }
   p.at(3, 32, 0x2a2420, hd + 2, hd); p.at(7, 32, 0x2a2420, hd + 2, hd);
+  p.discs = [{ cx: 5, cy: 25, r: 5.6, zf: hd + 3, zb: hd + 1, n: SIGN_N }];   // the board: a smooth disc
 
   // the back: the same outline, plain plaster with a back door and a small window, the plinth, the roof and chimney
   const back = Int32Array.from(p.c);
