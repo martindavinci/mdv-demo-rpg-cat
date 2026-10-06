@@ -2397,7 +2397,7 @@ CODE_ART.bakery = () => {
       const band = Math.floor((x - aw0) / 5), green = band % 2 === 0;
       if (k === 6 && (x - aw0) % 5 !== 2) continue;                 // the hem: one point per stripe
       const c = shade(green ? GREEN : CREAM, k === 0 ? 1.08 : 1 - k * .02);
-      if (k < 6) p.at(x, r, c, hd, -hd); else p.at(x, r, c, hd + out, -hd);   // a hem point spans the wall too (one depth interval per pixel)
+      if (k < 6) p.at(x, r, c, hd, -hd); else p.at(x, r, c, hd + out, -hd, BOXES ? F_NOSIDE : 0);   // a hem point: a thin card hanging from the awning (it spans the wall too: one depth interval per pixel)
     }
   }
   p.slopes = [{ x0: aw0, x1: aw1 + 1, yTop: 32, yBot: 26, zTop: hd, zBot: hd + out }];
@@ -2839,7 +2839,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     reseed: (n) => reseed(n),
     sim: (secs, bot) => { const n = Math.round(secs / SIM); for (let i = 0; i < n; i++) { if (bot && bot(i * SIM) === false) return i * SIM; step(SIM); flatsDraw(SIM); } return secs; },
     clearEnemies: () => clearEnemies(),
-    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS }),
+    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART }),
     view: (y) => { yaw = yawT = y; intro = 1; },
     rescale: (k) => { window.__ss = k; resize(); },
     camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: Math.max(Vz, minV()), rt: [rt.width, rt.height] }),
