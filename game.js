@@ -20,7 +20,7 @@ const shade = (c, k) => (Math.min(255, Math.round((c >> 16 & 255) * k)) << 16) |
 
 // settings are preferences only (never game content): language, frame-rate cap, shadows, shake, music and sound volume (0–3)
 const SETTINGS_KEY = 'mdv-rpg-cat-settings';   // mdv-allow-storage: preferences
-const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, shake: true, music: 2, sound: 2 },
+const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, shake: true, music: 2, sound: 2 },
   (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; } })());
 if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 2 : 0;   // the first builds stored on/off
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode: keep in memory */ } };
@@ -60,9 +60,11 @@ function loadArt() {
     for (const [sheet, S] of Object.entries(SHEETS)) {
       for (const [key, r] of Object.entries(S.meta.sprites)) {
         if (S.meta.kind === 'tiles') TILES[key] = { w: r.w, h: r.h, px: crop(S, r) };
-        else if (r.depth) DEFS.push({ key, name: key, sheet, pic: depthPic(S, r) });
+        else if (r.depth) DEFS.push({ key, name: key, sheet, pic: applyDepthRules(key, depthPic(S, r)) });
       }
     }
+    // art drawn in code replaces the sheet's drawing of the same key
+    for (const [key, draw] of Object.entries(CODE_ART)) { const k = DEFS.findIndex((d) => d.key === key); if (k >= 0) DEFS.splice(k, 1); DEFS.push({ key, name: key, sheet: 'code', pic: draw() }); }
   });
 }
 
@@ -86,7 +88,33 @@ function depthPic(S, r) {
   return { w: r.w, h: r.h, d: r.depth.d, c, f, b, fl, side };
 }
 
+// ---- engine/12-artkit.js
+/* ---------- art drawn in code: every pixel born with its colour, its depth and its flags (the diorama kit's Pic) ---------- */
+// CODE_ART (content fills it): key → () => Pic. A code-drawn sprite replaces the sheet sprite of the same key at load.
+// A Pic may carry: back (Int32Array, the colours its back faces show), gable (apex column of a roof whose ridge runs
+// front to back), tiles (true: its roof steps read the roof tiles drawn in code, see writeTiles).
+const CODE_ART = {};
+const vnoise = (x, y) => { const xi = Math.floor(x), yi = Math.floor(y), fx = x - xi, fy = y - yi, a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1), u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy); return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v; };
+const jit = (c, x, y, s, a) => shade(c, 1 + (hash2((x | 0) + (s | 0) * 7919, (y | 0) - (s | 0) * 104729) - .5) * a);   // a colour, a little varied per pixel
+
+class Pic {
+  constructor(w, h) { this.w = w; this.h = h; const n = w * h; this.c = new Int32Array(n).fill(-1); this.f = new Int8Array(n); this.b = new Int8Array(n); this.fl = new Uint8Array(n); }
+  Y(r) { return this.h - 1 - r; }                                   // r: rows up from the ground
+  on(x, y) { return x >= 0 && y >= 0 && x < this.w && y < this.h && this.c[y * this.w + x] >= 0; }
+  set(x, y, c, zf, zb, fl) {
+    x = Math.floor(x); y = Math.floor(y); if (x < 0 || y < 0 || x >= this.w || y >= this.h) return;
+    const i = y * this.w + x; zf = clamp(Math.round(zf), -60, 60); zb = zb === undefined ? -zf : clamp(Math.round(zb), -60, 60); if (zb >= zf) zb = zf - 1;
+    this.c[i] = c; this.f[i] = zf; this.b[i] = zb; this.fl[i] = fl || 0;
+  }
+  // a rectangle by rows from the ground; c may be a function (x, r)
+  wall(x, r, w, h, c, zf, zb, fl) { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) this.set(x + i, this.Y(r + j), typeof c === 'function' ? c(x + i, r + j) : c, zf, zb, fl); }
+  at(x, r, c, zf, zb, fl) { this.set(x, this.Y(r), c, zf, zb, fl); }
+  done() { let lo = 0, hi = 0; for (let i = 0; i < this.c.length; i++) if (this.c[i] >= 0) { hi = Math.max(hi, this.f[i]); lo = Math.min(lo, this.b[i]); } this.d = hi - lo; return this; }
+}
+const inArch = (i, j, w, ah) => { if (j >= ah) return true; const hw = w / 2, dx = (i + .5 - hw) / hw, dy = (j + .5 - ah) / ah; return dx * dx + dy * dy <= 1; };   // i column, j row from the top
+
 // ---- engine/20-sprites.js
+const ROOF_F = [0, Math.SQRT1_2, Math.SQRT1_2], ROOF_B = [0, Math.SQRT1_2, -Math.SQRT1_2], TILE_N = 5;   // the per-pixel extruder (BUILD 'pixel')
 /* ---------- sprites: every depth sprite packed in one atlas at boot, then extruded per pixel (from the diorama kit) ---------- */
 // AW: atlas width; the atlas is two halves (colours | side colours) plus an aux table (front layer, back layer, glow)
 let AW = 512, AW2 = 1024, AH = 0, AP = { sprites: {} }, propsPx, zfPl, zbPl, flPl, atlasPx, auxPx;
@@ -100,11 +128,13 @@ function buildSprites() {
   const extra = DEFS.filter((d) => d.pic.side).flatMap((d) => [{ d, kind: 'side', w: d.pic.side.w, h: d.pic.side.h }, { d, kind: 'back', w: d.pic.w, h: d.pic.h },
     { d, kind: 'roofF', w: d.pic.w, h: d.pic.side.w }, { d, kind: 'roofS', w: d.pic.side.w, h: d.pic.w },
     ...(d.sheet.startsWith('buildings') ? [{ d, kind: 'tiles', w: Math.max(d.pic.w, d.pic.side.w) + 1, h: d.pic.h + Math.ceil(Math.max(d.pic.w, d.pic.side.w) / 2) + 1 }] : [])]);
+  // art drawn in code: its own back colours, and roof tiles when it asks for them
+  for (const d of DEFS) if (!d.pic.side) { if (d.pic.back) extra.push({ d, kind: 'back', w: d.pic.w, h: d.pic.h }); if (d.pic.tiles) extra.push({ d, kind: 'tiles', w: Math.max(d.pic.w, d.pic.d) + 1, h: d.pic.h + Math.ceil(Math.max(d.pic.w, d.pic.d) / 2) + 1 }); }
   // the chest also gets the underside of its lid (its planks, darker) and the dark of its inside
   const chest = DEFS.find((d) => d.key === CHEST.key); if (chest) extra.push({ d: chest, kind: 'lidIn', w: chest.pic.w, h: CHEST.seam }, { d: chest, kind: 'dark', w: 2, h: 2 });
   for (const e of extra) { if (x + e.w + 1 > AW) { x = 1; y += rowH + 1; rowH = 0; } e.x = x; e.y = y; x += e.w + 1; rowH = Math.max(rowH, e.h); }
   AH = y + rowH + 1;
-  for (const d of DEFS) AP.sprites[d.key] = { name: d.name, r: [d.ax, d.ay, d.pic.w, d.pic.h], d: d.pic.d, mid: Math.round(d.pic.d / 2) };
+  for (const d of DEFS) AP.sprites[d.key] = { name: d.name, r: [d.ax, d.ay, d.pic.w, d.pic.h], d: d.pic.d, mid: Math.round(d.pic.d / 2), gable: d.pic.gable !== undefined ? d.pic.gable : ((CURATE[d.key] || {}).depth || {}).gable };
   for (const e of extra) AP.sprites[e.d.key][e.kind] = [e.x, e.y, e.w, e.h];
   propsPx = new Uint8ClampedArray(AW * AH * 4); zfPl = new Uint8Array(AW * AH); zbPl = new Uint8Array(AW * AH); flPl = new Uint8Array(AW * AH);
   for (const d of DEFS) { const p = d.pic; for (let yy = 0; yy < p.h; yy++) for (let xx = 0; xx < p.w; xx++) { const i = yy * p.w + xx; if (p.c[i] < 0) continue; const q = (d.ay + yy) * AW + d.ax + xx, c = p.c[i]; propsPx[q * 4] = c >> 16 & 255; propsPx[q * 4 + 1] = c >> 8 & 255; propsPx[q * 4 + 2] = c & 255; propsPx[q * 4 + 3] = 255; zfPl[q] = p.f[i] + 64; zbPl[q] = p.b[i] + 64; flPl[q] = p.fl[i]; } }
@@ -112,7 +142,7 @@ function buildSprites() {
   for (const key in AP.sprites) new Spr(key);
   for (const e of extra) ({ side: writeSide, back: writeBack, lidIn: writeLidIn, dark: writeDark, roofF: writeRoof, roofS: writeRoof, tiles: writeTiles })[e.kind](e);
   for (const d of DEFS) { const s = sp[d.key]; s.pic = d.pic; s.depth = d.pic.side ? d.pic.side.w : d.pic.d; }
-  for (const s of SPRITES) s.low = s.side ? (BUILD[s.key] === 'cross' ? crossOf(s) : loftOf(s)) : [];
+  for (const s of SPRITES) s.low = s.pixel ? roofQuads(s) : s.side ? (BUILD[s.key] === 'cross' ? crossOf(s) : loftOf(s)) : [];   // a pixel-built sprite: its smooth roof, if any
 }
 
 // roofs and tops: per column, the first bright pixels under the drawing's top edge (the tiles, not the outline),
@@ -192,6 +222,7 @@ function writeSide(e) {
 // the doors and windows of the front), skipping its dark outline: its two commonest, so the wall reads plain;
 // the depth codes are copied from the front region, which the back faces' layer test reads
 function writeBack(e) {
+  if (e.d.pic.back) { const p = e.d.pic; for (let y = 0; y < e.h; y++) for (let x = 0; x < e.w; x++) { const c = p.back[y * p.w + x], o = ((e.d.ay + y) * AW2 + e.d.ax + x) * 4, q = ((e.y + y) * AW2 + e.x + x) * 4; atlasSet(e.x + x, e.y + y, c >= 0 ? c : 0); auxPx[q] = auxPx[o]; auxPx[q + 1] = auxPx[o + 1]; } return; }   // drawn in code
   const cur = (CURATE[e.d.key] || {}).back; if (cur) { writeBackCurated(e, cur); return; }
   const p = e.d.pic, s = p.side, lum = (c) => ((c >> 16 & 255) * .3 + (c >> 8 & 255) * .59 + (c & 255) * .11);
   for (let y = 0; y < e.h; y++) {
@@ -214,7 +245,7 @@ const SPRITES = [], sp = {};
 class Spr {
   constructor(key) {
     const meta = AP.sprites[key], [ax, ay, w, h] = meta.r, n = w * h;
-    Object.assign(this, { key, name: meta.name, side: meta.side, back: meta.back, mid: meta.mid, ax, ay, w, h, base: h, px: meta.px === undefined ? Math.round(w / 2) : meta.px, count: 0 });
+    Object.assign(this, { key, name: meta.name, side: meta.side, back: meta.back, mid: meta.mid, ax, ay, w, h, base: h, px: meta.px === undefined ? Math.round(w / 2) : meta.px, count: 0, tiles: meta.tiles, pixel: BUILD[key] === 'pixel', texKey: meta.tex, gable: meta.gable, cross: !!meta.cross, tileN: meta.tex ? 16 : TILE_N });
     this.data = new Uint8ClampedArray(n * 4); this.glow = new Uint8Array(n); this.fl = new Uint8Array(n);
     this.zf = new Int8Array(n); this.zb = new Int8Array(n); this.cls = new Uint8Array(n);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -248,7 +279,71 @@ class Spr {
       atlasPx[kr] = sc[j * 3]; atlasPx[kr + 1] = sc[j * 3 + 1]; atlasPx[kr + 2] = sc[j * 3 + 2]; atlasPx[kr + 3] = 255;
       if (on) { auxPx[kl] = cf[i]; auxPx[kl + 1] = cb[i]; auxPx[kl + 2] = auxPx[kr + 2] = this.glow[i] ? 255 : 0; }
     }
+    if (this.pixel) { this.layF = this.layers(cf); this.layB = this.layers(cb); this.sides(); }
     return this;
+  }
+  // pixel con la stessa profondità = uno strato; ogni strato si copre con rettangoli di 16 pixel al massimo
+  layers(codes) {
+    const m = new Map();
+    this.each((x, y, i) => { const key = codes[i] * 64 + (y >> 4); let L = m.get(key); if (!L) m.set(key, L = { code: codes[i], y0: y, y1: y, cells: new Set() }); if (y < L.y0) L.y0 = y; if (y > L.y1) L.y1 = y; L.cells.add(x >> 4); });
+    const out = []; for (const L of m.values()) for (const c of L.cells) out.push([L.code, c * 16, L.y0, Math.min(this.w, c * 16 + 16), L.y1 + 1]);
+    return out;
+  }
+  /* Fianchi. Ogni pixel espone una faccia dove il vicino manca o è meno profondo. Le facce in fila sulla stessa retta si fondono in strisce
+     che leggono il colore dall'atlante: il pixel stesso (facce strette), la facciata che gira l'angolo (muri), o poche righe ripetute (tetti). */
+  sides() {
+    const s = this, w = s.w, h = s.h, base = s.base, px = s.px, N = s.tileN, patch = s.texKey ? sp[s.texKey] : null, open = new Map(), segs = [];
+    const add = (dir, line, pos, d0, d1, tA, tB, half, sn, row) => {
+      if (row !== undefined) { segs.push({ dir, line, p0: pos, p1: pos + 1, d0, d1, tA, tB, half, sn, row }); return; }   // ritaglio di tetto o di telo: non si fonde con i vicini
+      const key = dir + '|' + line + '|' + d0 + '|' + d1 + '|' + tA + '|' + tB + '|' + half + '|' + (sn ? sn.join() : ''), g = open.get(key);
+      if (g && g.p1 === pos && pos - g.p0 < 16) g.p1 = pos + 1; else { const o = { dir, line, p0: pos, p1: pos + 1, d0, d1, tA, tB, half, sn }; open.set(key, o); segs.push(o); }
+    };
+    s.each((x, y, i) => {
+      const zf = s.zf[i], zb = s.zb[i], f = s.fl[i];
+      for (let k = 0; k < 4; k++) {
+        const nx = k === 0 ? -1 : k === 1 ? 1 : 0, ny = k === 2 ? 1 : k === 3 ? -1 : 0, X = x + nx, Y = y - ny;
+        if (ny < 0 && Y >= base) continue;                      // la base poggia a terra
+        const sn = (f & F_TEXALL) && s.gable !== undefined ? [x + .5 < s.gable ? -.6 : .6, .8, 0] : null, ov = sn && nx * sn[0] + ny * sn[1] > 0 ? sn : null, roof = ny > 0 && (f & F_ROOF);
+        const line = nx ? x : y, pos = nx ? y : x, size = nx ? w : h, g = (nx < 0 || ny > 0) ? 1 : -1;   // g: verso in cui si entra nello sprite
+        const flat = (a, b, o) => add(k, line, pos, a, b, line + .5, line + .5, 1, o);
+        const run = (a, b) => {
+          if (b <= a) return;
+          if (roof) { if (a >= 0) flat(a, b, ROOF_F); else if (b <= 0) flat(a, b, ROOF_B); else { flat(0, b, ROOF_F); flat(a, 0, ROOF_B); } return; }
+          const wrap = nx !== 0 && (f & F_WRAP) !== 0;
+          // a roof step's top, in one piece for its whole depth, reading the roof tiles drawn in code along it (row = the
+          // tile course, depth = along the course): the tile joints show without cutting the strip
+          if ((f & F_OWN) && ny > 0 && s.tiles) { add(k, line, pos, a, b, clamp(s.mid - a, 0, s.tiles[2]), clamp(s.mid - b, 0, s.tiles[2]), 3, ov); return; }
+          if (b - a < 6 || (f & F_OWN)) { flat(a, b, ov); return; }   // facce strette, o pixel che chiedono il proprio colore
+          // tetti piani e teli: il colore viene da un ritaglio a parte dell'atlante, ripetuto lungo la profondità
+          const tex = patch && ((ny > 0 && (f & F_TEXTOP)) || (ny >= 0 && (f & F_TEXALL))) ? [patch.ax - 1, patch.ay + ((ny > 0 ? x : y) % patch.h)] : null;
+          const dB = Math.floor((zf - 1 + zb) / 2) + 1;           // fin qui è più vicina la faccia dietro, poi quella davanti
+          const piece = (d0, d1, back) => {
+            if (d1 <= d0) return; let T;
+            if (wrap && !tex) T = (dd) => { const t = back ? dd - zb : zf - dd; return g > 0 ? line + t : line + 1 - t; };
+            else { const kk = back ? Math.floor((d0 - zb) / N) : Math.floor((zf - d0 - 1) / N), l = tex ? tex[0] : line, gg = tex ? 1 : g; T = (dd) => { const t = (back ? dd - zb : zf - dd) - kk * N; return gg > 0 ? l + 1 + t : l - t; }; }
+            const tA = T(d0), tB = T(d1);
+            if (tex) add(k, line, pos, d0, d1, tA, tB, 1, ov, tex[1]); else if (Math.min(tA, tB) < 0 || Math.max(tA, tB) > size) flat(d0, d1, ov); else add(k, line, pos, d0, d1, tA, tB, wrap ? 0 : 1, ov);
+          };
+          const cut = (d0, d1, back) => {
+            const wr = wrap && !tex; let c = d0;
+            while (c < d1) { let nxt; if (wr) nxt = c + 16; else if (back) nxt = zb + (Math.floor((c - zb) / N) + 1) * N; else { const m = zf - c; nxt = zf - Math.floor((m - 1) / N) * N; } nxt = Math.min(nxt, d1); piece(c, nxt, back); c = nxt; }
+          };
+          cut(a, Math.min(b, dB), true); cut(Math.max(a, dB), b, false);
+        };
+        if (!s.on(X, Y) && nx && s.side && !(f & (F_ROOF | F_TEXALL))) { const cl = (v) => clamp(v, 0, s.side[2]); add(k, line, pos, zb, zf, cl(s.mid - zb), cl(s.mid - zf), 2, ov); }   // a side wall: the side view, column = depth from the front
+        else if (!s.on(X, Y)) run(zb, zf);
+        else { const j = Y * w + X, zfn = s.zf[j], zbn = s.zb[j]; if (zfn < zf) run(Math.max(zfn, zb), zf); if (zbn > zb) run(zb, Math.min(zbn, zf)); }
+      }
+    });
+    // strisce in coordinate dello sprite: quattro angoli, normale, coordinate nell'atlante
+    const NRM = [[-1, 0, 0], [1, 0, 0], [0, 1, 0], [0, -1, 0]];
+    s.strips = segs.map((q) => {
+      const fix = q.row !== undefined, r = q.row, n = NRM[q.dir], sv = q.half === 2, tv = q.half === 3, uo = tv ? s.tiles[0] : sv ? s.side[0] : (fix ? 0 : s.ax) + q.half * AW, vo = tv ? s.tiles[1] : sv ? s.side[1] : fix ? 0 : s.ay; let P_, uv;
+      if (q.dir < 2) { const Xp = (q.dir === 0 ? q.line : q.line + 1) - px, Yt = base - q.p0, Yb = base - q.p1; P_ = [Xp, Yb, q.d0, Xp, Yt, q.d0, Xp, Yt, q.d1, Xp, Yb, q.d1]; uv = fix ? [q.tA, r + 1, q.tA, r, q.tB, r, q.tB, r + 1] : [q.tA, q.p1, q.tA, q.p0, q.tB, q.p0, q.tB, q.p1]; }
+      else { const Yp = q.dir === 2 ? base - q.line : base - q.line - 1, X0 = q.p0 - px, X1 = q.p1 - px; P_ = [X0, Yp, q.d0, X1, Yp, q.d0, X1, Yp, q.d1, X0, Yp, q.d1]; uv = tv ? [q.tA, q.line + .5, q.tA, q.line + .5, q.tB, q.line + .5, q.tB, q.line + .5] : fix ? [q.tA, r + .5, q.tA, r + .5, q.tB, r + .5, q.tB, r + .5] : [q.p0, q.tA, q.p1, q.tA, q.p1, q.tB, q.p0, q.tB]; }
+      for (let k = 0; k < 4; k++) { uv[k * 2] = (uo + uv[k * 2]) / AW2; uv[k * 2 + 1] = (vo + uv[k * 2 + 1]) / AH; }
+      return { p: P_, n, sn: q.sn || n, uv };
+    });
   }
 }
 
@@ -321,6 +416,73 @@ class SlabBuilder {
 /* ---------- extrusion: a prepared sprite set down in the world (the current area's builders S and B) ---------- */
 let S = null, B = null;   // the current area's builders: S textured quads (things), B coloured quads (ground walls)
 
+/* the per-pixel extruder: a sprite set down in the world (BUILD 'pixel'), as in the diorama kit */
+let tally = { px: 0 };
+function put(s, x, z, o) {
+  o = o || {};
+  const rot = (((o.rot || 0) % 4) + 4) % 4, fl = o.flip ? -1 : 1, e = o.eps || 0, base = s.base, px = s.px;
+  const ox = Math.round(x * PPU) / PPU, oz = Math.round(z * PPU) / PPU, oy = o.y || 0;
+  const pts = new Array(12), g3 = [0, 0, 0], s3 = [0, 0, 0];
+  const tp = (X, Y, Z, k) => { let a = X * fl, c = Z; for (let r = 0; r < rot; r++) { const m = a; a = c; c = -m; } pts[k] = ox + e + a * P; pts[k + 1] = oy + e * .7 + Y * P; pts[k + 2] = oz + e + c * P; };
+  const tn = (v, out) => { let a = v[0] * fl, c = v[2]; for (let r = 0; r < rot; r++) { const m = a; a = c; c = -m; } out[0] = a; out[1] = v[1]; out[2] = c; };
+  const slab = (L, front) => {
+    const code = L[0], x0 = L[1], y0 = L[2], x1 = L[3], y1 = L[4], zz = (code & 127) - 64, sg = front ? 1 : -1;
+    tp(x0 - px, base - y1, zz, 0); tp(x1 - px, base - y1, zz, 3); tp(x1 - px, base - y0, zz, 6); tp(x0 - px, base - y0, zz, 9);
+    const bx = !front && s.back ? s.back[0] : s.ax, by = !front && s.back ? s.back[1] : s.ay;   // a back face: the plain back, when there is one
+    const u0 = (bx + x0) / AW2, u1 = (bx + x1) / AW2, v0 = (by + y0) / AH, v1 = (by + y1) / AH;
+    tn([0, 0, sg], g3); tn(code > 127 ? (front ? ROOF_F : ROOF_B) : [0, 0, sg], s3);
+    S.quad(pts, g3[0], g3[1], g3[2], [u0, v1, u1, v1, u1, v0, u0, v0], sg * code, s3[0], s3[1], s3[2]);
+  };
+  for (const L of s.layF) slab(L, true); for (const L of s.layB) slab(L, false);
+  for (const q of s.strips) { for (let k = 0; k < 4; k++) tp(q.p[k * 3], q.p[k * 3 + 1], q.p[k * 3 + 2], k * 3); tn(q.n, g3); tn(q.sn, s3); S.quad(pts, g3[0], g3[1], g3[2], q.uv, 0, s3[0], s3[1], s3[2]); }
+  tally.px += s.count;
+  return { x: ox, z: oz };
+}
+
+// ---- engine/21-depth.js
+/* ---------- depth by rules: the diorama's catalogue, written per building, instead of depth from the side view ---------- */
+// CURATE[key].depth = { gable?: apex column, rules: [...] }, applied in order at load (later rules win). Each rule names
+// a rectangle of the front drawing, rect: [x0, y0, x1, y1) in art pixels, and optionally a colour test:
+//   dark: true   only pixels darker than luminance 150 (roof tiles, beams; not the plaster)
+//   light: true  only pixels of luminance 150 and up
+// Depths are art pixels from the sprite's centre plane, toward the camera positive (as in the kit: front f > back b):
+//   { box: rect, half }         a solid: f = half, b = -half
+//   { slab: rect, f, b }        an explicit interval (a chimney near the back, a sign at the front)
+//   { out: rect, k }            the front comes forward by k (a cornice, a plinth); { back: k } moves the back too
+//   { recess: rect, k }         the front goes back by k (a door, a shop window)
+//   { cloth: rect, f0, step }  the front of each row a step further out than the row above (an awning); the back stays,
+//                               since a pixel has one depth interval and the wall behind must not lose it
+//   { roof: rect }              a roof: with gable (ridge front to back) its stepped tops tilt toward their side;
+//                               without (ridge across) the ROOF flag makes its front faces a slope
+// paint: [...] cleans the colours first (see paintRules).
+function paintRules(pic, ops) { }
+function applyDepthRules(key, pic) {
+  const D = (CURATE[key] || {}).depth; if (!D) return pic;
+  const { w, h, c, f, b, fl } = pic, lum = (v) => (v >> 16 & 255) * .3 + (v >> 8 & 255) * .59 + (v & 255) * .11;
+  paintRules(pic, (CURATE[key] || {}).paint || []);
+  const each = (r, fn) => {
+    const [x0, y0, x1, y1] = r.box || r.slab || r.out || r.recess || r.cloth || r.roof || [0, 0, w, h];   // the rule's own rectangle
+    for (let y = Math.max(0, y0); y < Math.min(h, y1); y++) for (let x = Math.max(0, x0); x < Math.min(w, x1); x++) {
+      const i = y * w + x; if (c[i] < 0) continue; const l = lum(c[i]);
+      if (r.dark && l >= 150) continue; if (r.light && l < 150) continue;
+      fn(i, x, y);
+    }
+  };
+  for (const r of D.rules) {
+    if (r.box !== undefined) each(r, (i) => { f[i] = r.half; b[i] = -r.half; });
+    else if (r.slab !== undefined) each(r, (i) => { f[i] = r.f; b[i] = r.b; });
+    else if (r.out !== undefined) each(r, (i) => { f[i] += r.k; if (r.back) b[i] -= r.back; });
+    else if (r.recess !== undefined) each(r, (i) => { f[i] -= r.k; });
+    else if (r.cloth !== undefined) each(r, (i, x, y) => { f[i] = Math.round(r.f0 + (y - r.cloth[1]) * r.step); });   // the front only: the wall behind stays
+    // a roof whose ridge runs front to back: its stepped tops tilt toward their side of the gable (F_TEXALL + gable);
+    // a roof seen from the front (ridge across): F_ROOF tilts its front faces into a slope
+    else if (r.roof !== undefined) each(r, (i) => { fl[i] |= (D.gable !== undefined ? F_TEXALL : F_ROOF) | (D.roofFlat ? F_OWN : 0); });
+  }
+  for (let i = 0; i < f.length; i++) { f[i] = clamp(f[i], -63, 63); b[i] = clamp(b[i], -64, f[i] - 1); }
+  pic.d = Math.max(...f) - Math.min(...b);
+  return pic;
+}
+
 // ---- engine/22-lowpoly.js
 /* ---------- things in 3D: a few quads per sprite instead of one per pixel ---------- */
 // Two builds, chosen per sprite (BUILD; a loft unless it says cross):
@@ -342,7 +504,7 @@ const CUT = 300;
 //         view's commonest colour, then rectangles of the front drawing pasted on it (a door, the plinth)
 //   roof: '#rrggbb'  the roof tiles' colour (default: the drawing's commonest terracotta)
 const CURATE = {};
-const BUILD = { oak: 'cross', cypress: 'cross', olive: 'cross', bush: 'cross', lamp_post: 'cross', signpost: 'cross', lever: 'cross' };   // the statue is a loft: a figure, seen all round
+const BUILD = { bakery: 'pixel', oak: 'cross', cypress: 'cross', olive: 'cross', bush: 'cross', lamp_post: 'cross', signpost: 'cross', lever: 'cross' };   // the statue is a loft: a figure, seen all round
 const CHEST = { key: 'chest', seam: 11, open: -105 * Math.PI / 180, inset: 4, time: .35 };   // props-1's chest: rows 0-10 lid, 11-20 body
 
 // atlas coordinates (art pixels) → texture coordinates
@@ -406,6 +568,33 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
     add([[x0, Y0, Zf], [x1, Y0, Zf], [x1, Y1, Zf], [x0, Y1, Zf]], 'front'); add([[x1, Y0, Zb], [x0, Y0, Zb], [x0, Y1, Zb], [x1, Y1, Zb]], 'front');
     add([[x1, Y0, Zf], [x1, Y0, Zb], [x1, Y1, Zb], [x1, Y1, Zf]], 'side'); add([[x0, Y0, Zb], [x0, Y0, Zf], [x0, Y1, Zf], [x0, Y1, Zb]], 'side');
     add([[x0, Y1, Zf], [x1, Y1, Zf], [x1, Y1, Zb], [x0, Y1, Zb]], 'front');
+  }
+  return out;
+}
+
+// a smooth gable roof over a building drawn in code (pic.roofs: { cx apex column, xl / xr eave columns, yE eave and yR
+// ridge height in rows, zf / zb front and back, t thickness }; the ridge runs front to back): two slopes reading the
+// roof tiles drawn in code (courses along the eaves, counted down from the ridge), the fascia along the front and back
+// edges and the eave ends in the tiles' dark joint colour. A few quads instead of a staircase of 1-pixel steps
+function roofQuads(s) {
+  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes) return out;
+  const uv = (u, v) => [(T[0] + clamp(u, 0, T[2])) / AW2, (T[1] + clamp(v, 0, T[3])) / AH];
+  const q = (pts, n, uvs) => out.push({ p: pts.map(([x, y, z]) => [x - s.px, y, z]), n, uv: uvs.flat(), layer: 0 });
+  // sloping panels (an awning): the panel reads the sprite's own front pixels by height, the two ends are triangles
+  const fuv = (x, y) => [(s.ax + clamp(x, 0, s.w - .01)) / AW2, (s.ay + clamp(s.h - y, 0, s.h - .01)) / AH];
+  for (const a of s.pic.slopes || []) {
+    const dy = a.yTop - a.yBot, dz = a.zBot - a.zTop, l = Math.hypot(dy, dz), n = [0, dz / l, dy / l];
+    q([[a.x0, a.yBot, a.zBot], [a.x1, a.yBot, a.zBot], [a.x1, a.yTop, a.zTop], [a.x0, a.yTop, a.zTop]], n, [fuv(a.x0, a.yBot + .5), fuv(a.x1, a.yBot + .5), fuv(a.x1, a.yTop - .5), fuv(a.x0, a.yTop - .5)]);
+    for (const [x, sx, u] of [[a.x0, -1, a.x0 + .5], [a.x1, 1, a.x1 - .5]]) q([[x, a.yTop, a.zTop], [x, a.yBot, a.zBot], [x, a.yBot, a.zTop], [x, a.yBot, a.zTop]], [sx, 0, 0], [fuv(u, a.yTop - .5), fuv(u, a.yBot + .5), fuv(u, a.yBot + .5), fuv(u, a.yBot + .5)]);
+  }
+  for (const r of s.pic.roofs || []) {
+    const top = (y) => y + 1, d = r.zf - r.zb, dark = 3.5;
+    for (const [xe, sgn] of [[r.xl, -1], [r.xr, 1]]) {
+      const run = Math.abs(r.cx - xe), rise = r.yR - r.yE, len = Math.hypot(run, rise), n = [sgn * rise / len, run / len, 0];
+      q([[xe, top(r.yE), r.zf], [r.cx, top(r.yR), r.zf], [r.cx, top(r.yR), r.zb], [xe, top(r.yE), r.zb]], n, [uv(0, len), uv(0, 0), uv(d, 0), uv(d, len)]);   // the slope
+      for (const [z, nz] of [[r.zf, 1], [r.zb, -1]]) q([[xe, top(r.yE) - r.t, z], [r.cx, top(r.yR) - r.t, z], [r.cx, top(r.yR), z], [xe, top(r.yE), z]], [0, 0, nz], [uv(1, dark), uv(len, dark), uv(len, dark), uv(1, dark)]);   // fascia
+      q([[xe, top(r.yE) - r.t, r.zb], [xe, top(r.yE) - r.t, r.zf], [xe, top(r.yE), r.zf], [xe, top(r.yE), r.zb]], [sgn, 0, 0], [uv(0, dark), uv(d, dark), uv(d, dark), uv(0, dark)]);   // eave end
+    }
   }
   return out;
 }
@@ -571,7 +760,7 @@ function applyTod(k) {
   for (const key of ['sunI', 'az', 'el', 'hemiI', 'glow', 'lamp', 'stars', 'aur']) cur[key] = lerp(cur[key], T[key], k);
   for (const key of ['sun', 'sky', 'gnd', 'top', 'bot']) for (let i = 0; i < 3; i++) cur[key][i] = lerp(cur[key][i], T[key][i], k);
   sun.color.setRGB(cur.sun[0], cur.sun[1], cur.sun[2]); sun.intensity = cur.sunI;
-  const ce = Math.cos(cur.el); sun.position.set(A.sunX + Math.sin(cur.az) * ce * 48, Math.sin(cur.el) * 48, A.sunZ + Math.cos(cur.az) * ce * 48);
+  const ce = Math.cos(cur.el); sun.position.set(A.sunX + Math.sin(cur.az) * ce * 48, (A.sunY || 0) + Math.sin(cur.el) * 48, A.sunZ + Math.cos(cur.az) * ce * 48);
   hemi.color.setRGB(cur.sky[0], cur.sky[1], cur.sky[2]); hemi.groundColor.setRGB(cur.gnd[0], cur.gnd[1], cur.gnd[2]); hemi.intensity = cur.hemiI;
   uGlow.value = cur.glow;
   uLampCol.value.set(cur.lamp, cur.lamp * .663, cur.lamp * .353);
@@ -611,6 +800,16 @@ function inView(box, side, far, near) {
   let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
   for (const x of [box[0], box[2]]) for (const z of [box[1], box[3]]) { const dx = x - camT.x, dz = z - camT.z, a = dx * rx + dz * rz, b = dx * tx + dz * tz; a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
   return a1 >= -(hx + side) && a0 <= hx + side && b1 >= -(hz + far) && b0 <= hz + near;
+}
+// wireframe (an option): the triangle edges of every 3D thing drawn over it, also those whose pixels the material
+// discards, since they cost the same. Applied to meshes as they are built (chunks, chests) and when the option changes
+const wireMat = new THREE.MeshBasicMaterial({ color: 0xffe14a, wireframe: true, transparent: true, opacity: .85 });
+function applyWire() {
+  scene.traverse((m) => {
+    if (!m.isMesh || m.material !== matSlab) return;
+    if (!m.userData.wireOn && settings.wire) { const w = new THREE.Mesh(m.geometry, wireMat); m.add(w); m.userData.wireOn = w; }
+    if (m.userData.wireOn) m.userData.wireOn.visible = settings.wire;
+  });
 }
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH), v = Math.max(Vz, minV());
@@ -765,7 +964,7 @@ function openArea(def) {
       }
     }
     // things whose foot stands in this chunk (chests are not baked: they are props, see propMesh)
-    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); putLow(th.s.low, th.x, th.z, o); }
+    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); }
     // baked light, meshes
     B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
     const gPack = new Uint8Array(w * h * 2);
@@ -817,7 +1016,7 @@ function openArea(def) {
     for (const [i, j] of want(x, z)) { const k = ckey(i, j); if (chunks.has(k)) continue; const t0 = performance.now(); chunks.set(k, buildChunk(i, j)); area.chunkMs = Math.max(area.chunkMs, performance.now() - t0); built++; if (!all) break; }
     const [i0, j0, i1, j1] = span(viewFoot(20, 20, 26));
     for (const [k, c] of chunks) if (c.ci < i0 || c.ci > i1 || c.cj < j0 || c.cj > j1) { c.dispose(); chunks.delete(k); built++; }
-    if (built) sync();
+    if (built) { sync(); if (settings.wire) applyWire(); }
   };
   let waterT = 0, waterTick = 0, sunX = -1e9, sunZ = -1e9;
   area.update = (dt, x, z) => {
@@ -827,8 +1026,15 @@ function openArea(def) {
     }
     waterT += dt; if (waterT >= .4 && !reduceMotion) { waterT = 0; waterTick++; for (const c of chunks.values()) c.water(waterTick); }
     // the shadow box follows the view in steps of a few shadow texels, so shadows do not shimmer
-    const snap = 2 * SHADOW_HALF / 2048 * 8, sx = Math.round(camT.x / snap) * snap, sz = Math.round(camT.z / snap) * snap;
-    if (sx !== sunX || sz !== sunZ) { sunX = sx; sunZ = sz; area.sunX = sx; area.sunZ = sz; sun.target.position.set(sx, 0, sz); shadowHold = 3; }
+    // snapped on the shadow map's own grid, in the sun's frame: a step in world x / z moved the slanted map by a fraction
+    // of a texel, and every shadow edge jumped a pixel at each step while walking. Whole texels keep them still
+    const ce = Math.cos(cur.el), L = [Math.sin(cur.az) * ce, Math.sin(cur.el), Math.cos(cur.az) * ce];   // toward the sun
+    let rx = L[2], rz = -L[0]; const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;                    // the map's x: up × L
+    const ux = L[1] * rz, uy = L[2] * rx - L[0] * rz, uz = -L[1] * rx;                                     // the map's y: L × x
+    const tex = 2 * SHADOW_HALF / 2048 * 4, at = area.shadowPin || camT, a = at.x * rx + at.z * rz, b = at.x * ux + at.z * uz;   // shadowPin: the checks move the box alone
+    const da = Math.round(a / tex) * tex - a, db = Math.round(b / tex) * tex - b;
+    const sx = at.x + da * rx + db * ux, sy = db * uy, sz = at.z + da * rz + db * uz;
+    if (Math.abs(sx - sunX) + Math.abs(sz - sunZ) + Math.abs(sy - area.sunY) > 1e-6) { sunX = sx; sunZ = sz; area.sunX = sx; area.sunY = sy; area.sunZ = sz; sun.target.position.set(sx, sy, sz); shadowHold = 3; }
   };
   // triangles the view draws (main pass): the chunk meshes inside the camera's frustum
   const meshTris = (m) => { const g = m.geometry; return g.index ? g.index.count / 3 : g.attributes.position ? g.attributes.position.count / 3 : 0; };
@@ -840,7 +1046,7 @@ function openArea(def) {
   area.hide = () => { for (const c of chunks.values()) c.group.visible = false; lamps = []; };
   area.show = () => { for (const c of chunks.values()) c.group.visible = true; solids.length = base.solids; acts.length = base.acts; sync(); };
   area.sig = (def.things || []).filter((th) => th[5] && th[5].when).map((th) => th[5].when() ? 1 : 0).join('');   // which conditional things it was built with
-  area.sunX = W / 2; area.sunZ = D / 2;
+  area.sunX = W / 2; area.sunY = 0; area.sunZ = D / 2;
   Object.assign(sun.shadow.camera, { left: -SHADOW_HALF, right: SHADOW_HALF, top: SHADOW_HALF, bottom: -SHADOW_HALF, near: 1, far: 160 }); sun.shadow.camera.updateProjectionMatrix();
   area.open = (x, z) => { const fresh = !chunks.size; area.stream(x, z, true); if (fresh) area.buildMs = Math.round(performance.now() - T0); };
   return area;
@@ -1511,6 +1717,7 @@ function chestProp(id, key, x, z, o) {
   chests.set(id, { id, key, x, z, o, sparkle, lid: G.opened[id] ? CHEST.open : 0 });
 }
 function chestsBuild() {
+  if (settings.wire) setTimeout(applyWire);   // after the mesh below exists
   if (chestMesh) chestMesh.dispose(); chestMesh = null; if (!chests.size) return;
   chestMesh = propMesh([...chests.values()].map((c) => [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
 }
@@ -1755,6 +1962,7 @@ function optionsSetup() {
   });
   seg('optLang', () => settings.lang, (v) => { settings.lang = v; applyLang(); hintState = null; hudKey = ''; if (A) $('areaName').textContent = t(A.name); if (ui.screen === 'menu') renderTab(); });
   seg('optFps', () => settings.fps, (v) => { settings.fps = +v; });
+  seg('optWire', () => settings.wire ? 'on' : 'off', (v) => { settings.wire = v === 'on'; applyWire(); });
   seg('optShadows', () => settings.shadows ? 'on' : 'off', (v) => { settings.shadows = v === 'on'; sun.castShadow = settings.shadows; shadowHold = 3; });
   seg('optShake', () => settings.shake ? 'on' : 'off', (v) => { settings.shake = v === 'on'; });
   seg('optMusic', () => settings.music, (v) => { settings.music = +v; audioInit(); audioVolumes(); if (A && player) playTrack(areaTrack()); });
@@ -1819,7 +2027,7 @@ function enterArea(name, at, face) {
   tod = Math.max(0, TODS.findIndex((x) => x.label === (def.tod || 'giorno'))); applyTod(1);
   $('areaName').textContent = t(def.name); hintState = null; shadowHold = 8; dlg = null; $('dialog').hidden = true;
   if (G) G.area = name;
-  populate(def); unstick(def); playTrack(areaTrack());
+  populate(def); unstick(def); playTrack(areaTrack()); if (settings.wire) applyWire();
 }
 // a save from an older layout (or any arrival) may put the cat inside something that moved there since: step out to
 // the nearest free spot, searched in rings of a quarter unit out to 8 units; failing that, the area's start
@@ -1908,7 +2116,8 @@ function frame(now) {
   drawAcc += real; const budget = 1 / settings.fps; if (drawAcc + .002 < budget) return; drawAcc = Math.max(0, drawAcc - budget); if (drawAcc > budget) drawAcc = 0;
   draw(budget);
   frames++; fpsT += budget;
-  if (fpsT >= .5) { fps = frames / fpsT; frames = 0; fpsT = 0; if (!$('menu').hidden) $('diag').textContent = t('diag', { fps: Math.round(fps), ms: (1000 / Math.max(1, fps)).toFixed(1), tris: Math.round((A ? A.tris : 0) / 1000), calls: calls + 1, build: A ? A.buildMs : 0 }); }
+  if (fpsT >= .5) { fps = frames / fpsT; frames = 0; fpsT = 0; if (!$('menu').hidden) $('diag').textContent = t('diag', { fps: Math.round(fps), ms: (1000 / Math.max(1, fps)).toFixed(1), tris: Math.round((A ? A.tris : 0) / 1000), verts: Math.round((A ? A.tris : 0) * 2 / 1000),   // every face is a quad of its own: 4 vertices, 2 triangles
+ calls: calls + 1, build: A ? A.buildMs : 0 }); }
 }
 
 // ---- content/chapter1/areas/crypt.js
@@ -2082,6 +2291,100 @@ AREAS.overworld = (() => {
     lamps: [[38, 2.6, 39], [50, 2.6, 39], [38, 2.6, 51], [50, 2.6, 51]],
   };
 })();
+
+// ---- content/chapter1/buildings.js
+/* ---------- buildings drawn in code (they replace the sheet drawings of the same key) ---------- */
+// The bakery, after the ChatGPT design: a front-gable house in ochre plaster on a stone plinth, a shop window full of
+// bread under a green and cream awning, an arched door, a round attic window, a bread sign on an iron bracket, a brick
+// chimney near the back. 108 × 74 art pixels, 60 deep.
+CODE_ART.bakery = () => {
+  const W = 108, H = 74, p = new Pic(W, H), hd = 30, cx = 56;
+  const PLASTER = 0xe6bf78, STONE = 0xb9ad96, WOOD = 0x6e4628, ROOF = 0xc2603a, BRICK = 0xa2553a, GREEN = 0x3f8650, CREAM = 0xf0e6cf;
+  const plaster = (x, r) => jit(vnoise(x / 6, r / 6) > .72 ? shade(PLASTER, .94) : PLASTER, x >> 1, r >> 1, 3, .05);
+  const stone = (x, r) => { const row = Math.floor(r / 3), xx = x + (row % 2) * 4; return r % 3 === 2 || xx % 8 === 0 ? shade(STONE, .74) : jit(STONE, Math.floor(xx / 8), row, 5, .12); };
+  const x0 = 10, x1 = 101;                                          // the walls' outer columns
+
+  // plinth, walls, quoins (one column in from the corner, so the side walls stay plaster)
+  p.wall(x0, 0, x1 - x0 + 1, 5, stone, hd + 1, -hd);
+  p.wall(x0, 5, x1 - x0 + 1, 35, plaster, hd, -hd);
+  for (let r = 5; r < 40; r++) { const long = Math.floor((r - 5) / 4) % 2 === 0, n = long ? 5 : 3; for (let k = 1; k <= n; k++) { p.at(x0 + k, r, stone(x0 + k, r), hd, -hd); p.at(x1 - k, r, stone(x1 - k, r), hd, -hd); } }
+  // the corner columns: their side faces are the side walls, in one plain colour each (F_OWN), plaster above the plinth
+  for (let r = 0; r < 40; r++) for (const x of [x0, x1]) p.at(x, r, r < 5 ? STONE : PLASTER, r < 5 ? hd + 1 : hd, -hd, F_OWN);
+
+  // the shop window: a wooden frame, mullions, bread on two shelves in a warm lit room, a stone sill
+  const wx0 = 18, wx1 = 63, wr0 = 9, wr1 = 24;
+  for (let r = wr0; r <= wr1; r++) for (let x = wx0; x <= wx1; x++) {
+    const frame = x === wx0 || x === wx1 || r === wr0 || r === wr1, mull = (x - wx0) % 15 === 0;
+    if (frame || mull) { p.at(x, r, mull && !frame ? shade(WOOD, .9) : WOOD, frame ? hd + 1 : hd - 1, -hd); continue; }
+    const shelf = r === 13 || r === 18, loaf = !shelf && ((r >= 14 && r <= 16) || (r >= 19 && r <= 21)) && ((x + (r > 17 ? 3 : 0)) % 6) < 4;
+    const c = shelf ? 0x5a3a22 : loaf ? (r === 16 || r === 21 ? 0xc07e3a : 0xe0a454) : jit(0x6a4226, x, r, 9, .1);
+    p.at(x, r, c, hd - 4, -hd, loaf ? F_GLOW : 0);
+  }
+  for (let x = wx0 - 2; x <= wx1 + 2; x++) p.at(x, wr0 - 1, shade(STONE, 1.08), hd + 2, -hd);
+
+  // the awning: stripes 5 wide on one smooth sloping panel built by the engine (p.slopes: it reads these pixels, painted
+  // flat on the wall behind it), two triangular ends, and the scalloped hem hanging from its lower edge as pixels
+  const aw0 = wx0 - 4, aw1 = wx1 + 4, out = 9;
+  for (let k = 0; k < 7; k++) {
+    const r = 31 - k;
+    for (let x = aw0; x <= aw1; x++) {
+      const band = Math.floor((x - aw0) / 5), green = band % 2 === 0;
+      if (k === 6 && (x - aw0) % 5 !== 2) continue;                 // the hem: one point per stripe
+      const c = shade(green ? GREEN : CREAM, k === 0 ? 1.08 : 1 - k * .02);
+      if (k < 6) p.at(x, r, c, hd, -hd); else p.at(x, r, c, hd + out, -hd);   // a hem point spans the wall too (one depth interval per pixel)
+    }
+  }
+  p.slopes = [{ x0: aw0, x1: aw1 + 1, yTop: 32, yBot: 26, zTop: hd, zBot: hd + out }];
+
+  // the door: arched, planked, set in, a stone frame, two small lit panes
+  const dx0 = 76, dw = 15, dr0 = 5, dh = 23, ah = 8;
+  for (let j = 0; j < dh + 1; j++) for (let i = -1; i <= dw; i++) {
+    const jj = j - 1, inside = i >= 0 && i < dw && jj >= 0 && inArch(i, jj, dw, ah), frame = !inside && inArch(i + 1, j, dw + 2, ah + 1), r = dr0 + dh - 1 - jj;
+    if (inside) { const pane = jj >= 7 && jj <= 10 && (i === 4 || i === 5 || i === 9 || i === 10); p.at(dx0 + i, r, pane ? 0xf2b552 : i % 3 === 0 ? shade(WOOD, .76) : jit(WOOD, i, jj >> 2, 12, .1), hd - 3, -hd, pane ? F_GLOW : 0); }
+    else if (frame) p.at(dx0 + i, r, shade(STONE, 1.05), hd + 1, -hd);
+  }
+
+  // cornice under the gable
+  for (let x = x0 - 2; x <= x1 + 2; x++) { p.at(x, 40, shade(STONE, .82), hd + 2, -hd - 2); p.at(x, 41, STONE, hd + 2, -hd - 2); }
+
+  // the gable wall under the roof. The roof itself is two smooth slopes built by the engine (p.roofs, see roofQuads),
+  // tiled like the other buildings' roofs, overhanging 3 px front and back and 4 px at the eaves
+  const rise = 27, half0 = x1 - cx + 4;
+  const roofLine = (x) => 42 + rise * (1 - Math.abs(x + .5 - cx) / half0);
+  for (let r = 42; r < 42 + rise; r++) { const hw = (x1 - cx) * (1 - (r - 42) / rise); for (let x = Math.ceil(cx - hw); x <= Math.floor(cx + hw); x++) p.at(x, r, plaster(x, r), hd, -hd, F_OWN); }   // its stepped edges (under the roof) one strip each
+  p.roofs = [{ cx: cx + .5, xl: cx + .5 - half0, xr: cx + .5 + half0, yE: 42, yR: 42 + rise, zf: hd + 3, zb: -hd - 3, t: 3 }];
+
+  // the round attic window, lit
+  for (let r = 49; r <= 59; r++) for (let x = cx - 6; x <= cx + 5; x++) {
+    const d = Math.hypot(x + .5 - cx, r + .5 - 54); if (d > 5.6) continue;
+    p.at(x, r, d > 4.2 ? shade(STONE, 1.05) : (x === cx || r === 54) ? WOOD : 0xf2b552, d > 4.2 ? hd + 1 : hd - 2, -hd, d > 4.2 ? 0 : F_GLOW);
+  }
+
+  // the chimney: bricks above the roof line, a stone cap; a straight block near the back
+  for (let x = 82; x <= 90; x++) for (let r = Math.ceil(roofLine(x)) + 1; r <= 70; r++) {
+    const cap = r >= 68, brick = (r % 3 === 0) || ((x + (Math.floor(r / 3) % 2) * 2) % 4 === 0);
+    p.at(x, r, cap ? shade(STONE, r === 70 ? 1.1 : .9) : brick ? shade(BRICK, .78) : jit(BRICK, x, r, 7, .1), -10, -22);
+  }
+  for (let x = 81; x <= 91; x++) p.at(x, 70, shade(STONE, 1.1), -9, -23);
+
+  // the bread sign: an iron bracket from the corner, a round board with a loaf, a thin board at the front
+  for (let x = 1; x <= x0 - 1; x++) p.at(x, 33, 0x2a2420, hd + 2, hd - 2);
+  for (let r = 19; r <= 31; r++) for (let x = 0; x <= 9; x++) {
+    const d = Math.hypot(x + .5 - 5, r + .5 - 25); if (d > 5.6) continue;
+    const loaf = Math.abs(x + .5 - 5) < 3.2 && Math.abs(r + .5 - 25) < 1.6;
+    p.at(x, r, d > 4.6 ? WOOD : loaf ? 0xe0a454 : 0xead7a8, hd + 3, hd + 1);
+  }
+  p.at(3, 32, 0x2a2420, hd + 2, hd); p.at(7, 32, 0x2a2420, hd + 2, hd);
+
+  // the back: the same outline, plain plaster with a back door and a small window, the plinth, the roof and chimney
+  const back = Int32Array.from(p.c);
+  for (let r = 5; r < 40; r++) for (let x = x0; x <= x1; x++) back[p.Y(r) * W + x] = plaster(x * 3 + 7, r);
+  for (let r = 0; r < 5; r++) for (let x = x0; x <= x1; x++) back[p.Y(r) * W + x] = stone(x, r);
+  for (let r = 5; r < 26; r++) for (let x = 20; x < 32; x++) back[p.Y(r) * W + x] = x === 20 || x === 31 || r === 25 ? shade(STONE, 1.05) : (x - 20) % 3 === 0 ? shade(WOOD, .76) : WOOD;
+  for (let r = 16; r < 25; r++) for (let x = 66; x < 76; x++) back[p.Y(r) * W + x] = x === 66 || x === 75 || r === 16 || r === 24 ? shade(STONE, 1.05) : 0x3a2c26;
+  p.back = back; p.tiles = true;
+  return p.done();
+};
 
 // ---- content/chapter1/enemies.js
 /* ---------- the inky creatures of Chapter 1 (spec §10): every strike has a tell of at least 0.35 s ---------- */
@@ -2378,13 +2681,7 @@ function showEnding() {
 /* ---------- curation: hand fixes per building, applied at load (see CURATE in engine/22-lowpoly.js) ---------- */
 // Coordinates are art pixels of the sprite's own drawings: front (x, row), side view (depth from the front, row).
 Object.assign(CURATE, {
-  bakery: {
-    cuts: [
-      { front: [95, 0, 104, 22], side: [65, 0, 77, 22] },   // the chimney, near the back
-      { front: [0, 32, 15, 53], side: [0, 32, 3, 53] },      // the bread sign, hanging at the front corner
-    ],
-    back: { wall: 'plaster', paste: [[82, 37, 16, 26, 22, 37], [18, 63, 93, 8, 18, 63]] },   // a back door; the stone plinth
-  },
+  // the bakery is drawn in code now (content/chapter1/buildings.js)
   library: { back: { wall: 'stone' } },
 });
 
@@ -2437,6 +2734,8 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   const wake = () => { audioInit(); if (AU && AU.ctx.state === 'suspended') AU.ctx.resume(); };
   addEventListener('pointerdown', wake, { once: true }); addEventListener('keydown', wake, { once: true });
   document.addEventListener('visibilitychange', () => { if (AU) document.hidden ? AU.ctx.suspend() : AU.ctx.resume(); });
+  // no browser menu on a right click or a long press, except in text fields (the save code is copied and pasted there)
+  addEventListener('contextmenu', (e) => { if (!/^(TEXTAREA|INPUT)$/.test(e.target.tagName)) e.preventDefault(); });
   // drag turns the view, the wheel zooms (as in the dioramas)
   let drag = null;
   canvas.addEventListener('pointerdown', (e) => { drag = { id: e.pointerId, x: e.clientX }; canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); });
@@ -2457,7 +2756,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     act: (a) => input.queue.push(a),
     spawn: (type, x, z) => { spawnEnemy(type, x, z); },
     flag: (f) => setFlag(f),
-    spriteTris: () => Object.fromEntries(SPRITES.map((s) => [s.key, 2 * s.low.length])),
+    spriteTris: () => Object.fromEntries(SPRITES.map((s) => [s.key, (s.pixel ? 2 * (s.layF.length + s.layB.length + s.strips.length) : 0) + 2 * s.low.length])),
     G: () => G, code: () => saveCode(), read: (c) => readCode(c), enter: (n, at) => enterArea(n, at),
     area: () => A,
     // for the checks: stop the frame loop, reseed, and run the 120 Hz simulation by hand (bot is called before each step)
@@ -2467,6 +2766,11 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     clearEnemies: () => clearEnemies(),
     internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS }),
     view: (y) => { yaw = yawT = y; intro = 1; },
+    shadowAt: (x, z) => { A.shadowPin = x === undefined ? null : { x, z }; },
+    // the triangle edges of every thing drawn over it (for the review): every triangle, also those whose pixels the
+    // material discards, since they cost the same
+    wire: (on) => { settings.wire = !!on; applyWire(); },
+    parts: (k) => { const s = sp[k]; return s.pixel ? { front: 2 * s.layF.length, back: 2 * s.layB.length, sides: 2 * s.strips.length, roof: 2 * s.low.length } : { faces: 2 * s.low.length }; },
     low: (k) => sp[k].low.map((q) => ({ n: q.n.map((v) => +v.toFixed(2)), y: q.p.map((p) => p[1]), layer: q.layer })),
     atlas: () => ({ AW2, AH, sprites: AP.sprites, px: (x, y) => [...atlasPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)], aux: (x, y) => [...auxPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)] }),
     zoom: (v) => { VT = Vz = v; },
