@@ -619,15 +619,16 @@ function roofQuads(s) {
   // boxes: { x0, x1 columns (x1 past the last), r0, r1 rows from the ground, zf, zb, faces } - a cornice, a chimney,
   // a frame. faces 'all': a solid with 6 faces; 'sides': the 4 side faces only (its front is drawn as pixels); 'in': the
   // 4 faces of a hole looking inward (a recess). Front and back read the front pixels; a side face the drawn row or
-  // column along its edge, stretched over its depth
+  // column along its edge, stretched over its depth. skip: faces left out, 'top' / 'bottom' (a wall sitting on a
+  // plinth under a cornice: those faces are inside, and the bottom one fought the plinth's top in the door's recess)
   for (const b of s.pic.boxes || []) {
-    const { x0, x1, r0, r1, zf, zb } = b, F = b.faces || 'all', o = F === 'in' ? -1 : 1, e = .02;
+    const { x0, x1, r0, r1, zf, zb } = b, F = b.faces || 'all', o = F === 'in' ? -1 : 1, e = .02, skip = b.skip || [];
     const side = (pts, n, uvs) => q(pts, n.map((v) => v * o), uvs);
     const ux0 = F === 'in' ? x0 - .5 : x0 + .5, ux1 = F === 'in' ? x1 + .5 : x1 - .5, vy0 = F === 'in' ? r0 - .5 : r0 + .5, vy1 = F === 'in' ? r1 + .5 : r1 - .5;
     side([[x0, r0, zf], [x0, r0, zb], [x0, r1, zb], [x0, r1, zf]], [-1, 0, 0], [fuv(ux0, r0 + e), fuv(ux0, r0 + e), fuv(ux0, r1 - e), fuv(ux0, r1 - e)]);
     side([[x1, r0, zb], [x1, r0, zf], [x1, r1, zf], [x1, r1, zb]], [1, 0, 0], [fuv(ux1, r0 + e), fuv(ux1, r0 + e), fuv(ux1, r1 - e), fuv(ux1, r1 - e)]);
-    side([[x0, r1, zf], [x1, r1, zf], [x1, r1, zb], [x0, r1, zb]], [0, 1, 0], [fuv(x0 + e, vy1), fuv(x1 - e, vy1), fuv(x1 - e, vy1), fuv(x0 + e, vy1)]);
-    side([[x0, r0, zb], [x1, r0, zb], [x1, r0, zf], [x0, r0, zf]], [0, -1, 0], [fuv(x0 + e, vy0), fuv(x1 - e, vy0), fuv(x1 - e, vy0), fuv(x0 + e, vy0)]);
+    if (!skip.includes('top')) side([[x0, r1, zf], [x1, r1, zf], [x1, r1, zb], [x0, r1, zb]], [0, 1, 0], [fuv(x0 + e, vy1), fuv(x1 - e, vy1), fuv(x1 - e, vy1), fuv(x0 + e, vy1)]);
+    if (!skip.includes('bottom')) side([[x0, r0, zb], [x1, r0, zb], [x1, r0, zf], [x0, r0, zf]], [0, -1, 0], [fuv(x0 + e, vy0), fuv(x1 - e, vy0), fuv(x1 - e, vy0), fuv(x0 + e, vy0)]);
     if (F === 'all') for (const [z, nz] of [[zf, 1], [zb, -1]]) q([[x0, r0, z], [x1, r0, z], [x1, r1, z], [x0, r1, z]], [0, 0, nz], [fuv(x0 + e, r0 + e), fuv(x1 - e, r0 + e), fuv(x1 - e, r1 - e), fuv(x0 + e, r1 - e)]);
   }
   for (const g of s.pic.rings || []) {
@@ -675,13 +676,16 @@ function revolveOf(s, r0, r1, n) {
   for (let r = r1 - 1; r >= r0; r -= 2) { const sp = rowSpan(s, r); if (sp) rings.push({ y: s.h - r - (r === r1 - 1 ? 1 : 0), cx: (sp[0] + sp[1]) / 2, R: (sp[1] - sp[0]) / 2, r }); }
   const top = rowSpan(s, r0); if (top) rings.push({ y: s.h - r0, cx: (top[0] + top[1]) / 2, R: (top[1] - top[0]) / 2, r: r0 });
   const zc = s.depth / 2, P_ = (g, t) => [g.cx + g.R * Math.sin(t), g.y, zc + g.R * Math.cos(t)];
+  // a segment's normal leans up where the shape narrows going up (a barrel's shoulders), down where it widens: a level
+  // normal there lit it wrong and read as seen from behind from above
+  const nr = (x, y, z) => { const l = Math.hypot(x, y, z); return [x / l, y / l, z / l]; };
   for (let i = 0; i + 1 < rings.length; i++) {
     const a = rings[i], b = rings[i + 1];
     for (let k = 0; k < n; k++) {
       // each segment spreads the columns of the drawing it covers (x = axis + R sin t): the front half as drawn, the back
       // half mirrored; one column per segment striped the cylinder like a barcode
       const t0 = k / n * Math.PI * 2, t1 = (k + 1) / n * Math.PI * 2, tm = (t0 + t1) / 2, u = (g, t) => g.cx + g.R * Math.sin(t) * .98;
-      out.push(rawQuad(s, [P_(a, t0), P_(a, t1), P_(b, t1), P_(b, t0)], [Math.sin(tm), 0, Math.cos(tm)], [fpx(s, u(a, t0), a.y + .5), fpx(s, u(a, t1), a.y + .5), fpx(s, u(b, t1), b.y - .5), fpx(s, u(b, t0), b.y - .5)]));
+      out.push(rawQuad(s, [P_(a, t0), P_(a, t1), P_(b, t1), P_(b, t0)], nr(Math.sin(tm), (a.R - b.R) / (b.y - a.y), Math.cos(tm)), [fpx(s, u(a, t0), a.y + .5), fpx(s, u(a, t1), a.y + .5), fpx(s, u(b, t1), b.y - .5), fpx(s, u(b, t0), b.y - .5)]));
     }
   }
   const t = rings[rings.length - 1];
@@ -771,7 +775,8 @@ try { renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: fals
 const scene = new THREE.Scene();
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, .6); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 1); sun.castShadow = settings.shadows;
-sun.shadow.mapSize.set(2048, 2048); sun.shadow.autoUpdate = false; sun.shadow.bias = -0.0004;
+const SHADOW_MAP = window.__shadowMap || 1024;   // a texel about one art pixel: 2048 looked the same at 4 times the cost
+sun.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP); sun.shadow.autoUpdate = false; sun.shadow.bias = -0.0004;
 scene.add(sun); scene.add(sun.target);
 if (renderer) { renderer.setPixelRatio(1); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.BasicShadowMap; renderer.info.autoReset = false; }
 
@@ -1163,7 +1168,7 @@ function openArea(def) {
     const ce = Math.cos(cur.el), L = [Math.sin(cur.az) * ce, Math.sin(cur.el), Math.cos(cur.az) * ce];   // toward the sun
     let rx = L[2], rz = -L[0]; const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;                    // the map's x: up × L
     const ux = L[1] * rz, uy = L[2] * rx - L[0] * rz, uz = -L[1] * rx;                                     // the map's y: L × x
-    const tex = 2 * SHADOW_HALF / 2048 * 4, at = area.shadowPin || camT, a = at.x * rx + at.z * rz, b = at.x * ux + at.z * uz;   // shadowPin: the checks move the box alone
+    const tex = 2 * SHADOW_HALF / SHADOW_MAP * 4, at = area.shadowPin || camT, a = at.x * rx + at.z * rz, b = at.x * ux + at.z * uz;   // shadowPin: the checks move the box alone
     const da = Math.round(a / tex) * tex - a, db = Math.round(b / tex) * tex - b;
     const sx = at.x + da * rx + db * ux, sy = db * uy, sz = at.z + da * rz + db * uz;
     if (Math.abs(sx - sunX) + Math.abs(sz - sunZ) + Math.abs(sy - area.sunY) > 1e-6) { sunX = sx; sunZ = sz; area.sunX = sx; area.sunY = sy; area.sunZ = sz; sun.target.position.set(sx, sy, sz); shadowHold = 3; }
@@ -2254,6 +2259,77 @@ function frame(now) {
  calls: calls + 1, build: A ? A.buildMs : 0 }); }
 }
 
+// ---- engine/88-qa.js
+/* ---------- QA passes for the checks (tools/render-check.mjs): the scene drawn with flat stand-in materials, counted ---------- */
+// idPass: every mesh of things (the slab material) in its own flat colour, cut by the slab's layer test, everything else
+//   black; then the same view with the real material. Returns, per such mesh, its triangles, whether its centre is on
+//   screen, the pixels it covers, and how many of them the real material draws (a material that discards or hides
+//   everything once made every thing vanish: the flat pass alone would not see it).
+// holePass: things in their front-facing colour, but any face seen from behind in magenta: through a hole in a closed
+//   shape the camera sees the inside of the back wall. Returns the magenta pixels and where they are.
+const qaTarget = new THREE.WebGLRenderTarget(640, 360, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+const qaFlat = (c) => new THREE.MeshBasicMaterial({ color: c });
+const qaId = (c) => new THREE.ShaderMaterial({
+  uniforms: { uCol: { value: new THREE.Color(c) }, uAux: { value: auxTex } },
+  vertexShader: 'attribute float aLayer; varying float vLayer; varying vec2 vUv; void main(){ vLayer = aLayer; vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'uniform vec3 uCol; uniform sampler2D uAux; varying float vLayer; varying vec2 vUv; void main(){ ' + LAYER_TEST + ' gl_FragColor = vec4(uCol, 1.0); }',
+});
+const qaHole = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  uniforms: { uView: { value: new THREE.Vector3() }, uAux: { value: null }, uC: { value: new THREE.Vector2() } },
+  // a face whose stored normal points away from the camera, yet is seen: the camera looks inside through a hole. (Not
+  // gl_FrontFacing: the builders orient faces by their normals, and the winding is no better witness than the normal.)
+  // The slab's own layer test first: front and back layers are 16-pixel rectangles cut to the drawing per pixel, so
+  // without it every rectangle's corners read as holes. Cards (layer CUT) are two faces back to back on purpose: never magenta.
+  // A face seen from behind is red at full, its world x and z (around the camera's target, ±32) in green and blue: the
+  // check names the thing nearest to the hole in the world, not on screen
+  vertexShader: 'attribute float aLayer; varying float vLayer; varying vec2 vUv; varying vec3 vN; varying vec3 vW; void main(){ vLayer = aLayer; vUv = uv; vN = normalize(mat3(modelMatrix) * normal); vW = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'uniform vec3 uView; uniform vec2 uC; uniform sampler2D uAux; varying float vLayer; varying vec2 vUv; varying vec3 vN; varying vec3 vW; void main(){ ' + LAYER_TEST + ' gl_FragColor = (dot(vN, uView) > -0.05 || vLayer > 299.5) ? vec4(0.5, 0.5, 0.5, 1.0) : vec4(1.0, clamp((vW.x - uC.x) / 64.0 + 0.5, 0.0, 1.0), clamp((vW.z - uC.y) / 64.0 + 0.5, 0.0, 1.0), 1.0); }',
+});
+function qaRender(assign) {
+  const swaps = [], hidden = [];
+  scene.traverse((o) => {
+    if (o.isSprite || o.userData.wire || (o.isMesh && o.parent && o.parent.userData && o.parent.userData.wireOn === o)) { if (o.visible) { hidden.push(o); o.visible = false; } return; }
+    if (o.isMesh) { swaps.push([o, o.material]); o.material = assign(o); }
+  });
+  const prevBg = scene.background; scene.background = new THREE.Color(0);
+  renderer.setRenderTarget(qaTarget); renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(scene, cam); renderer.setRenderTarget(null);
+  const px = new Uint8Array(640 * 360 * 4); renderer.readRenderTargetPixels(qaTarget, 0, 0, 640, 360, px);
+  for (const [o, m] of swaps) o.material = m; for (const o of hidden) o.visible = true; scene.background = prevBg;
+  return px;
+}
+function idPass() {
+  const things = []; scene.traverse((o) => { if (o.isMesh && o.material === matSlab && o.visible && (!o.parent || o.parent.visible)) things.push(o); });
+  const black = qaFlat(0), cols = things.map((_, i) => ((i + 1) * 40503) & 0xffffff | 0x010101), mats = cols.map(qaId);
+  const px = qaRender((o) => { const i = things.indexOf(o); return i >= 0 ? mats[i] : black; });
+  const real = qaRender((o) => things.includes(o) ? o.material : black);
+  const count = new Map(), shown = new Map();
+  for (let k = 0; k < px.length; k += 4) { const c = (px[k] << 16) | (px[k + 1] << 8) | px[k + 2]; if (!c) continue; count.set(c, (count.get(c) || 0) + 1); if (real[k] | real[k + 1] | real[k + 2]) shown.set(c, (shown.get(c) || 0) + 1); }
+  const v = new THREE.Vector3();
+  const out = things.map((o, i) => {
+    const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+    v.copy(g.boundingSphere.center).applyMatrix4(o.matrixWorld).project(cam);
+    return { tris: g.index ? g.index.count / 3 : 0, onScreen: Math.abs(v.x) < .9 && Math.abs(v.y) < .9, px: count.get(cols[i]) || 0, shown: shown.get(cols[i]) || 0 };
+  });
+  mats.forEach((m) => m.dispose()); black.dispose();
+  return out;
+}
+let qaLast = null;   // the last pass's pixels, for a picture (qaImage)
+const qaImage = () => Array.from(qaLast || []);
+function holePass() {
+  cam.getWorldDirection(qaHole.uniforms.uView.value).negate();   // toward the camera
+  qaHole.uniforms.uAux.value = auxTex; qaHole.uniforms.uC.value.set(camT.x, camT.z);
+  const black = qaFlat(0), px = qaRender((o) => o.material === matSlab ? qaHole : black);
+  // the seen-from-behind pixels, and where they are in the world: a count per whole world cell, the largest first
+  let n = 0, sx = 0, sy = 0; const cells = new Map();
+  for (let k = 0; k < px.length; k += 4) if (px[k] > 200) {
+    n++; sx += (k / 4) % 640; sy += 359 - Math.floor(k / 4 / 640);
+    const key = Math.round(camT.x + (px[k + 1] / 255 - .5) * 64) + ',' + Math.round(camT.z + (px[k + 2] / 255 - .5) * 64); cells.set(key, (cells.get(key) || 0) + 1);
+  }
+  black.dispose(); qaLast = px;
+  return { magenta: n, at: n ? [Math.round(sx / n), Math.round(sy / n)] : null, spots: [...cells].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, m]) => [...c.split(',').map(Number), m]) };
+}
+
 // ---- content/chapter1/areas/crypt.js
 /* ---------- the crypt under the church: an ink pool crossed with the dash, three levers, the arch to the Scribe ---------- */
 // legend: W walls, V low walls (the front, and walls across the room the camera must see past), o floor, w the ink pool
@@ -2447,7 +2523,7 @@ CODE_ART.bakery = () => {
   for (let r = 0; r < 40; r++) for (const x of [x0, x1]) p.at(x, r, r < 5 ? STONE : PLASTER, r < 5 ? hd + 1 : hd, -hd, BOXES ? F_NOSIDE : F_OWN);
   const boxes = p.boxes = [];
   if (BOXES) { for (let r = 0; r < 5; r++) for (let x = x0; x <= x1; x++) p.fl[p.Y(r) * W + x] |= F_NOSIDE;   // plinth and side walls: two boxes' sides
-    boxes.push({ x0, x1: x1 + 1, r0: 0, r1: 5, zf: hd + 1, zb: -hd, faces: 'sides' }, { x0, x1: x1 + 1, r0: 5, r1: 40, zf: hd, zb: -hd, faces: 'sides' }); }
+    boxes.push({ x0, x1: x1 + 1, r0: 0, r1: 5, zf: hd + 1, zb: -hd, faces: 'sides' }, { x0, x1: x1 + 1, r0: 5, r1: 40, zf: hd, zb: -hd, faces: 'sides', skip: ['top', 'bottom'] }); }
 
   // the shop window: a wooden frame, mullions, bread on two shelves in a warm lit room, a stone sill
   const wx0 = 18, wx1 = 63, wr0 = 9, wr1 = 24;
@@ -2919,8 +2995,9 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     reseed: (n) => reseed(n),
     sim: (secs, bot) => { const n = Math.round(secs / SIM); for (let i = 0; i < n; i++) { if (bot && bot(i * SIM) === false) return i * SIM; step(SIM); flatsDraw(SIM); } return secs; },
     clearEnemies: () => clearEnemies(),
-    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART }),
+    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART, scene, matSlab }),
     view: (y) => { yaw = yawT = y; intro = 1; },
+    idPass: () => idPass(), holePass: () => holePass(), qaImage: () => qaImage(),
     rescale: (k) => { window.__ss = k; resize(); },
     camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: Math.max(Vz, minV()), rt: [rt.width, rt.height] }),
     shadowAt: (x, z) => { A.shadowPin = x === undefined ? null : { x, z }; },
