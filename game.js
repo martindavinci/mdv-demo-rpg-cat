@@ -547,6 +547,16 @@ function viewFoot(side, far, near) {
   }
   return [x0, z0, x1, z1];
 }
+// does the ground box [x0, z0, x1, z1] meet the view's footprint (turned with the view, grown as in viewFoot)?
+// Measured in view terms (across the screen, toward the camera): on a diagonal view the box around the footprint
+// takes in a third more ground than the view shows
+function inView(box, side, far, near) {
+  const vv = Math.max(Vz, VT, minV()), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2;
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw), tx = Math.sin(yaw), tz = Math.cos(yaw);
+  let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
+  for (const x of [box[0], box[2]]) for (const z of [box[1], box[3]]) { const dx = x - camT.x, dz = z - camT.z, a = dx * rx + dz * rz, b = dx * tx + dz * tz; a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
+  return a1 >= -(hx + side) && a0 <= hx + side && b1 >= -(hz + far) && b0 <= hz + near;
+}
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH), v = Math.max(Vz, minV());
   cam.position.set(camT.x + Math.sin(yaw) * cp * CD, camT.y + spn * CD, camT.z + Math.cos(yaw) * cp * CD); cam.lookAt(camT);
@@ -758,8 +768,7 @@ function openArea(def) {
   area.update = (dt, x, z) => {
     area.stream(x, z, false);
     if (def.keep) {   // all built: draw (and shadow) only the chunks under the view
-      const [i0, j0, i1, j1] = span(viewFoot(3, 1, 9));
-      for (const c of chunks.values()) c.group.visible = c.ci >= i0 && c.ci <= i1 && c.cj >= j0 && c.cj <= j1;
+      for (const c of chunks.values()) c.group.visible = inView([c.ci * cwu, c.cj * chu, (c.ci + 1) * cwu, (c.cj + 1) * chu], 3, 1, 9);
     }
     waterT += dt; if (waterT >= .4 && !reduceMotion) { waterT = 0; waterTick++; for (const c of chunks.values()) c.water(waterTick); }
     // the shadow box follows the view in steps of a few shadow texels, so shadows do not shimmer
@@ -2009,7 +2018,7 @@ AREAS.overworld = (() => {
     else if (ch === 'X' && h > .93) { const inner = Math.min(c, C - 1 - c, r, RW - 1 - r) >= 6; if (inner) things.push([pickTree(hash2(c * 3, r), RIM), x, z, 0, 0]); }
   }
   return {
-    id: 'overworld', name: 'area.village', cell: 2, chunk: [12, 9], keep: true, tod: 'giorno', start: [44, 49], camNorth: 1.5, music: (x) => x > 64 ? 'road' : 'village',
+    id: 'overworld', name: 'area.village', cell: 2, chunk: [16, 12], keep: true, tod: 'giorno', start: [44, 49], camNorth: 1.5, music: (x) => x > 64 ? 'road' : 'village',
     legend: { g: { tile: 'grass' }, f: { tile: 'grass_flowers' }, c: { tile: 'cobblestone' }, p: { tile: 'dirt_path' }, a: { tile: 'farmland' },
       w: { tile: 'water', water: true, h: -3 }, X: { tile: 'grass', h: 56, cliff: true }, Y: { tile: 'grass_flowers', h: 56, cliff: true } },
     map, things,
