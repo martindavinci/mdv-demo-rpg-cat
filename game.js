@@ -825,9 +825,17 @@ function applyWire() {
     if (m.userData.wireOn) m.userData.wireOn.visible = settings.wire;
   });
 }
+const _camS = new THREE.Vector3();
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH), v = Math.max(Vz, minV());
-  cam.position.set(camT.x + Math.sin(yaw) * cp * CD, camT.y + spn * CD, camT.z + Math.cos(yaw) * cp * CD); cam.lookAt(camT);
+  // the camera moves by whole pixels of the render target: moving by a fraction of a pixel, thin lines (shadow edges,
+  // window bars) fell on one pixel in a frame and on its neighbour in the next, and shimmered while walking
+  const px = v / Math.max(1, rt.height), sy = Math.sin(yaw), cy = Math.cos(yaw);
+  const X = [cy, 0, -sy], U = [-spn * sy, cp, -spn * cy];                   // the camera's right and up, in the world
+  const a = camT.x * X[0] + camT.z * X[2], b = camT.x * U[0] + camT.y * U[1] + camT.z * U[2];
+  const da = Math.round(a / px) * px - a, db = Math.round(b / px) * px - b;
+  _camS.set(camT.x + da * X[0] + db * U[0], camT.y + db * U[1], camT.z + da * X[2] + db * U[2]);
+  cam.position.set(_camS.x + sy * cp * CD, _camS.y + spn * CD, _camS.z + cy * cp * CD); cam.lookAt(_camS);
   cam.top = v / 2; cam.bottom = -v / 2; cam.right = v / 2 * aspect; cam.left = -cam.right; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
 }
 
