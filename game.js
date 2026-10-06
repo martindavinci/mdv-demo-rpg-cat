@@ -64,7 +64,8 @@ function loadArt() {
       }
     }
     // art drawn in code replaces the sheet's drawing of the same key
-    for (const [key, draw] of Object.entries(CODE_ART)) { const k = DEFS.findIndex((d) => d.key === key); if (k >= 0) DEFS.splice(k, 1); DEFS.push({ key, name: key, sheet: 'code', pic: draw() }); }
+    // (a building shaped from a spec gets the sheet's drawing it replaces)
+    for (const [key, draw] of Object.entries(CODE_ART)) { const k = DEFS.findIndex((d) => d.key === key), old = k >= 0 ? DEFS[k] : null; if (k >= 0) DEFS.splice(k, 1); DEFS.push({ key, name: key, sheet: 'code', pic: draw(old) }); }
   });
 }
 
@@ -279,7 +280,9 @@ class Spr {
       atlasPx[kr] = sc[j * 3]; atlasPx[kr + 1] = sc[j * 3 + 1]; atlasPx[kr + 2] = sc[j * 3 + 2]; atlasPx[kr + 3] = 255;
       if (on) { auxPx[kl] = cf[i]; auxPx[kl + 1] = cb[i]; auxPx[kl + 3] = 255; auxPx[kl + 2] = auxPx[kr + 2] = this.glow[i] ? 255 : 0; }
     }
-    this.each((x, y, i) => { if (this.fl[i] & F_GHOST) { d[i * 4 + 3] = 0; const kl = ((this.ay + y) * AW2 + this.ax + x) * 4; auxPx[kl] = auxPx[kl + 1] = 0; } });   // ghosts: colour only
+    // ghosts: colour only. A ghost that is also NOSIDE belongs to a card (engine/24-shapes.js): its card's number k is in its
+    // back depth, and its aux alpha becomes 254 - k, which only that card's faces (layer 500 + k) draw
+    this.each((x, y, i) => { if (this.fl[i] & F_GHOST) { d[i * 4 + 3] = 0; const kl = ((this.ay + y) * AW2 + this.ax + x) * 4; auxPx[kl] = auxPx[kl + 1] = 0; if (this.fl[i] & F_NOSIDE) auxPx[kl + 3] = 254 - this.zb[i]; } });
     if (this.pixel) { this.layF = this.layers(cf); this.layB = this.layers(cb); this.sides(); }
     return this;
   }
@@ -590,7 +593,7 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
 // roof tiles drawn in code (courses along the eaves, counted down from the ridge), the fascia along the front and back
 // edges and the eave ends in the tiles' dark joint colour. A few quads instead of a staircase of 1-pixel steps
 function roofQuads(s) {
-  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes && !s.pic.discs && !s.pic.rings && !s.pic.boxes) return out;
+  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes && !s.pic.discs && !s.pic.rings && !s.pic.boxes && !s.pic.hroofs && !s.pic.cones && !s.pic.cyls && !s.pic.cards) return out;
   const uv = (u, v) => [(T[0] + clamp(u, 0, T[2])) / AW2, (T[1] + clamp(v, 0, T[3])) / AH];
   const q = (pts, n, uvs) => out.push({ p: pts.map(([x, y, z]) => [x - s.px, y, z]), n, uv: uvs.flat(), layer: 0 });
   // sloping panels (an awning): the panel reads the sprite's own front pixels by height, the two ends are triangles
@@ -625,8 +628,17 @@ function roofQuads(s) {
     const { x0, x1, r0, r1, zf, zb } = b, F = b.faces || 'all', o = F === 'in' ? -1 : 1, e = .02, skip = b.skip || [];
     const side = (pts, n, uvs) => q(pts, n.map((v) => v * o), uvs);
     const ux0 = F === 'in' ? x0 - .5 : x0 + .5, ux1 = F === 'in' ? x1 + .5 : x1 - .5, vy0 = F === 'in' ? r0 - .5 : r0 + .5, vy1 = F === 'in' ? r1 + .5 : r1 - .5;
+    if (b.swatch && s.back) {   // walls of a shaped building: a swatch of the plain wall (the back picture), repeated along the depth
+      const [w0, w1] = b.swatch, sw = Math.max(1, w1 - w0), bu = (x, y) => [(s.back[0] + clamp(x, 0, s.w - .01)) / AW2, (s.back[1] + clamp(s.h - y, 0, s.h - .01)) / AH];
+      for (let za = zb; za < zf; za += sw) {
+        const zz = Math.min(zf, za + sw), ua = w0, ub = w0 + (zz - za);
+        side([[x0, r0, zz], [x0, r0, za], [x0, r1, za], [x0, r1, zz]], [-1, 0, 0], [bu(ub, r0 + e), bu(ua, r0 + e), bu(ua, r1 - e), bu(ub, r1 - e)]);
+        side([[x1, r0, za], [x1, r0, zz], [x1, r1, zz], [x1, r1, za]], [1, 0, 0], [bu(ua, r0 + e), bu(ub, r0 + e), bu(ub, r1 - e), bu(ua, r1 - e)]);
+      }
+    } else {
     side([[x0, r0, zf], [x0, r0, zb], [x0, r1, zb], [x0, r1, zf]], [-1, 0, 0], [fuv(ux0, r0 + e), fuv(ux0, r0 + e), fuv(ux0, r1 - e), fuv(ux0, r1 - e)]);
     side([[x1, r0, zb], [x1, r0, zf], [x1, r1, zf], [x1, r1, zb]], [1, 0, 0], [fuv(ux1, r0 + e), fuv(ux1, r0 + e), fuv(ux1, r1 - e), fuv(ux1, r1 - e)]);
+    }
     if (!skip.includes('top')) side([[x0, r1, zf], [x1, r1, zf], [x1, r1, zb], [x0, r1, zb]], [0, 1, 0], [fuv(x0 + e, vy1), fuv(x1 - e, vy1), fuv(x1 - e, vy1), fuv(x0 + e, vy1)]);
     if (!skip.includes('bottom')) side([[x0, r0, zb], [x1, r0, zb], [x1, r0, zf], [x0, r0, zf]], [0, -1, 0], [fuv(x0 + e, vy0), fuv(x1 - e, vy0), fuv(x1 - e, vy0), fuv(x0 + e, vy0)]);
     if (F === 'all') for (const [z, nz] of [[zf, 1], [zb, -1]]) q([[x0, r0, z], [x1, r0, z], [x1, r1, z], [x0, r1, z]], [0, 0, nz], [fuv(x0 + e, r0 + e), fuv(x1 - e, r0 + e), fuv(x1 - e, r1 - e), fuv(x0 + e, r1 - e)]);
@@ -640,6 +652,77 @@ function roofQuads(s) {
       q([[...o0, g.zf], [...o1, g.zf], [...i1, g.zf], [...i0, g.zf]], [0, 0, 1], [c, c, c, c]);                       // front
       q([[...o0, g.zf], [...o0, g.zw], [...o1, g.zw], [...o1, g.zf]], nO, [c, c, c, c]);                               // outer edge
       q([[...i0, g.zf], [...i1, g.zf], [...i1, g.zi], [...i0, g.zi]], [-nO[0], -nO[1], 0], [c, c, c, c]);             // inner tube
+    }
+  }
+  // roofs of any plan (pic.hroofs, the buildings shaped from a spec): a rectangle x0-x1 by z0 (back) - z1 (front), eaves
+  // at row yE, ridge at yR along x or z; hip 0 a gable (its ends are wall triangles in the colour at R.wall), 1 a
+  // pyramid, between a hip roof; shed: one slope, high on that side ('x0' 'x1' 'z0' 'z1'). Tiles drawn in code, courses
+  // along the eaves; a fascia t thick under every eave and verge. Every face turned out from the roof's middle
+  const outward = (pts, c) => {
+    const [p0, p1, , p3] = pts, u = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], v = [p3[0] - p0[0], p3[1] - p0[1], p3[2] - p0[2]];
+    let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]; const l = Math.hypot(...n) || 1; n = n.map((k) => k / l);
+    const m = pts.reduce((a, p) => [a[0] + p[0] / 4, a[1] + p[1] / 4, a[2] + p[2] / 4], [0, 0, 0]);
+    return (m[0] - c[0]) * n[0] + (m[1] - c[1]) * n[1] + (m[2] - c[2]) * n[2] < 0 ? n.map((k) => -k) : n;
+  };
+  const dk = uv(1, 3.5);   // the tiles' joint colour: fascias, verges
+  for (const R of s.pic.hroofs || []) {
+    const alongX = (R.ridge || 'x') === 'x', P = (a, y, b) => alongX ? [a, y, b] : [b, y, a];
+    const [a0, a1] = alongX ? [R.x0, R.x1] : [R.z0, R.z1], [b0, b1] = alongX ? [R.z0, R.z1] : [R.x0, R.x1], t = R.t ?? 2;
+    const mid = (b0 + b1) / 2, half = (b1 - b0) / 2, rise = R.yR - R.yE, c = [(R.x0 + R.x1) / 2, R.yE - 1, (R.z0 + R.z1) / 2];
+    const bk = (x, y) => s.back ? [(s.back[0] + clamp(x, 0, s.w - .01)) / AW2, (s.back[1] + clamp(s.h - y, 0, s.h - .01)) / AH] : fuv(x, y);
+    const face = (pts, uvs) => q(pts, outward(pts, c), uvs), wall = R.wall ? (R.wallBack ? bk(R.wall[0], R.wall[1]) : fuv(R.wall[0], R.wall[1])) : dk;
+    if (R.shed) {   // one slope, from the low side up to the high one; the high side and the two ends closed by wall
+      const inZ = R.shed[0] === 'z', hiEnd = R.shed[1] === '1';
+      const [s0, s1] = inZ ? [R.z0, R.z1] : [R.x0, R.x1], [e0, e1] = inZ ? [R.x0, R.x1] : [R.z0, R.z1], lo = hiEnd ? s0 : s1, hi = hiEnd ? s1 : s0;
+      const Q = (e, y, sv) => inZ ? [e, y, sv] : [sv, y, e], len = Math.hypot(s1 - s0, rise);
+      face([Q(e0, R.yE, lo), Q(e1, R.yE, lo), Q(e1, R.yR, hi), Q(e0, R.yR, hi)], [uv(0, len), uv(e1 - e0, len), uv(e1 - e0, 0), uv(0, 0)]);
+      face([Q(e0, R.yE - t, lo), Q(e1, R.yE - t, lo), Q(e1, R.yE, lo), Q(e0, R.yE, lo)], [dk, dk, dk, dk]);
+      face([Q(e0, R.yE - t, hi), Q(e1, R.yE - t, hi), Q(e1, R.yR, hi), Q(e0, R.yR, hi)], [wall, wall, wall, wall]);
+      for (const e of [e0, e1]) face([Q(e, R.yE - t, lo), Q(e, R.yE - t, hi), Q(e, R.yR, hi), Q(e, R.yE, lo)], [wall, wall, wall, wall]);
+      continue;
+    }
+    let h = (R.hip || 0) * half, aa = a0 + h, ab = a1 - h; if (aa > ab) aa = ab = (a0 + a1) / 2;
+    const len = Math.hypot(half, rise);
+    face([P(a0, R.yE, b1), P(a1, R.yE, b1), P(ab, R.yR, mid), P(aa, R.yR, mid)], [uv(0, len), uv(a1 - a0, len), uv(ab - a0, 0), uv(aa - a0, 0)]);
+    face([P(a1, R.yE, b0), P(a0, R.yE, b0), P(aa, R.yR, mid), P(ab, R.yR, mid)], [uv(0, len), uv(a1 - a0, len), uv(ab - a0, 0), uv(aa - a0, 0)]);
+    for (const b of [b0, b1]) face([P(a0, R.yE - t, b), P(a1, R.yE - t, b), P(a1, R.yE, b), P(a0, R.yE, b)], [dk, dk, dk, dk]);   // fascias
+    for (const [ae, ai] of [[a0, aa], [a1, ab]]) {
+      if (h > 0) {   // a hip: a sloping triangle, and its fascia
+        const hl = Math.hypot(h, rise);
+        face([P(ae, R.yE, b0), P(ae, R.yE, b1), P(ai, R.yR, mid), P(ai, R.yR, mid)], [uv(0, hl), uv(b1 - b0, hl), uv(half, 0), uv(half, 0)]);
+        face([P(ae, R.yE - t, b0), P(ae, R.yE - t, b1), P(ae, R.yE, b1), P(ae, R.yE, b0)], [dk, dk, dk, dk]);
+      } else {         // a gable: the wall triangle and the two verges
+        const ew = R.endsAt ? (ae === a0 ? R.endsAt[0] : R.endsAt[1]) : ae;   // the wall triangle where the walls are (endsAt), not at the eaves
+        face([P(ew, R.yE, b0), P(ew, R.yE, b1), P(ew, R.yR, mid), P(ew, R.yR, mid)], [wall, wall, wall, wall]);
+        for (const b of [b0, b1]) face([P(ae, R.yE - t, b), P(ae, R.yE, b), P(ae, R.yR, mid), P(ae, R.yR - t, mid)], [dk, dk, dk, dk]);
+      }
+    }
+  }
+  // cards (thin pieces of a building shaped from a spec: a cross, the sails, a vine): a plane at z with a face each way,
+  // drawing only its own pixels (layer 500 + its number, see LAYER_TEST)
+  for (const C of s.pic.cards || []) {
+    const uvs = [fuv(C.x0, C.r0), fuv(C.x1, C.r0), fuv(C.x1, C.r1), fuv(C.x0, C.r1)].map(([u, v]) => [u, v]), lay = 500 + C.k;
+    out.push({ p: [[C.x0, C.r0, C.z], [C.x1, C.r0, C.z], [C.x1, C.r1, C.z], [C.x0, C.r1, C.z]].map(([x, y, z]) => [x - s.px, y, z]), n: [0, 0, 1], uv: uvs.flat(), layer: lay });
+    out.push({ p: [[C.x1, C.r0, C.z], [C.x0, C.r0, C.z], [C.x0, C.r1, C.z], [C.x1, C.r1, C.z]].map(([x, y, z]) => [x - s.px, y, z]), n: [0, 0, -1], uv: [uvs[1], uvs[0], uvs[3], uvs[2]].flat(), layer: lay });
+  }
+  // cones (a windmill's cap, a turret): base radius r at row yE around (cx, cz), apex at yR, n segments, tiled
+  for (const C of s.pic.cones || []) {
+    const n = C.n || 12, c = [C.cx, C.yE - 1, C.cz], len = Math.hypot(C.r, C.yR - C.yE), t = C.t ?? 2;
+    for (let k = 0; k < n; k++) {
+      const t0 = k / n * Math.PI * 2, t1 = (k + 1) / n * Math.PI * 2, B = (a, y) => [C.cx + Math.sin(a) * C.r, y, C.cz + Math.cos(a) * C.r], A = [C.cx, C.yR, C.cz];
+      const pts = [B(t0, C.yE), B(t1, C.yE), A, A]; q(pts, outward(pts, c), [uv(t0 * C.r, len), uv(t1 * C.r, len), uv((t0 + t1) / 2 * C.r, 0), uv((t0 + t1) / 2 * C.r, 0)]);
+      const f = [B(t0, C.yE - t), B(t1, C.yE - t), B(t1, C.yE), B(t0, C.yE)]; q(f, outward(f, c), [dk, dk, dk, dk]);
+    }
+  }
+  // cylinders (a windmill's tower): radius r0 at row y0 to r1 at row y1 around (cx, cz), n segments; each segment reads
+  // the columns it faces, from the back picture when R.back (the drawing there cleaned of what stands in front: sails)
+  for (const C of s.pic.cyls || []) {
+    const n = C.n || 16, src = C.back && s.back ? s.back : [s.ax, s.ay], cu = (x, y) => [(src[0] + clamp(x, .5, s.w - .5)) / AW2, (src[1] + clamp(s.h - y, .5, s.h - .5)) / AH];
+    const B = (a, r, y) => [C.cx + Math.sin(a) * r, y, C.cz + Math.cos(a) * r], c = [C.cx, (C.y0 + C.y1) / 2, C.cz];
+    for (let k = 0; k < n; k++) {
+      const t0 = k / n * Math.PI * 2, t1 = (k + 1) / n * Math.PI * 2, u = (r, a) => C.cx + Math.sin(a) * r * .98;
+      const pts = [B(t0, C.r0, C.y0), B(t1, C.r0, C.y0), B(t1, C.r1, C.y1), B(t0, C.r1, C.y1)];
+      q(pts, outward(pts, c), [cu(u(C.r0, t0), C.y0 + .5), cu(u(C.r0, t1), C.y0 + .5), cu(u(C.r1, t1), C.y1 - .5), cu(u(C.r1, t0), C.y1 - .5)]);
     }
   }
   for (const r of s.pic.roofs || []) {
@@ -781,6 +864,145 @@ function putLow(quads, x, z, o) {
   }
 }
 
+// ---- engine/24-shapes.js
+/* ---------- buildings shaped from a spec: the sheet's drawing, given the shape of what it is ---------- */
+// SHAPES (content fills it): key → { parts: [...] }. Each part says what a piece of the building is, measured on the
+// sheet's front drawing (tools/shape-measure.mjs prints it: columns x, rows r from the ground) and its side view
+// (depths z from the front). The drawing keeps its pixels and colours; each pixel takes the depth and the flags of the
+// last part whose area holds it, and the smooth parts are built from the numbers. Same sheet, same spec, same model.
+//   { block: [x0, x1, r0, r1], z: [front, back], roof: { ridge: 'x'|'z', hip: 0-1, yR, over, shed, x: [x0, x1] } }
+//       a wall body: its drawing flush on its front, its sides a box; its roof from its top row (r1) up to yR, ridge
+//       along x or z (hip 0 a gable, 1 a pyramid; shed: one slope, high on that side). Under a gable seen end on (ridge
+//       z) the drawing's gable is wall; any other roof hides the drawing above r1 (its tiles are drawn in code). roof.x:
+//       its columns when they are not the walls' (a gable drawn off the middle)
+//   { open: [x0, x1, r0, r1], in: k }      a door, a window: set in k, its inner walls a box
+//   { ring: [cx, cy, r0, r1], in: k }       a round window or an arch's frame: a ring, its middle set in k
+//   { card: [x0, x1, r0, r1], z: front, t } a thin flat piece (a cross, a sail, a sign): t thick, no sides
+//   { box: [x0, x1, r0, r1], z: [front, back] }   a solid (a chimney, a cornice): its drawing is colour only
+//   { cyl: [cx, r0, r1, y0, y1], z: axis }  a round tower, radius r0 at row y0 to r1 at y1
+//   { cone: [cx, r, yE, yR], z: axis }      a conical cap
+//   { slope: [x0, x1, r0, r1], out: k }     an awning, a door's canopy: a panel from its top row on the wall out k
+//   { sails: { hub: [x, r], arms: [[x, r], ...], w }, z: front, t }   a windmill's sails: the pixels within w/2 of
+//       a line from the hub to an arm's tip, a thin card
+// A pixel no part holds stays on the main block's front as a thin card (a vine, a lamp on the wall).
+const SHAPES = {};
+
+function shapeBuilding(src, spec, sheet) {
+  // depths on whole pixels (an odd depth's half pixel left a seam between the pixels and the wall boxes)
+  const W = src.w, H = src.h, D = spec.depth || (src.side ? src.side.w : src.d), hd = Math.floor(D / 2), Z = (zs) => hd - zs;
+  const p = new Pic(W, H), own = new Int16Array(W * H).fill(-1), parts = spec.parts;
+  const at = (x, r) => (r >= 0 && r < H && x >= 0 && x < W) ? (H - 1 - r) * W + x : -1;
+  const inRect = (q, x, r) => x >= q[0] && x <= q[1] && r >= q[2] && r <= q[3];
+  const block0 = parts.find((q) => q.block);
+  // which part holds each pixel: the last one whose area holds it
+  const area = (q, x, r) => {
+    if (q.block) { if (inRect(q.block, x, r)) return true; const R = q.roof, sp = R && (R.x || q.block); return !!R && x >= sp[0] - (R.over ?? 2) && x <= sp[1] + (R.over ?? 2) && r > q.block[3] && r <= R.yR + 1; }
+    if (q.open || q.card || q.box) return inRect(q.open || q.card || q.box, x, r);
+    if (q.ring) return Math.hypot(x + .5 - q.ring[0], r + .5 - q.ring[1]) <= q.ring[3];
+    if (q.cyl) { const [cx, r0, r1, y0, y1] = q.cyl; if (r < y0 || r > y1) return false; const rad = r0 + (r1 - r0) * (r - y0) / Math.max(1, y1 - y0); return Math.abs(x + .5 - cx) <= rad; }
+    if (q.cone) { const [cx, rr, yE, yR] = q.cone; return r >= yE && r <= yR && Math.abs(x + .5 - cx) <= rr * (1 - (r - yE) / (yR - yE)) + 1; }
+    if (q.slope) return inRect(q.slope, x, r);
+    if (q.sails) { const [hx, hr] = q.sails.hub, px = x + .5, pr = r + .5; return q.sails.arms.some(([tx, tr]) => { const dx = tx - hx, dr = tr - hr, l2 = dx * dx + dr * dr, k = clamp(((px - hx) * dx + (pr - hr) * dr) / l2, 0, 1); return Math.hypot(px - hx - k * dx, pr - hr - k * dr) <= q.sails.w / 2; }); }
+    return false;
+  };
+  for (let r = 0; r < H; r++) for (let x = 0; x < W; x++) { const i = at(x, r); if (src.c[i] < 0) continue; for (let k = parts.length - 1; k >= 0; k--) if (area(parts[k], x, r)) { own[i] = k; break; } }
+  // the block a part stands on: the last block whose rectangle holds the part's middle
+  const host = (x, r) => { for (let k = parts.length - 1; k >= 0; k--) if (parts[k].block && inRect(parts[k].block, x, r)) return parts[k]; return block0 || { z: [hd - 1, hd + 1] }; };
+  const glow = (i) => src.fl[i] & F_GLOW;
+  // the cards: 0 for the pixels no part holds, then one per card or sails part; a card's pixel is a ghost that keeps no
+  // sides, its card's number in its back depth (engine/20-sprites.js turns it into its aux mark)
+  const cardNo = new Map(); parts.forEach((q) => { if (q.card || q.sails) cardNo.set(q, cardNo.size + 1); });
+  const cardPx = (x, r, c, k, g) => p.at(x, r, c, k + 1, k, F_GHOST | F_NOSIDE | g);
+  const boxes = p.boxes = [], rings = p.rings = [], hroofs = p.hroofs = [], cyls = p.cyls = [], cones = p.cones = [];
+  // the pixels
+  for (let r = 0; r < H; r++) for (let x = 0; x < W; x++) {
+    const i = at(x, r), c = src.c[i]; if (c < 0) continue;
+    const q = parts[own[i]], g = glow(i);
+    if (!q) { cardPx(x, r, c, 0, g); continue; }   // card 0: whatever no part holds, just in front of the main wall
+    if (q.block) {
+      const [x0, x1, , r1] = q.block, zf = Z(q.z[0]), zb = Z(q.z[1]), R = q.roof;
+      if (r <= r1 || !R) { p.at(x, r, c, zf, zb, F_NOSIDE | g); continue; }
+      // above the eaves: under a gable seen end on, the gable wall up to the roof's underside; anything else is roof
+      if (R.ridge === 'z' && !R.shed && !R.hip) { const [s0, s1] = R.x || [x0, x1], cx = (s0 + s1 + 1) / 2, run = cx - s0 + (R.over ?? 2), y = r1 + (R.yR - r1) * (1 - Math.abs(x + .5 - cx) / run); if (r + 1 < y) { p.at(x, r, c, zf, zb, F_NOSIDE | g); continue; } }
+      p.at(x, r, c, zf, zb, F_GHOST); continue;
+    }
+    if (q.open) { const b = host((q.open[0] + q.open[1]) / 2, (q.open[2] + q.open[3]) / 2); p.at(x, r, c, Z(b.z[0]) - q.in, Z(b.z[1]), F_NOSIDE | g); continue; }
+    if (q.ring) { const b = host(q.ring[0], q.ring[1]), d = Math.hypot(x + .5 - q.ring[0], r + .5 - q.ring[1]); p.at(x, r, c, d < q.ring[2] ? Z(b.z[0]) - q.in : Z(b.z[0]), Z(b.z[1]), F_NOSIDE | g); continue; }
+    if (q.card || q.sails) { cardPx(x, r, c, cardNo.get(q), g); continue; }
+    if (q.slope) { const b = host((q.slope[0] + q.slope[1]) / 2, q.slope[2]); p.at(x, r, c, Z(b.z[0]), Z(b.z[1]), F_NOSIDE | g); continue; }
+    p.at(x, r, c, Z(0), Z(D), F_GHOST);   // box, cylinder, cone: built whole, the drawing only colours them
+  }
+  // a block's front is closed: where the drawing leaves a pixel of its rectangle empty (a wall's edge a pixel in), the
+  // nearest wall pixel of the row fills it, or the camera looks into the box through the gap
+  for (const q of parts) if (q.block) {
+    const [x0, x1, r0, r1] = q.block, zf = Z(q.z[0]), zb = Z(q.z[1]);
+    for (let r = r0; r <= r1; r++) for (let x = x0; x <= x1; x++) {
+      const i = at(x, r); if (i < 0 || p.c[i] >= 0) continue;
+      for (let d = 1; d <= x1 - x0; d++) { const a = at(x - d, r), b = at(x + d, r), c = (a >= 0 && x - d >= x0 && src.c[a] >= 0) ? src.c[a] : (b >= 0 && x + d <= x1 && src.c[b] >= 0) ? src.c[b] : -1; if (c >= 0) { p.at(x, r, c, zf, zb, F_NOSIDE); break; } }
+    }
+  }
+  // the smooth parts
+  const front0 = block0 ? Z(block0.z[0]) : hd;
+  p.cards = [{ x0: 0, x1: W, r0: 0, r1: H, z: front0 + 1, k: 0 }]; p.front = block0 ? front0 : (parts.find((q) => q.cyl) ? Z(parts.find((q) => q.cyl).z) + parts.find((q) => q.cyl).cyl[1] : hd);   // where the 2D card stands
+  for (const q of parts) {
+    if (q.card) { const [x0, x1, r0, r1] = q.card; p.cards.push({ x0, x1: x1 + 1, r0, r1: r1 + 1, z: Z(q.z), k: cardNo.get(q) }); }
+    if (q.sails) { const pts = [q.sails.hub, ...q.sails.arms], w = q.sails.w; p.cards.push({ x0: Math.max(0, Math.floor(Math.min(...pts.map((a) => a[0])) - w)), x1: Math.min(W, Math.ceil(Math.max(...pts.map((a) => a[0])) + w)), r0: Math.max(0, Math.floor(Math.min(...pts.map((a) => a[1])) - w)), r1: Math.min(H, Math.ceil(Math.max(...pts.map((a) => a[1])) + w)), z: Z(q.z), k: cardNo.get(q) }); }
+    if (q.block) {
+      const [x0, x1, r0, r1] = q.block, zf = Z(q.z[0]), zb = Z(q.z[1]), R = q.roof;
+      boxes.push({ x0, x1: x1 + 1, r0, r1: r1 + 1, zf, zb, faces: 'sides', skip: ['bottom', ...(R ? ['top'] : [])], swatch: q.swatch });
+      // a roof narrower than its walls (roof.x) leaves their top open on that side: a cap closes it
+      if (R && R.x) { const o = R.over ?? 2; if (R.x[0] - o > x0) boxes.push({ x0, x1: R.x[0] - o, r0: r1, r1: r1 + 1, zf, zb, faces: 'all' }); if (R.x[1] + 1 + o < x1 + 1) boxes.push({ x0: R.x[1] + 1 + o, x1: x1 + 1, r0: r1, r1: r1 + 1, zf, zb, faces: 'all' }); }
+      if (R) { const o = R.over ?? 2, [s0, s1] = R.x || [x0, x1]; hroofs.push({ x0: s0 - o, x1: s1 + 1 + o, z0: zb - o, z1: zf + o, yE: r1 + 1, yR: R.yR + 1, ridge: R.ridge || 'x', hip: R.hip || 0, shed: R.shed, t: R.t ?? 2, wall: [x0 + 2, r1 - 2], endsAt: R.ridge === 'z' && !R.hip && !R.shed ? [zb + .5, zf - .5] : undefined }); }   // a gable seen end on: its triangles just inside the drawn gable, closing the attic
+    }
+    if (q.open) { const [x0, x1, r0, r1] = q.open, b = host((x0 + x1) / 2, (r0 + r1) / 2); boxes.push({ x0, x1: x1 + 1, r0, r1: r1 + 1, zf: Z(b.z[0]), zb: Z(b.z[0]) - q.in, faces: 'in' }); }
+    if (q.ring) { const [cx, cy, a, bR] = q.ring, b = host(cx, cy), zf = Z(b.z[0]); rings.push({ cx, cy, rx0: a, ry0: a, rx1: bR, ry1: bR, ru: (a + bR) / 2, a0: 0, a1: Math.PI * 2, n: 16, zf: zf + 1, zw: zf, zi: zf - q.in }); }
+    if (q.box) { const [x0, x1, r0, r1] = q.box; boxes.push({ x0, x1: x1 + 1, r0, r1: r1 + 1, zf: Z(q.z[0]), zb: Z(q.z[1]), faces: 'all' }); }
+    if (q.cyl) { const [cx, r0, r1, y0, y1] = q.cyl; cyls.push({ cx, cz: Z(q.z), r0, r1, y0, y1: y1 + 1, n: q.n || 16, back: true }); }
+    if (q.cone) { const [cx, rr, yE, yR] = q.cone; cones.push({ cx, cz: Z(q.z), r: rr, yE, yR: yR + 1, n: q.n || 16 }); }
+    if (q.slope) { const [x0, x1, r0, r1] = q.slope, b = host((x0 + x1) / 2, r0), zf = Z(b.z[0]); (p.slopes = p.slopes || []).push({ x0, x1: x1 + 1, yTop: r1 + 1, yBot: r0, zTop: zf, zBot: zf + q.out }); }
+  }
+  // the back: the drawing with everything that is not wall (openings, cards, what stands in front of a tower) replaced
+  // by the nearest wall pixel of the same row: plain walls behind, a tower's surface without the sails across it
+  // (a pixel kept or copied must be plain wall: near the commonest colour its part shows where nothing else comes within
+  // 3 pixels, so no frame, shutter, pot or sail edge is smeared across the back or the sides)
+  const dom = parts.map((q, k) => {
+    if (!(q.block || q.cyl)) return -1; const n = new Map();
+    for (let r = 0; r < H; r++) for (let x = 0; x < W; x++) { const i = at(x, r); if (own[i] !== k || src.c[i] < 0) continue; let core = true; for (let dy = -3; dy <= 3 && core; dy++) for (let dx = -3; dx <= 3; dx++) { const j = at(x + dx, r + dy); if (j < 0 || src.c[j] < 0 || own[j] !== k) { core = false; break; } } if (core) n.set(src.c[i], (n.get(src.c[i]) || 0) + 1); }
+    return n.size ? [...n].sort((a, b) => b[1] - a[1])[0][0] : -1;
+  });
+  const dist = (a, b) => Math.abs((a >> 16 & 255) - (b >> 16 & 255)) + Math.abs((a >> 8 & 255) - (b >> 8 & 255)) + Math.abs((a & 255) - (b & 255));
+  const back = new Int32Array(W * H).fill(-1), wallish = (i) => { const q = parts[own[i]]; return !!q && (q.block || q.cyl); };
+  const plain = (i) => i >= 0 && src.c[i] >= 0 && wallish(i) && dom[own[i]] >= 0 && dist(src.c[i], dom[own[i]]) < 70;
+  for (let r = 0; r < H; r++) for (let x = 0; x < W; x++) {
+    const i = at(x, r); if (src.c[i] < 0) continue;
+    if (plain(i)) { back[i] = src.c[i]; continue; }
+    // the nearest wall in the same column, below first (courses run on), else the nearest in the row
+    const same = (j) => plain(j) && (!wallish(i) || own[j] === own[i]);
+    for (let d = 1; d < H && back[i] < 0; d++) { const lo = at(x, r - d), hi = at(x, r + d); if (same(lo)) back[i] = src.c[lo]; else if (same(hi)) back[i] = src.c[hi]; }
+    for (let d = 1; d < W && back[i] < 0; d++) { const a = at(x - d, r), b = at(x + d, r); if (plain(a)) back[i] = src.c[a]; else if (plain(b)) back[i] = src.c[b]; }
+    if (back[i] < 0) { const k = wallish(i) ? own[i] : parts.indexOf(host(x, r)); back[i] = k >= 0 && dom[k] >= 0 ? dom[k] : src.c[i]; }   // no wall to copy: the wall's colour
+  }
+  // each block's side walls: the plainest 8 columns of its back (fewest dark, lit or off-colour pixels), repeated along
+  // the depth
+  const lumC = (c) => (c >> 16 & 255) * .3 + (c >> 8 & 255) * .59 + (c & 255) * .11;
+  for (const q of parts) if (q.block) {
+    const [x0, x1, r0, r1] = q.block, w = Math.max(2, Math.min(8, Math.floor((x1 - x0 + 1) / 3))); let best = null;
+    const tally = new Map(); for (let x = x0; x <= x1; x++) for (let r = r0; r <= r1; r++) { const i = at(x, r); if (i >= 0 && back[i] >= 0) tally.set(back[i], (tally.get(back[i]) || 0) + 1); }
+    const dom = tally.size ? [...tally].sort((a, b) => b[1] - a[1])[0][0] : 0, far = (c) => Math.abs((c >> 16 & 255) - (dom >> 16 & 255)) + Math.abs((c >> 8 & 255) - (dom >> 8 & 255)) + Math.abs((c & 255) - (dom & 255)) > 80;   // a shutter, a vine, a pot: not the wall
+    for (let a = x0 + 2; a + w <= x1 - 1; a++) {
+      let n = 0; for (let x = a; x < a + w; x++) for (let r = r0; r <= r1; r++) { const i = at(x, r); if (i < 0 || back[i] < 0) { n += 2; continue; } if (lumC(back[i]) < 70 || src.fl[i] & F_GLOW || far(back[i])) n++; }
+      const score = n * 1000 + Math.abs(a + w / 2 - (x0 + x1) / 2); if (!best || score < best[0]) best = [score, a];
+    }
+    const box = boxes.find((b) => b.faces === 'sides' && b.x0 === x0 && b.r0 === r0 && b.r1 === r1 + 1); if (box) box.swatch = best ? [best[1], best[1] + w] : [x0, x1 + 1];
+    // its roof's gable ends: the swatch's middle, half way up, on the back
+    const sw = box && box.swatch, hr = q.roof && hroofs.find((h) => h.yE === r1 + 1 && h.z1 === Z(q.z[0]) + (q.roof.over ?? 2)); if (hr && sw) { hr.wall = [(sw[0] + sw[1]) / 2, (r0 + r1) / 2]; hr.wallBack = true; }
+  }
+  // pixels added to close a block's front: the wall's colour behind
+  for (let r = 0; r < H; r++) for (let x = 0; x < W; x++) { const i = at(x, r); if (p.c[i] >= 0 && back[i] < 0) { const k = parts.indexOf(host(x, r)); back[i] = k >= 0 && dom[k] >= 0 ? dom[k] : p.c[i]; } }
+  p.back = back; p.tiles = true; p.source = src; p.sourceSheet = sheet;   // the 2D style shows the sheet's own drawing
+  return p.done();
+}
+
 // ---- engine/30-render.js
 /* ---------- render: renderer, lights, materials, post pass, camera, time of day (from the diorama kit) ---------- */
 const canvas = $('gl');
@@ -813,7 +1035,7 @@ function atlasFilter() { aaFilter(atlasTex); }
 function setAA(on) { diag.aa = !!on; atlasFilter(); for (const m of allMats) { if (m.userData.aa) aaFilter(m.map); m.needsUpdate = true; } }
 const LIGHTS = THREE.ShaderChunk.lights_fragment_begin.split('vDirectionalShadowCoord[ i ]').join('vxShadowCoord');
 // layer CUT (300): discard the pixels the art left empty (aux r is 0 there); other layers: the old depth-layer test
-const LAYER_TEST = 'vec4 vxA = texture2D(uAux, vUv); if (vLayer > 399.5) { if (vxA.a < 0.5 / 255.0) discard; } else if (vLayer > 299.5) { if (vxA.r < 0.5 / 255.0) discard; } else if (abs(vLayer) > 0.5 && abs((vLayer < 0.0 ? vxA.g : vxA.r) * 255.0 - abs(vLayer)) > 0.5) discard;';
+const LAYER_TEST = 'vec4 vxA = texture2D(uAux, vUv); if (vLayer > 499.5) { if (abs(vxA.a * 255.0 - (754.0 - vLayer)) > 0.5) discard; } else if (vLayer > 399.5) { if (vxA.a < 0.5 / 255.0) discard; } else if (vLayer > 299.5) { if (vxA.r < 0.5 / 255.0) discard; } else if (abs(vLayer) > 0.5 && abs((vLayer < 0.0 ? vxA.g : vxA.r) * 255.0 - abs(vLayer)) > 0.5) discard;';
 // 'card': the 2D style's cards (engine/34-bake.js), a slab whose texture is the pictures: cut out where their alpha is
 // low, lit at night where it is 200 (a window)
 const CARD_TEST = 'vec4 vxT = texture2D(map, vUv); if (vxT.a < 0.4) discard; vec4 vxA = vec4(0.0, 0.0, vxT.a < 0.9 ? 1.0 : 0.0, 0.0);';
@@ -1019,8 +1241,10 @@ const nearCol = (a, b) => Math.abs((a >> 16 & 255) - (b >> 16 & 255)) + Math.abs
 
 // the picture: { w, h, x0 (its left column from the anchor), px: RGBA rows from the ground up }
 function cardPicture(s, rot, lid) {
-  const pic = s.pic, side = rot % 2 && pic.side ? pic.side : null, W = side ? side.w : s.w, H0 = s.h;
-  const src = side ? side.c : pic.c, ghost = (i) => !side && s.pixel && (s.fl[i] & F_GHOST);
+  // a building shaped from a spec (engine/24-shapes.js) shows the sheet's drawing it was shaped from
+  const pic = s.pic.source || s.pic, sheet = s.pic.sourceSheet || s.sheet, coded = s.pixel && !s.pic.source;
+  const side = rot % 2 && pic.side ? pic.side : null, W = side ? side.w : s.w, H0 = s.h;
+  const src = side ? side.c : pic.c, ghost = (i) => !side && coded && (s.fl[i] & F_GHOST);
   const t = Math.tan(PITCH), cols = [];   // cols[x][y]: [colour, glow], y from the ground up
   let H = H0; const put = (x, y, c, g) => { if (x < 0 || x >= W || y < 0) return; const col = cols[x] || (cols[x] = []); col[y] = [c, g]; H = Math.max(H, y + 1); };
   const at = (x, y) => (x >= 0 && x < W && cols[x] && cols[x][y]) || null;
@@ -1029,7 +1253,7 @@ function cardPicture(s, rot, lid) {
   const top = (x) => { const col = cols[x] || []; for (let y = col.length - 1; y >= 0; y--) if (col[y]) return y + 1; return 0; };
   let outline = 0x2a1d18, ol = 1e9; for (const col of cols) for (const p of col || []) if (p && lumOf(p[0]) < ol) { ol = lumOf(p[0]); outline = p[0]; }
   const roof = [];   // [x, y]: the pixels added for the roof, outlined at the end
-  if (!side && pic.side && s.sheet && s.sheet.startsWith('buildings')) {
+  if (!side && pic.side && sheet && sheet.startsWith('buildings')) {
     // a building from the sheets: front and side seen together from the camera, above the drawing, over the columns
     // whose top is roof (a hanging sign or a lamp beside the walls gets nothing)
     const sd = pic.side, D = sd.w, hS = [], hF = [], base = roofColour(pic, s.key);
@@ -1053,7 +1277,7 @@ function cardPicture(s, rot, lid) {
         put(x, hF[x] + k, frontGable && x > ridge ? shade(c, .84) : c, 0); roof.push([x, hF[x] + k]);
       }
     }
-  } else if (!side && s.pixel && pic.roofs) {
+  } else if (!side && coded && pic.roofs) {
     // a building drawn in code: its gable roofs from their own data, the fascia under them, then its ghosts moved up
     for (const R of pic.roofs) {
       const run = R.cx - R.xl, E = Math.round((R.zf - R.zb) * t), len = Math.hypot(run, R.yR - R.yE);
@@ -1091,6 +1315,7 @@ function cardPicture(s, rot, lid) {
 // common front depth); else the front of its footprint, as turned
 function cardPlane(s, rot) {
   if (BUILD[s.key] === 'cross') return 0;
+  if (s.pic.front !== undefined) return s.pic.front * P;   // a building shaped from a spec: its front wall
   if (s.pixel) { const n = new Map(); s.each((x, y, i) => { if (!(s.fl[i] & F_GHOST)) n.set(s.zf[i], (n.get(s.zf[i]) || 0) + 1); }); return [...n].sort((a, b) => b[1] - a[1])[0][0] * P; }
   return (rot % 2 ? (rot === 1 ? s.px : s.w - s.px) : s.depth / 2) * P;
 }
@@ -2993,6 +3218,82 @@ Object.assign(NPCS, {
   },
 });
 
+// ---- content/chapter1/shapes.js
+/* ---------- buildings shaped from a spec (engine/24-shapes.js): what each piece of the sheet's drawing is ---------- */
+// Measured with tools/shape-measure.mjs <key> (front) and --side (depths z from the front). Columns x, rows from the
+// ground. Later parts win a pixel over earlier ones.
+Object.assign(SHAPES, {
+  // the church: a nave with its gable to the front, a bell tower set back on the right with a pyramid roof and a cross,
+  // a low chapel on the left, a lean-to on the right behind the tower
+  church: {
+    parts: [
+      { block: [8, 69, 0, 65], z: [0, 52], roof: { ridge: 'z', yR: 85, over: 3, x: [13, 76] } },
+      { block: [0, 7, 0, 35], z: [2, 26], roof: { shed: 'x1', yR: 41, over: 1 } },
+      { block: [93, 99, 0, 21], z: [50, 86], roof: { shed: 'x0', yR: 31, over: 1 } },
+      { block: [70, 93, 0, 106], z: [49, 84], roof: { ridge: 'x', hip: 1, yR: 115, over: 2 } },   // its front just before the nave's back gable
+      { ring: [44.5, 56.5, 5.5, 9], in: 2 },
+      { open: [38, 50, 1, 28], in: 4 },
+      { open: [21, 24, 43, 55], in: 2 }, { open: [62, 65, 43, 55], in: 2 },
+      { open: [77, 86, 83, 99], in: 5 }, { open: [80, 84, 21, 31], in: 2 },
+      { card: [41, 47, 86, 96], z: 4, t: 2 },
+      { card: [79, 85, 116, 126], z: 68, t: 2 },
+    ],
+  },
+  // the library: two storeys under a hipped roof, a bell cote over the door, a cornice between the floors
+  library: {
+    parts: [
+      { block: [5, 101, 0, 81], z: [0, 85], roof: { ridge: 'z', hip: .5, yR: 104, over: 4 } },
+      { box: [3, 104, 41, 46], z: [-1, 86] },
+      { block: [42, 64, 82, 110], z: [2, 14], roof: { ridge: 'z', yR: 115, over: 1, x: [40, 66] } },
+      { open: [47, 58, 94, 105], in: 4 },
+      { open: [21, 35, 53, 72], in: 3 }, { open: [71, 85, 53, 72], in: 3 },
+      { open: [20, 33, 14, 34], in: 3 }, { open: [74, 87, 14, 34], in: 3 },
+      { open: [44, 62, 2, 30], in: 4 },
+    ],
+  },
+  // the windmill: a round stone tower under a conical cap, four sails across its front
+  windmill: {
+    parts: [
+      { cyl: [44, 28, 23, 0, 73], z: 38 },
+      { cone: [44, 32, 74, 113], z: 38 },
+      { sails: { hub: [44.5, 82], arms: [[6, 106], [84, 108], [6, 33], [84, 34]], w: 13 }, z: 4, t: 2 },
+    ],
+  },
+  // the shop: a side-gabled house, its chimney, two windows upstairs, the awning over the shop window, the door, the
+  // key hanging from its bracket
+  shop: {
+    parts: [
+      { block: [11, 92, 0, 58], z: [6, 68], roof: { ridge: 'x', yR: 73, over: 3 } },
+      { box: [19, 26, 64, 81], z: [20, 30] },
+      { open: [21, 39, 38, 55], in: 2 }, { open: [57, 72, 38, 55], in: 2 },
+      { open: [20, 63, 7, 27], in: 4 }, { open: [72, 83, 1, 26], in: 3 },
+      { slope: [17, 69, 28, 34], out: 6 },
+      { card: [0, 9, 31, 53], z: 3, t: 2 },
+    ],
+  },
+  // a tall side-gabled house with a chimney on the left
+  house_a: {
+    parts: [
+      { block: [1, 52, 0, 64], z: [8, 58], roof: { ridge: 'x', yR: 80, over: 2 } },
+      { box: [5, 11, 70, 87], z: [12, 20] },
+      { open: [10, 25, 39, 53], in: 2 }, { open: [31, 45, 39, 53], in: 2 },
+      { open: [21, 32, 1, 24], in: 3 },
+    ],
+  },
+  // a cottage with its gable to the front: a round attic window, a little roof over the door, a chimney
+  house_b: {
+    parts: [
+      { block: [4, 88, 0, 37], z: [8, 58], roof: { ridge: 'z', yR: 58, over: 3, x: [6, 93] } },
+      { box: [15, 23, 40, 60], z: [31, 39] },
+      { ring: [46.5, 44.5, 4.5, 7], in: 2 },
+      { open: [15, 29, 12, 25], in: 2 }, { open: [63, 77, 12, 25], in: 2 },
+      { open: [40, 52, 1, 24], in: 3 },
+      { slope: [33, 59, 27, 32], out: 5 },
+    ],
+  },
+});
+for (const key of Object.keys(SHAPES)) { BUILD[key] = 'pixel'; CODE_ART[key] = (old) => shapeBuilding(old.pic, SHAPES[key], old.sheet); }
+
 // ---- content/chapter1/story.js
 /* ---------- Chapter 1, The Missing Page: quests, the intro, the statue's riddle, levers, the boss, the ending ---------- */
 Object.assign(QUESTS, {
@@ -3189,7 +3490,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     flat: (on) => { settings.flat = !!on; restyle(); syncStyle(); },
     cards: () => {
       let shadows = 0; scene.traverse((o) => { if (o.isMesh && o.material === shadowOnly && o.visible) shadows++; });
-      return { pics: [...cardPics].map(([k, c]) => { const [key, rot] = k.split('|'), s = sp[key]; return [k, !!c, c ? c[0].p[2][1] : 0, modelRows(s, +rot), s.sheet || '', !!(s.pic && s.pic.roofs)]; }), shelf: Object.assign({}, cardShelf), size: [CARD_W, CARD_H], shadows };
+      return { pics: [...cardPics].map(([k, c]) => { const [key, rot] = k.split('|'), s = sp[key]; return [k, !!c, c ? c[0].p[2][1] : 0, modelRows(s, +rot), (s.pic && s.pic.sourceSheet) || s.sheet || '', !!(s.pic && s.pic.roofs)]; }), shelf: Object.assign({}, cardShelf), size: [CARD_W, CARD_H], shadows };
     },
     strips: (k) => { const s = sp[k]; return s.strips.map((q) => { const xs = [0, 3, 6, 9].map((o) => q.p[o]), ys = [1, 4, 7, 10].map((o) => q.p[o]); return [(Math.min(...xs) + Math.max(...xs)) / 2 + s.px, s.base - (Math.min(...ys) + Math.max(...ys)) / 2, q.n[0], q.n[1]]; }); },
     parts: (k) => { const s = sp[k]; return s.pixel ? { front: 2 * s.layF.length, back: 2 * s.layB.length, sides: 2 * s.strips.length, roof: 2 * s.low.length } : { faces: 2 * s.low.length }; },
