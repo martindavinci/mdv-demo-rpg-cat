@@ -2121,8 +2121,10 @@ function draw(dt) {
   _frustum.setFromProjectionMatrix(_pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse)); A.tris = A.visibleTris(_frustum);
   if (shakeT > 0) { shakeT = Math.max(0, shakeT - dt); const k = shakeT * .9; cam.position.x += (R() - .5) * k; cam.position.y += (R() - .5) * k; cam.updateMatrixWorld(); }
   for (const a of actors) a.pose();
-  applyTod(1 - Math.exp(-dt * 2.2));
-  A.update(dt, player.x, player.z); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); chestsTick(dt); floatsDraw(dt); hudDraw(); bossDraw(); toastTick(dt); musicTick();
+  // the shadow box first, then the sun from it: the other way round, in the frame where the box moved the sun pointed
+  // from the old box to the new one, and the shadows' edges jumped a pixel while walking
+  A.update(dt, player.x, player.z);
+  applyTod(1 - Math.exp(-dt * 2.2)); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); chestsTick(dt); floatsDraw(dt); hudDraw(); bossDraw(); toastTick(dt); musicTick();
   if (player.moving || enemies.length || pickups.length || player.anim || dlg || Math.abs(yaw - yawT) > 1e-3 || Math.abs(cur.az - TODS[tod].az) + Math.abs(cur.el - TODS[tod].el) > 1e-4) shadowHold = 3;
   if (shadowHold > 0) { shadowHold--; sun.shadow.needsUpdate = true; }
   postU.uTime.value = time; postU.uStars.value = cur.stars; postU.uBgTop.value.set(cur.top[0], cur.top[1], cur.top[2]); postU.uBgBot.value.set(cur.bot[0], cur.bot[1], cur.bot[2]);
