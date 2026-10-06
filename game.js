@@ -299,7 +299,7 @@ let S = null, B = null;   // the current area's builders: S textured quads (thin
 // A sprite is built once at load (s.low) in local art pixels: X right of the anchor, Y up from the ground, Z toward
 // the camera from the middle of its depth. putLow places a copy in the current area's builder S.
 const CUT = 300;
-const BUILD = { oak: 'cross', cypress: 'cross', olive: 'cross', bush: 'cross', lamp_post: 'cross', signpost: 'cross', statue: 'cross', lever: 'cross' };
+const BUILD = { oak: 'cross', cypress: 'cross', olive: 'cross', bush: 'cross', lamp_post: 'cross', signpost: 'cross', lever: 'cross' };   // the statue is a loft: a figure, seen all round
 const CHEST = { key: 'chest', seam: 11, open: -105 * Math.PI / 180, inset: 4, time: .35 };   // props-1's chest: rows 0-10 lid, 11-20 body
 
 // atlas coordinates (art pixels) → texture coordinates
