@@ -142,7 +142,7 @@ function buildSprites() {
   for (const key in AP.sprites) new Spr(key);
   for (const e of extra) ({ side: writeSide, back: writeBack, lidIn: writeLidIn, dark: writeDark, roofF: writeRoof, roofS: writeRoof, tiles: writeTiles })[e.kind](e);
   for (const d of DEFS) { const s = sp[d.key]; s.pic = d.pic; s.depth = d.pic.side ? d.pic.side.w : d.pic.d; }
-  for (const s of SPRITES) s.low = s.pixel ? roofQuads(s) : s.side ? (BUILD[s.key] === 'cross' ? crossOf(s) : loftOf(s)) : [];   // a pixel-built sprite: its smooth roof, if any
+  for (const s of SPRITES) s.low = s.pixel ? roofQuads(s) : !s.side ? [] : (BUILD[s.key] || {}).parts ? partsOf(s) : BUILD[s.key] === 'cross' ? crossOf(s) : loftOf(s);   // a pixel-built sprite: its smooth roof, if any
 }
 
 // roofs and tops: per column, the first bright pixels under the drawing's top edge (the tiles, not the outline),
@@ -505,7 +505,17 @@ const CUT = 300;
 //         view's commonest colour, then rectangles of the front drawing pasted on it (a door, the plinth)
 //   roof: '#rrggbb'  the roof tiles' colour (default: the drawing's commonest terracotta)
 const CURATE = {};
-const BUILD = { bakery: 'pixel', oak: 'cross', cypress: 'cross', olive: 'cross', bush: 'cross', lamp_post: 'cross', signpost: 'cross', lever: 'cross' };   // the statue is a loft: a figure, seen all round
+const BUILD = {
+  bakery: 'pixel', oak: 'cross', cypress: 'cross', olive: 'cross', bush: 'cross', lamp_post: 'cross', lever: 'cross',
+  // things whose shape is known, built from parts by rows of the front drawing (rows from the top, [first, past last]):
+  //   loft (depth: px | 'width' for a cube), revolve (a cylinder: each row's width its diameter), card (the drawing cut
+  //   to its outline, t px each side of the middle), slope (a panel tilted from front-low to back-high, lift px raised)
+  signpost: 'pixel',                                                      // its drawing extruded a few pixels (CURATE depth)
+  barrel: { parts: [{ revolve: [0, 25] }] },
+  crate: { parts: [{ loft: [0, 17], depth: 'width' }] },
+  well: { parts: [{ loft: [0, 13] }, { card: [13, 25], t: 2 }, { revolve: [25, 44] }] },
+  reading_desk: { parts: [{ loft: [13, 26], depth: 8 }, { slope: [0, 13], front: 9, back: -9, rise: 9, thick: 2 }, { slope: [1, 10], x: [5, 20], onBoard: true, lift: 1.5, thick: 1 }] },
+};   // the statue is a loft: a figure, seen all round
 const CHEST = { key: 'chest', seam: 11, open: -105 * Math.PI / 180, inset: 4, time: .35 };   // props-1's chest: rows 0-10 lid, 11-20 body
 
 // atlas coordinates (art pixels) → texture coordinates
@@ -536,7 +546,7 @@ function face(s, pts, region) {
 
 // the loft of image rows r0…r1 (r1 exclusive). opts: noTop (leave the top open), bottom (close the bottom with region)
 function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
-  const pic = s.pic, sd = pic.side, d = s.depth, h = s.h, out = [], rings = [], cuts = (CURATE[s.key] || {}).cuts || [];
+  const pic = s.pic, sd = pic.side, d = s.depth, h = s.h, out = [], rings = [], cuts = (CURATE[s.key] || {}).cuts || [], fixed = opts.depth === 'width' ? null : opts.depth;
   const cutF = (x, r) => cuts.some(({ front: [x0, y0, x1, y1] }) => x >= x0 && x < x1 && r >= y0 && r < y1);
   const cutS = (z, r) => cuts.some(({ side: [z0, y0, z1, y1] }) => z >= z0 && z < z1 && r >= y0 && r < y1);
   const span = (yi) => {
@@ -545,7 +555,9 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
       for (let x = 0; x < s.w; x++) if (pic.c[r * s.w + x] >= 0 && !cutF(x, r)) { if (x < x0) x0 = x; if (x + 1 > x1) x1 = x + 1; }
       for (let z = 0; z < sd.w; z++) if (sd.c[r * sd.w + z] >= 0 && !cutS(z, r)) { if (z < z0) z0 = z; if (z + 1 > z1) z1 = z + 1; }
     }
-    return x1 < 0 || z1 < 0 ? null : { x0, x1, zf: d - z0, zb: Math.max(0, d - z1) };
+    if (x1 < 0 || z1 < 0) return null;
+    const dz = opts.depth === 'width' ? x1 - x0 : fixed;   // a fixed depth (a cube: as deep as wide), centred
+    return dz ? { x0, x1, zf: d / 2 + dz / 2, zb: d / 2 - dz / 2 } : { x0, x1, zf: d - z0, zb: Math.max(0, d - z1) };
   };
   for (let yi = r1; yi >= r0; yi -= 2) { const sp_ = span(Math.min(r1 - 1, yi)); if (sp_) rings.push(Object.assign(sp_, { y: h - yi })); }
   if (rings.length && rings[rings.length - 1].y < h - r0) { const sp_ = span(r0); if (sp_) rings.push(Object.assign(sp_, { y: h - r0 })); }
@@ -637,6 +649,70 @@ function roofQuads(s) {
       for (const [z, nz] of [[r.zf, 1], [r.zb, -1]]) q([[xe, top(r.yE) - r.t, z], [r.cx, top(r.yR) - r.t, z], [r.cx, top(r.yR), z], [xe, top(r.yE), z]], [0, 0, nz], [uv(1, dark), uv(len, dark), uv(len, dark), uv(1, dark)]);   // fascia
       q([[xe, top(r.yE) - r.t, r.zb], [xe, top(r.yE) - r.t, r.zf], [xe, top(r.yE), r.zf], [xe, top(r.yE), r.zb]], [sgn, 0, 0], [uv(0, dark), uv(d, dark), uv(d, dark), uv(0, dark)]);   // eave end
     }
+  }
+  return out;
+}
+
+// a thing built from parts by rows (BUILD[key].parts, rows from the top of the front drawing)
+function partsOf(s) {
+  const out = []; let board = null;
+  for (const P of BUILD[s.key].parts) {
+    if (P.loft) out.push(...loftOf(s, P.loft[0], P.loft[1], { depth: P.depth, noTop: P.noTop }));
+    else if (P.revolve) out.push(...revolveOf(s, P.revolve[0], P.revolve[1], P.n || 12));
+    else if (P.card) out.push(...cardOf(s, P.card[0], P.card[1], P.t || 1));
+    else if (P.slope) { out.push(...slopeOf(s, P, P.onBoard ? board : null)); if (!P.onBoard) board = P; }
+  }
+  return out;
+}
+const rawQuad = (s, pts, n, uvs, layer) => ({ p: pts.map(([x, y, z]) => [x - s.px, y, z - s.depth / 2]), n, uv: uvs.flat(), layer: layer || 0 });
+const fpx = (s, x, y) => auv(s.ax + clamp(x, .5, s.w - .5), s.ay + clamp(s.h - y, .5, s.h - .5));   // the front drawing at x, height y
+// the x-span of a row of the front drawing (rows from the top)
+const rowSpan = (s, r) => { let a = 1e9, b = -1; for (let x = 0; x < s.w; x++) if (s.pic.c[r * s.w + x] >= 0) { a = Math.min(a, x); b = Math.max(b, x + 1); } return b < 0 ? null : [a, b]; };
+// a cylinder: rings every second row (each row's width its diameter, its middle the axis), joined by n segments; each
+// segment reads the drawing at the column it faces (the back half mirrored), and a cap on top
+function revolveOf(s, r0, r1, n) {
+  const out = [], rings = [];
+  for (let r = r1 - 1; r >= r0; r -= 2) { const sp = rowSpan(s, r); if (sp) rings.push({ y: s.h - r - (r === r1 - 1 ? 1 : 0), cx: (sp[0] + sp[1]) / 2, R: (sp[1] - sp[0]) / 2, r }); }
+  const top = rowSpan(s, r0); if (top) rings.push({ y: s.h - r0, cx: (top[0] + top[1]) / 2, R: (top[1] - top[0]) / 2, r: r0 });
+  const zc = s.depth / 2, P_ = (g, t) => [g.cx + g.R * Math.sin(t), g.y, zc + g.R * Math.cos(t)];
+  for (let i = 0; i + 1 < rings.length; i++) {
+    const a = rings[i], b = rings[i + 1];
+    for (let k = 0; k < n; k++) {
+      const t0 = k / n * Math.PI * 2, t1 = (k + 1) / n * Math.PI * 2, tm = (t0 + t1) / 2, u = (g) => g.cx + g.R * Math.sin(tm) * .98;
+      out.push(rawQuad(s, [P_(a, t0), P_(a, t1), P_(b, t1), P_(b, t0)], [Math.sin(tm), 0, Math.cos(tm)], [fpx(s, u(a), a.y + .5), fpx(s, u(a), a.y + .5), fpx(s, u(b), b.y - .5), fpx(s, u(b), b.y - .5)]));
+    }
+  }
+  const t = rings[rings.length - 1];
+  if (t) for (let k = 0; k < n; k += 2) {   // the top: a fan of quads, in the top row's colours
+    const pts = [[t.cx, t.y, zc], P_(t, k / n * Math.PI * 2), P_(t, (k + 1) / n * Math.PI * 2), P_(t, (k + 2) / n * Math.PI * 2)];
+    out.push(rawQuad(s, pts, [0, 1, 0], pts.map(([x]) => fpx(s, x, t.y - 1.5))));
+  }
+  return out;
+}
+// a card: the drawing's rows r0..r1, front and back t px each side of the middle, cut to the outline
+function cardOf(s, r0, r1, t) {
+  const zc = s.depth / 2, y0 = s.h - r1, y1 = s.h - r0, uv = [fpx(s, 0, y0 + .01), fpx(s, s.w, y0 + .01), fpx(s, s.w, y1 - .01), fpx(s, 0, y1 - .01)];
+  const fix = (u) => u.map(([a, b], i) => [i === 1 || i === 2 ? (s.ax + s.w) / AW2 : s.ax / AW2, b]);
+  return [rawQuad(s, [[0, y0, zc + t], [s.w, y0, zc + t], [s.w, y1, zc + t], [0, y1, zc + t]], [0, 0, 1], fix(uv), CUT),
+          rawQuad(s, [[s.w, y0, zc - t], [0, y0, zc - t], [0, y1, zc - t], [s.w, y1, zc - t]], [0, 0, -1], fix([uv[1], uv[0], uv[3], uv[2]]), CUT)];
+}
+// a tilted panel (a lectern's board, a book on it): rows r0..r1 of the drawing over columns x, its lower edge front px
+// in front of the middle, its upper edge back px; lift raises it along its normal; thick gives it a front edge
+function slopeOf(s, P, on) {
+  const [r0, r1] = P.slope, sp = P.x || rowSpan(s, Math.floor((r0 + r1) / 2)) || [0, s.w], [x0, x1] = sp, zc = s.depth / 2;
+  // its plane: its own (lower edge front px before the middle, upper edge back px, rise px high; default: as drawn), or,
+  // with on, the board's plane at the same rows of the drawing (a book lying on a lectern)
+  const plane = (B, r) => { const yb0 = s.h - B.slope[1], t = (B.slope[1] - r) / (B.slope[1] - B.slope[0]), rise = B.rise ?? (B.slope[1] - B.slope[0]); return [yb0 + rise * t, zc + B.front + (B.back - B.front) * t]; };
+  const [ybG, zb] = plane(on || P, r1), [ytG, zt] = plane(on || P, r0), yb = s.h - r1, yt = s.h - r0;
+  const ny = zb - zt, nz = ytG - ybG, l = Math.hypot(ny, nz), n = [0, ny / l, nz / l];
+  const L = P.lift || 0, off = (y, z) => [y + n[1] * L, z + n[2] * L], [yb2, zb2] = off(ybG, zb), [yt2, zt2] = off(ytG, zt), T = P.thick || 0;
+  const out = [rawQuad(s, [[x0, yb2, zb2], [x1, yb2, zb2], [x1, yt2, zt2], [x0, yt2, zt2]], n, [fpx(s, x0, yb + .5), fpx(s, x1, yb + .5), fpx(s, x1, yt - .5), fpx(s, x0, yt - .5)])];
+  if (T) {   // a board thick px: the underside, the front and back edges, the two sides, in the frame's colour
+    const c = fpx(s, x0 + 1.5, (yb + yt) / 2), d = [0, -n[1] * T, -n[2] * T];
+    out.push(rawQuad(s, [[x0, yt2 + d[1], zt2 + d[2]], [x1, yt2 + d[1], zt2 + d[2]], [x1, yb2 + d[1], zb2 + d[2]], [x0, yb2 + d[1], zb2 + d[2]]], n.map((v) => -v), [c, c, c, c]));
+    out.push(rawQuad(s, [[x0, yb2 + d[1], zb2 + d[2]], [x1, yb2 + d[1], zb2 + d[2]], [x1, yb2, zb2], [x0, yb2, zb2]], [0, -n[2], n[1]], [c, c, c, c]));
+    out.push(rawQuad(s, [[x1, yt2 + d[1], zt2 + d[2]], [x0, yt2 + d[1], zt2 + d[2]], [x0, yt2, zt2], [x1, yt2, zt2]], [0, n[2], -n[1]], [c, c, c, c]));
+    for (const [x, sx] of [[x0, -1], [x1, 1]]) out.push(rawQuad(s, [[x, yb2 + d[1], zb2 + d[2]], [x, yt2 + d[1], zt2 + d[2]], [x, yt2, zt2], [x, yb2, zb2]], [sx, 0, 0], [c, c, c, c]));
   }
   return out;
 }
@@ -2758,6 +2834,8 @@ function showEnding() {
 Object.assign(CURATE, {
   // the bakery is drawn in code now (content/chapter1/buildings.js)
   library: { back: { wall: 'stone' } },
+  // the signpost: its drawing extruded 4 px (post and arrows), the stones at its foot 10 px
+  signpost: { depth: { rules: [{ box: [0, 0, 23, 26], half: 2 }, { box: [0, 26, 23, 33], half: 5 }] } },
 });
 
 // ---- engine/90-boot.js
