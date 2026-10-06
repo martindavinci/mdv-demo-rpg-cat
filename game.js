@@ -678,8 +678,10 @@ function revolveOf(s, r0, r1, n) {
   for (let i = 0; i + 1 < rings.length; i++) {
     const a = rings[i], b = rings[i + 1];
     for (let k = 0; k < n; k++) {
-      const t0 = k / n * Math.PI * 2, t1 = (k + 1) / n * Math.PI * 2, tm = (t0 + t1) / 2, u = (g) => g.cx + g.R * Math.sin(tm) * .98;
-      out.push(rawQuad(s, [P_(a, t0), P_(a, t1), P_(b, t1), P_(b, t0)], [Math.sin(tm), 0, Math.cos(tm)], [fpx(s, u(a), a.y + .5), fpx(s, u(a), a.y + .5), fpx(s, u(b), b.y - .5), fpx(s, u(b), b.y - .5)]));
+      // each segment spreads the columns of the drawing it covers (x = axis + R sin t): the front half as drawn, the back
+      // half mirrored; one column per segment striped the cylinder like a barcode
+      const t0 = k / n * Math.PI * 2, t1 = (k + 1) / n * Math.PI * 2, tm = (t0 + t1) / 2, u = (g, t) => g.cx + g.R * Math.sin(t) * .98;
+      out.push(rawQuad(s, [P_(a, t0), P_(a, t1), P_(b, t1), P_(b, t0)], [Math.sin(tm), 0, Math.cos(tm)], [fpx(s, u(a, t0), a.y + .5), fpx(s, u(a, t1), a.y + .5), fpx(s, u(b, t1), b.y - .5), fpx(s, u(b, t0), b.y - .5)]));
     }
   }
   const t = rings[rings.length - 1];
