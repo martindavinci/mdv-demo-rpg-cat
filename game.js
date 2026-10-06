@@ -7,7 +7,7 @@ const PPU = 16, P = 1 / PPU;                        // 16 art pixels per world u
 const PITCH = 0.62, SPR_Y = 1 / Math.cos(PITCH);    // figures stand upright; stretched by 1/cos so pixels stay square on screen
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const coarse = matchMedia('(pointer: coarse)').matches;
-const F_ROOF = 1, F_GLOW = 2, F_WRAP = 4, F_TEXTOP = 8, F_TEXALL = 16, F_OWN = 32, F_GHOST = 64;   // F_GHOST: in the atlas only (a smooth part reads it), never extruded
+const F_ROOF = 1, F_GLOW = 2, F_WRAP = 4, F_TEXTOP = 8, F_TEXALL = 16, F_OWN = 32, F_GHOST = 64, F_NOSIDE = 128;   // F_NOSIDE: extruded without side faces (a smooth part covers its edges)   // F_GHOST: in the atlas only (a smooth part reads it), never extruded
 const GLOW = 0xffe7a0;                              // the prompts' night-glow colour
 
 function hash2(x, y) { let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
@@ -300,7 +300,7 @@ class Spr {
       if (g && g.p1 === pos && pos - g.p0 < 16) g.p1 = pos + 1; else { const o = { dir, line, p0: pos, p1: pos + 1, d0, d1, tA, tB, half, sn }; open.set(key, o); segs.push(o); }
     };
     s.each((x, y, i) => {
-      const zf = s.zf[i], zb = s.zb[i], f = s.fl[i];
+      const zf = s.zf[i], zb = s.zb[i], f = s.fl[i]; if (f & F_NOSIDE) return;
       for (let k = 0; k < 4; k++) {
         const nx = k === 0 ? -1 : k === 1 ? 1 : 0, ny = k === 2 ? 1 : k === 3 ? -1 : 0, X = x + nx, Y = y - ny;
         if (ny < 0 && Y >= base) continue;                      // la base poggia a terra
@@ -578,7 +578,7 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
 // roof tiles drawn in code (courses along the eaves, counted down from the ridge), the fascia along the front and back
 // edges and the eave ends in the tiles' dark joint colour. A few quads instead of a staircase of 1-pixel steps
 function roofQuads(s) {
-  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes && !s.pic.discs) return out;
+  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes && !s.pic.discs && !s.pic.rings) return out;
   const uv = (u, v) => [(T[0] + clamp(u, 0, T[2])) / AW2, (T[1] + clamp(v, 0, T[3])) / AH];
   const q = (pts, n, uvs) => out.push({ p: pts.map(([x, y, z]) => [x - s.px, y, z]), n, uv: uvs.flat(), layer: 0 });
   // sloping panels (an awning): the panel reads the sprite's own front pixels by height, the two ends are triangles
@@ -599,6 +599,20 @@ function roofQuads(s) {
     for (let k = 0; k < n; k++) {
       const [ax, ay] = P_(k, c.r), [bx, by] = P_(k + 1, c.r), m = (k + .5) / n * Math.PI * 2, [ux, uy] = P_(k + .5, c.r - .8);
       q([[ax, ay, c.zf], [bx, by, c.zf], [bx, by, c.zb], [ax, ay, c.zb]], [Math.cos(m), Math.sin(m), 0], [fuv(ux, uy), fuv(ux, uy), fuv(ux, uy), fuv(ux, uy)]);
+    }
+  }
+  // rings (a round window's frame, an arch): an elliptic band in front of the wall, from angle a0 to a1, n segments.
+  // Its front at zf, its outer edge down to the wall (zw), its inner edge a tube down to zi (the glass, the door):
+  // the curved soffit the pixels drew as steps. All of it in the colour of the drawn frame at radius ru
+  for (const g of s.pic.rings || []) {
+    const n = g.n || 12, at = (t, rx, ry) => [g.cx + Math.cos(t) * rx, g.cy + Math.sin(t) * ry];
+    for (let k = 0; k < n; k++) {
+      const t0 = g.a0 + (g.a1 - g.a0) * k / n, t1 = g.a0 + (g.a1 - g.a0) * (k + 1) / n, tm = (t0 + t1) / 2, c = fuv(...at(tm, g.ru, g.ru * g.ry1 / g.rx1));
+      const [o0, o1, i0, i1] = [at(t0, g.rx1, g.ry1), at(t1, g.rx1, g.ry1), at(t0, g.rx0, g.ry0), at(t1, g.rx0, g.ry0)];
+      const nO = (() => { const x = Math.cos(tm) / g.rx1, y = Math.sin(tm) / g.ry1, l = Math.hypot(x, y); return [x / l, y / l, 0]; })();
+      q([[...o0, g.zf], [...o1, g.zf], [...i1, g.zf], [...i0, g.zf]], [0, 0, 1], [c, c, c, c]);                       // front
+      q([[...o0, g.zf], [...o0, g.zw], [...o1, g.zw], [...o1, g.zf]], nO, [c, c, c, c]);                               // outer edge
+      q([[...i0, g.zf], [...i1, g.zf], [...i1, g.zi], [...i0, g.zi]], [-nO[0], -nO[1], 0], [c, c, c, c]);             // inner tube
     }
   }
   for (const r of s.pic.roofs || []) {
@@ -2325,7 +2339,7 @@ AREAS.overworld = (() => {
 // The bakery, after the ChatGPT design: a front-gable house in ochre plaster on a stone plinth, a shop window full of
 // bread under a green and cream awning, an arched door, a round attic window, a bread sign on an iron bracket, a brick
 // chimney near the back. 108 × 74 art pixels, 60 deep.
-const SIGN_N = 12;
+const SIGN_N = 12, SIGN_DISC = true, DOOR_RING = true, ATTIC_RING = true;   // the round parts as smooth rings (false: per pixel, for comparison)
 CODE_ART.bakery = () => {
   const W = 108, H = 74, p = new Pic(W, H), hd = 30, cx = 56;
   const PLASTER = 0xe6bf78, STONE = 0xb9ad96, WOOD = 0x6e4628, ROOF = 0xc2603a, BRICK = 0xa2553a, GREEN = 0x3f8650, CREAM = 0xf0e6cf;
@@ -2369,9 +2383,12 @@ CODE_ART.bakery = () => {
   const dx0 = 76, dw = 15, dr0 = 5, dh = 23, ah = 8;
   for (let j = 0; j < dh + 1; j++) for (let i = -1; i <= dw; i++) {
     const jj = j - 1, inside = i >= 0 && i < dw && jj >= 0 && inArch(i, jj, dw, ah), frame = !inside && inArch(i + 1, j, dw + 2, ah + 1), r = dr0 + dh - 1 - jj;
-    if (inside) { const pane = jj >= 7 && jj <= 10 && (i === 4 || i === 5 || i === 9 || i === 10); p.at(dx0 + i, r, pane ? 0xf2b552 : i % 3 === 0 ? shade(WOOD, .76) : jit(WOOD, i, jj >> 2, 12, .1), hd - 3, -hd, pane ? F_GLOW : 0); }
-    else if (frame) p.at(dx0 + i, r, shade(STONE, 1.05), hd + 1, -hd);
+    const arch = DOOR_RING && r >= dr0 + dh - ah, nos = arch ? F_NOSIDE : 0;          // the arch rows: the half ring draws their edges
+    if (inside) { const pane = jj >= 7 && jj <= 10 && (i === 4 || i === 5 || i === 9 || i === 10); p.at(dx0 + i, r, pane ? 0xf2b552 : i % 3 === 0 ? shade(WOOD, .76) : jit(WOOD, i, jj >> 2, 12, .1), hd - 3, -hd, (pane ? F_GLOW : 0) | nos); }
+    else if (frame) p.at(dx0 + i, r, shade(STONE, 1.05), arch ? hd : hd + 1, -hd, nos);
   }
+
+  if (DOOR_RING) (p.rings = p.rings || []).push({ cx: dx0 + dw / 2, cy: dr0 + dh - ah, rx0: dw / 2 - .3, ry0: ah - .3, rx1: dw / 2 + 1.4, ry1: ah + 1.4, ru: dw / 2 + .5, a0: 0, a1: Math.PI, n: 10, zf: hd + 1, zw: hd, zi: hd - 3 });
 
   // cornice under the gable
   for (let x = x0 - 2; x <= x1 + 2; x++) { p.at(x, 40, shade(STONE, .82), hd + 2, -hd - 2); p.at(x, 41, STONE, hd + 2, -hd - 2); }
@@ -2386,8 +2403,11 @@ CODE_ART.bakery = () => {
   // the round attic window, lit
   for (let r = 49; r <= 59; r++) for (let x = cx - 6; x <= cx + 5; x++) {
     const d = Math.hypot(x + .5 - cx, r + .5 - 54); if (d > 5.6) continue;
-    p.at(x, r, d > 4.2 ? shade(STONE, 1.05) : (x === cx || r === 54) ? WOOD : 0xf2b552, d > 4.2 ? hd + 1 : hd - 2, -hd, d > 4.2 ? 0 : F_GLOW);
+    const nos = ATTIC_RING ? F_NOSIDE : 0;   // the ring draws the edges
+    p.at(x, r, d > 4.2 ? shade(STONE, 1.05) : (x === cx || r === 54) ? WOOD : 0xf2b552, d > 4.2 ? (ATTIC_RING ? hd : hd + 1) : hd - 2, -hd, (d > 4.2 ? 0 : F_GLOW) | nos);
   }
+  if (ATTIC_RING) (p.rings = p.rings || []).push({ cx, cy: 54, rx0: 3.9, ry0: 3.9, rx1: 6, ry1: 6, ru: 4.8, a0: 0, a1: Math.PI * 2, n: 12, zf: hd + 1, zw: hd, zi: hd - 2 });
+
 
   // the chimney: bricks above the roof line, a stone cap; a straight block near the back
   for (let x = 82; x <= 90; x++) for (let r = Math.ceil(roofLine(x)) + 1; r <= 70; r++) {
@@ -2401,10 +2421,10 @@ CODE_ART.bakery = () => {
   for (let r = 19; r <= 31; r++) for (let x = 0; x <= 9; x++) {
     const d = Math.hypot(x + .5 - 5, r + .5 - 25); if (d > 5.6) continue;
     const loaf = Math.abs(x + .5 - 5) < 3.2 && Math.abs(r + .5 - 25) < 1.6;
-    p.at(x, r, d > 4.6 ? WOOD : loaf ? 0xe0a454 : 0xead7a8, hd + 3, hd + 1, F_GHOST);   // the board's colours, for the disc
+    p.at(x, r, d > 4.6 ? WOOD : loaf ? 0xe0a454 : 0xead7a8, hd + 3, hd + 1, SIGN_DISC ? F_GHOST : 0);   // the board's colours, for the disc
   }
   p.at(3, 32, 0x2a2420, hd + 2, hd); p.at(7, 32, 0x2a2420, hd + 2, hd);
-  p.discs = [{ cx: 5, cy: 25, r: 5.6, zf: hd + 3, zb: hd + 1, n: SIGN_N }];   // the board: a smooth disc
+  if (SIGN_DISC) p.discs = [{ cx: 5, cy: 25, r: 5.6, zf: hd + 3, zb: hd + 1, n: SIGN_N }];   // the board: a smooth disc
 
   // the back: the same outline, plain plaster with a back door and a small window, the plinth, the roof and chimney
   const back = Int32Array.from(p.c);
