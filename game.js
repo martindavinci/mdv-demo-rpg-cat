@@ -131,7 +131,8 @@ function writeDark(e) { for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) 
 
 /* side views and plain backs (no art was made for the back of anything) */
 const atlasSet = (x, y, c, k) => { const o = (y * AW2 + x) * 4; for (const h of [0, AW * 4]) { atlasPx[o + h] = c >> 16 & 255; atlasPx[o + h + 1] = c >> 8 & 255; atlasPx[o + h + 2] = c & 255; atlasPx[o + h + 3] = k === undefined ? 255 : k; } };
-// a side view's empty pixels take the nearest colour along their row (the view and the depth never agree to the pixel),
+// a side view's empty pixels take the nearest colour along their row that is not outline (the view and the depth never
+// agree to the pixel),
 // a row with none at all the front's colour at that height
 function sideFilled(p) {
   const s = p.side, out = new Int32Array(s.w * s.h);
@@ -139,6 +140,9 @@ function sideFilled(p) {
     let fb = -1; for (let x = 0; x < p.w && fb < 0; x++) fb = p.c[y * p.w + x];
     for (let x = 0; x < s.w; x++) {
       let c = s.c[y * s.w + x];
+      // an empty pixel: the nearest colour along the row that is not outline, else the nearest at all
+      const ok = (v) => v >= 0 && ((v >> 16 & 255) * .3 + (v >> 8 & 255) * .59 + (v & 255) * .11) >= 42;
+      for (let r = 1; c < 0 && r < s.w; r++) { const a = x - r >= 0 ? s.c[y * s.w + x - r] : -1, b = x + r < s.w ? s.c[y * s.w + x + r] : -1; if (ok(a)) c = a; else if (ok(b)) c = b; }
       for (let r = 1; c < 0 && r < s.w; r++) { const a = s.c[y * s.w + x - r], b = s.c[y * s.w + x + r]; if (x - r >= 0 && a >= 0) c = a; else if (x + r < s.w && b >= 0) c = b; }
       out[y * s.w + x] = c >= 0 ? c : fb >= 0 ? fb : 0x806040;
     }
@@ -194,8 +198,13 @@ class Spr {
     for (let k = 0; k < q.length; k++) { const i = q[k], x = i % w, y = (i / w) | 0; if (dist[i] >= 3) continue; for (const [a, b] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { if (!this.on(a, b)) continue; const j = b * w + a; if (dist[j] >= 0) continue; dist[j] = dist[i] + 1; sc[j * 3] = sc[i * 3]; sc[j * 3 + 1] = sc[i * 3 + 1]; sc[j * 3 + 2] = sc[i * 3 + 2]; q.push(j); } }
     // tabella degli strati e colori, scritti nell'atlante; i pixel vuoti prendono il colore del vicino, così un fianco non resta mai bucato
     const cf = new Uint8Array(n), cb = new Uint8Array(n), near = new Int32Array(n).fill(-1), fq = [];
-    this.each((x, y, i) => { if (this.zf[i] <= this.zb[i]) this.zf[i] = this.zb[i] + 1; cf[i] = this.zf[i] + 64 + this.cls[i] * 128; cb[i] = this.zb[i] + 64 + this.cls[i] * 128; near[i] = i; fq.push(i); });
-    for (let k = 0; k < fq.length; k++) { const i = fq[k], x = i % w, y = (i / w) | 0; for (const [a, b] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { if (a < 0 || b < 0 || a >= w || b >= h) continue; const j = b * w + a; if (near[j] >= 0) continue; near[j] = near[i]; fq.push(j); } }
+    // empty pixels take the nearest colour that is not outline (luminance 42 and up): a shell a little wider than the
+    // drawing then shows the colour just inside its edge, not a smear of the dark outline; drawn pixels keep their own
+    const lum = (i) => d[i * 4] * .3 + d[i * 4 + 1] * .59 + d[i * 4 + 2] * .11, src = new Int32Array(n).fill(-1);
+    this.each((x, y, i) => { if (this.zf[i] <= this.zb[i]) this.zf[i] = this.zb[i] + 1; cf[i] = this.zf[i] + 64 + this.cls[i] * 128; cb[i] = this.zb[i] + 64 + this.cls[i] * 128; if (lum(i) >= 42) { src[i] = i; fq.push(i); } });
+    if (!fq.length) this.each((x, y, i) => { src[i] = i; fq.push(i); });   // all dark: any colour will do
+    for (let k = 0; k < fq.length; k++) { const i = fq[k], x = i % w, y = (i / w) | 0; for (const [a, b] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) { if (a < 0 || b < 0 || a >= w || b >= h) continue; const j = b * w + a; if (src[j] >= 0) continue; src[j] = src[i]; fq.push(j); } }
+    for (let i = 0; i < n; i++) near[i] = d[i * 4 + 3] ? i : src[i];
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x, j = near[i], on = j === i, kl = ((this.ay + y) * AW2 + this.ax + x) * 4, kr = kl + AW * 4;
       if (j < 0) continue;
