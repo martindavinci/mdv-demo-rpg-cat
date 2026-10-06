@@ -20,7 +20,7 @@ const shade = (c, k) => (Math.min(255, Math.round((c >> 16 & 255) * k)) << 16) |
 
 // settings are preferences only (never game content): language, frame-rate cap, shadows, shake, music and sound volume (0–3)
 const SETTINGS_KEY = 'mdv-rpg-cat-settings';   // mdv-allow-storage: preferences
-const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, shake: true, music: 2, sound: 2 },
+const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, flat: false, shake: true, music: 2, sound: 2 },
   (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; } })());
 if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 2 : 0;   // the first builds stored on/off
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode: keep in memory */ } };
@@ -141,7 +141,7 @@ function buildSprites() {
   atlasPx = new Uint8Array(AW2 * AH * 4); auxPx = new Uint8Array(AW2 * AH * 4);
   for (const key in AP.sprites) new Spr(key);
   for (const e of extra) ({ side: writeSide, back: writeBack, lidIn: writeLidIn, dark: writeDark, roofF: writeRoof, roofS: writeRoof, tiles: writeTiles })[e.kind](e);
-  for (const d of DEFS) { const s = sp[d.key]; s.pic = d.pic; s.depth = d.pic.side ? d.pic.side.w : d.pic.d; }
+  for (const d of DEFS) { const s = sp[d.key]; s.pic = d.pic; s.sheet = d.sheet; s.depth = d.pic.side ? d.pic.side.w : d.pic.d; }
   for (const s of SPRITES) s.low = s.pixel ? roofQuads(s) : !s.side ? [] : (BUILD[s.key] || {}).parts ? partsOf(s) : BUILD[s.key] === 'cross' ? crossOf(s) : loftOf(s);   // a pixel-built sprite: its smooth roof, if any
 }
 
@@ -277,7 +277,7 @@ class Spr {
       if (j < 0) continue;
       atlasPx[kl] = d[j * 4]; atlasPx[kl + 1] = d[j * 4 + 1]; atlasPx[kl + 2] = d[j * 4 + 2]; atlasPx[kl + 3] = 255;
       atlasPx[kr] = sc[j * 3]; atlasPx[kr + 1] = sc[j * 3 + 1]; atlasPx[kr + 2] = sc[j * 3 + 2]; atlasPx[kr + 3] = 255;
-      if (on) { auxPx[kl] = cf[i]; auxPx[kl + 1] = cb[i]; auxPx[kl + 2] = auxPx[kr + 2] = this.glow[i] ? 255 : 0; }
+      if (on) { auxPx[kl] = cf[i]; auxPx[kl + 1] = cb[i]; auxPx[kl + 3] = 255; auxPx[kl + 2] = auxPx[kr + 2] = this.glow[i] ? 255 : 0; }
     }
     this.each((x, y, i) => { if (this.fl[i] & F_GHOST) { d[i * 4 + 3] = 0; const kl = ((this.ay + y) * AW2 + this.ax + x) * 4; auxPx[kl] = auxPx[kl + 1] = 0; } });   // ghosts: colour only
     if (this.pixel) { this.layF = this.layers(cf); this.layB = this.layers(cb); this.sides(); }
@@ -732,6 +732,20 @@ function crossOf(s) {
   return out;
 }
 
+// the 2D style (settings.flat): a thing is its front drawing on one card facing the fixed camera, the same size as in 3D,
+// where its 3D front stands: through the middle for a cross (a tree: where it blocks the way), else the front of its
+// footprint (the frontmost pixel for one drawn in code). Cut to every drawn pixel (layer
+// FLAT reads the aux alpha: also the pixels only coloured for a smooth part, the bakery's sign and chimney)
+const FLAT = 400;
+function flatOf(s) {
+  if (s.flatQ) return s.flatQ;
+  let zf = BUILD[s.key] === 'cross' ? 0 : (s.depth || 0) / 2;
+  if (s.pixel) { zf = -1e9; s.each((x, y, i) => { zf = Math.max(zf, s.zf[i]); }); }   // drawn in code: its frontmost pixel
+  const f = face(s, [[0, 0, 0], [s.w, 0, 0], [s.w, s.h, 0], [0, s.h, 0]], 'front');
+  f.layer = FLAT; for (const p of f.p) p[2] = zf;
+  return (s.flatQ = [f]);
+}
+
 // the chest, closed (lid 0) or open (lid CHEST.open), or anywhere between while it swings: body, inside, lid on its hinge
 function chestQuads(s, lid) {
   if (!s.chest) {
@@ -799,10 +813,13 @@ function atlasFilter() { aaFilter(atlasTex); }
 function setAA(on) { diag.aa = !!on; atlasFilter(); for (const m of allMats) { if (m.userData.aa) aaFilter(m.map); m.needsUpdate = true; } }
 const LIGHTS = THREE.ShaderChunk.lights_fragment_begin.split('vDirectionalShadowCoord[ i ]').join('vxShadowCoord');
 // layer CUT (300): discard the pixels the art left empty (aux r is 0 there); other layers: the old depth-layer test
-const LAYER_TEST = 'vec4 vxA = texture2D(uAux, vUv); if (vLayer > 299.5) { if (vxA.r < 0.5 / 255.0) discard; } else if (abs(vLayer) > 0.5 && abs((vLayer < 0.0 ? vxA.g : vxA.r) * 255.0 - abs(vLayer)) > 0.5) discard;';
+const LAYER_TEST = 'vec4 vxA = texture2D(uAux, vUv); if (vLayer > 399.5) { if (vxA.a < 0.5 / 255.0) discard; } else if (vLayer > 299.5) { if (vxA.r < 0.5 / 255.0) discard; } else if (abs(vLayer) > 0.5 && abs((vLayer < 0.0 ? vxA.g : vxA.r) * 255.0 - abs(vLayer)) > 0.5) discard;';
+// 'card': the 2D style's cards (engine/34-bake.js), a slab whose texture is the pictures: cut out where their alpha is
+// low, lit at night where it is 200 (a window)
+const CARD_TEST = 'vec4 vxT = texture2D(map, vUv); if (vxT.a < 0.4) discard; vec4 vxA = vec4(0.0, 0.0, vxT.a < 0.9 ? 1.0 : 0.0, 0.0);';
 function voxelMaterial(kind, o) {
-  const ground = kind === 'ground', sprite = kind === 'sprite', slab = kind === 'slab';
-  const m = new THREE.MeshPhongMaterial({ color: 0xffffff, specular: 0x000000, shininess: 0, map: ground ? groundTex : sprite ? o.map : slab ? atlasTex : null, alphaTest: sprite ? .5 : 0 });
+  const ground = kind === 'ground', sprite = kind === 'sprite', card = kind === 'card', slab = kind === 'slab' || card;
+  const m = new THREE.MeshPhongMaterial({ color: 0xffffff, specular: 0x000000, shininess: 0, map: ground ? groundTex : sprite ? o.map : card ? cardTexture() : slab ? atlasTex : null, alphaTest: sprite ? .5 : 0 });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uShadowMat = { value: sun.shadow.matrix };
     sh.uniforms.uGlow = uGlow;
@@ -815,9 +832,9 @@ function voxelMaterial(kind, o) {
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm;\n' + (ground || sprite ? '' : slab ? 'attribute float aLayer; varying float vLayer; attribute float aLamp; varying float vLamp;' : 'attribute vec4 aCol; varying vec4 vCol; attribute float aLamp; varying float vLamp;'))
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWNrm = normalize(mat3(modelMatrix) * normal);\n' + (ground || sprite ? '' : slab ? 'vLayer = aLayer; vLamp = aLamp;' : 'vCol = aCol; vLamp = aLamp;'));
     let f = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm; uniform mat4 uShadowMat; uniform float uGlow; uniform vec3 uLampCol;\n' + (ground ? 'uniform sampler2D uHeightTex; uniform vec2 uAtlas;' : sprite ? 'uniform vec3 uProbe; uniform vec2 uRow; uniform float uLampL;' : slab ? 'uniform sampler2D uAux; uniform vec2 uAtlas; varying float vLayer; varying float vLamp;' : 'varying vec4 vCol; varying float vLamp;'));
-    f = f.replace('void main() {', 'void main() {\n' + (ground ? 'float vxLamp = texture2D(uHeightTex, vUv).a * 2.0;' : sprite ? 'float vxLamp = uLampL;' : slab ? LAYER_TEST + ' float vxLamp = vLamp * 2.0;' : 'float vxLamp = vLamp * 2.0;'));
+    f = f.replace('void main() {', 'void main() {\n' + (ground ? 'float vxLamp = texture2D(uHeightTex, vUv).a * 2.0;' : sprite ? 'float vxLamp = uLampL;' : slab ? (card ? CARD_TEST : LAYER_TEST) + ' float vxLamp = vLamp * 2.0;' : 'float vxLamp = vLamp * 2.0;'));
     // a solid surface is opaque even where its texel is not: the post pass shows the sky through any alpha below 1
-    if (slab) f = f.replace('#include <map_fragment>', (diag.aa ? AA_MAP : '#include <map_fragment>') + '\ndiffuseColor.a = 1.0;').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vxA.b * uGlow * 1.5;');
+    if (slab) f = f.replace('#include <map_fragment>', (diag.aa && !card ? AA_MAP : '#include <map_fragment>') + '\ndiffuseColor.a = 1.0;').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vxA.b * uGlow * 1.5;');
     else if (ground) f = f.replace('#include <map_fragment>', diag.aa ? AA_MAP : '#include <map_fragment>').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * texture2D(uHeightTex, vUv).r * uGlow * 1.6;');
     else if (!ground && !sprite) f = f.replace('#include <color_fragment>', '#include <color_fragment>\nvec3 vxBase = pow(vCol.rgb, vec3(2.2)); diffuseColor.rgb *= vxBase;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vxBase * vCol.a * uGlow * 1.5;');
@@ -830,14 +847,15 @@ function voxelMaterial(kind, o) {
       ? f.replace('#include <lights_fragment_begin>', '').replace('#include <lights_fragment_maps>', '').replace('#include <lights_fragment_end>', '').replace(/vec3 outgoingLight = [^;]+;/, 'vec3 outgoingLight = diffuseColor.rgb * 0.8 + totalEmissiveRadiance;')
       : f.replace('#include <lights_fragment_begin>', coord + LIGHTS).replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.directDiffuse += material.diffuseColor * uLampCol * vxLamp;');
   };
-  if (slab || ground) { m.extensions = { derivatives: true }; m.userData.aa = true; }   // fwidth, for AA_MAP (WebGL1: OES_standard_derivatives)
+  if ((slab && !card) || ground) { m.extensions = { derivatives: true }; m.userData.aa = true; }   // fwidth, for AA_MAP (WebGL1: OES_standard_derivatives)
   m.customProgramCacheKey = () => 'vx-' + kind + (diag.flat ? '-flat' : '') + (m.userData.aa && diag.aa ? '-aa' : '');
   allMats.push(m);
   return m;
 }
-let matStatic = null, matSlab = null, slabDepth = null;
+let matStatic = null, matSlab = null, slabDepth = null, matCard = null, cardDepth = null;
 function makeMaterials() {
-  matStatic = voxelMaterial('static'); matSlab = voxelMaterial('slab');
+  matStatic = voxelMaterial('static'); matSlab = voxelMaterial('slab'); matCard = voxelMaterial('card');
+  cardDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: cardTexture(), alphaTest: .5 });
   slabDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: atlasTex });
   slabDepth.onBeforeCompile = (sh) => {
     sh.uniforms.uAux = { value: auxTex };
@@ -977,6 +995,134 @@ function resize() {
   aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = Math.max(ss, .75);
 }
 
+// ---- engine/34-bake.js
+/* ---------- the 2D style's pictures: each thing's own drawing, and the roof the camera sees above it ---------- */
+// The 2D style (settings.flat) draws each thing as one card facing the fixed camera, the card showing the thing's front
+// drawing pixel for pixel, as drawn. A drawing made for the 3D is a straight elevation: from the game's camera a roof
+// shows much more than its edge. So a building also gets, above its drawing, the rest of its roof as the camera sees it,
+// drawn in pixels: how far it rises over each column comes from the drawing and the side view (the depth the camera
+// sees climbs tan(pitch) rows per pixel back), its tiles from the building's own roof tiles (the 3D roofs' texture),
+// copied one for one, outlined. A building drawn in code (the bakery) gets its gable roof from its own roof data, and
+// its chimney moves up by how far back it stands. Lit windows keep their glow (alpha 200 marks them).
+// The card stands where the thing's front does (a crossed thing's through its trunk), so the cat walks in front of it and
+// behind it as in 3D. The pictures share one texture, packed in rows.
+const CARD_W = 1024, CARD_H = 1024, cardPx = new Uint8Array(CARD_W * CARD_H * 4), cardPics = new Map(), cardShelf = { x: 0, y: 0, h: 0 };
+let cardTex = null, cardDirty = false;
+// the 2D style's shadow casters: the 3D models, drawn into the shadow map only
+const shadowOnly = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+const cardTexture = () => { if (!cardTex) { cardTex = nearest(new THREE.DataTexture(cardPx, CARD_W, CARD_H, THREE.RGBAFormat, THREE.UnsignedByteType)); cardTex.encoding = THREE.sRGBEncoding; } return cardTex; };
+
+const lumOf = (c) => (c >> 16 & 255) * .3 + (c >> 8 & 255) * .59 + (c & 255) * .11;
+const modp = (a, n) => ((Math.floor(a) % n) + n) % n;
+const tileAt = (s, u, v) => { const T = AP.sprites[s.key].tiles; if (!T) return 0x9a4a30; const k = ((T[1] + modp(v, T[3])) * AW2 + T[0] + modp(u, T[2])) * 4; return atlasPx[k] << 16 | atlasPx[k + 1] << 8 | atlasPx[k + 2]; };
+const nearCol = (a, b) => Math.abs((a >> 16 & 255) - (b >> 16 & 255)) + Math.abs((a >> 8 & 255) - (b >> 8 & 255)) + Math.abs((a & 255) - (b & 255)) < 110;
+
+// the picture: { w, h, x0 (its left column from the anchor), px: RGBA rows from the ground up }
+function cardPicture(s, rot, lid) {
+  const pic = s.pic, side = rot % 2 && pic.side ? pic.side : null, W = side ? side.w : s.w, H0 = s.h;
+  const src = side ? side.c : pic.c, ghost = (i) => !side && s.pixel && (s.fl[i] & F_GHOST);
+  const t = Math.tan(PITCH), cols = [];   // cols[x][y]: [colour, glow], y from the ground up
+  let H = H0; const put = (x, y, c, g) => { if (x < 0 || x >= W || y < 0) return; const col = cols[x] || (cols[x] = []); col[y] = [c, g]; H = Math.max(H, y + 1); };
+  const at = (x, y) => (x >= 0 && x < W && cols[x] && cols[x][y]) || null;
+  // the drawing as drawn (a ghost pixel of a building drawn in code belongs to a smooth part: placed below)
+  for (let r = 0; r < H0; r++) for (let x = 0; x < W; x++) { const i = r * W + x, c = src[i]; if (c >= 0 && !ghost(i)) put(side && rot === 3 ? W - 1 - x : x, H0 - 1 - r, c, !side && s.glow[i]); }
+  const top = (x) => { const col = cols[x] || []; for (let y = col.length - 1; y >= 0; y--) if (col[y]) return y + 1; return 0; };
+  let outline = 0x2a1d18, ol = 1e9; for (const col of cols) for (const p of col || []) if (p && lumOf(p[0]) < ol) { ol = lumOf(p[0]); outline = p[0]; }
+  const roof = [];   // [x, y]: the pixels added for the roof, outlined at the end
+  if (!side && pic.side && s.sheet && s.sheet.startsWith('buildings')) {
+    // a building from the sheets: front and side seen together from the camera, above the drawing, over the columns
+    // whose top is roof (a hanging sign or a lamp beside the walls gets nothing)
+    const sd = pic.side, D = sd.w, hS = [], hF = [], base = roofColour(pic, s.key);
+    for (let z = 0; z < D; z++) { let r = 0; while (r < sd.h && sd.c[r * D + z] < 0) r++; hS[z] = sd.h - r; }
+    for (let x = 0; x < W; x++) {
+      const h = top(x); let isRoof = false;
+      for (let y = h - 1, n = 0; y >= 0 && n < 8; y--) { const p = at(x, y); if (!p) continue; n++; if (lumOf(p[0]) >= 42 && nearCol(p[0], base)) { isRoof = true; break; } }
+      hF[x] = isRoof ? h : 0;
+    }
+    // one roof from its first column to its last: a chimney or a dark edge in between is still roof behind
+    const roofCols = hF.map((h, x) => h ? x : -1).filter((x) => x >= 0);
+    if (roofCols.length) for (let x = roofCols[0]; x <= roofCols[roofCols.length - 1]; x++) if (!hF[x]) hF[x] = top(x);
+    const span = (a) => { const v = a.filter((q) => q > 0); return v.length ? Math.max(...v) - Math.min(...v) : 0; }, frontGable = span(hF) > span(hS);
+    let ridge = 0; for (let x = 0; x < W; x++) if (hF[x] > hF[ridge]) ridge = x;
+    for (let x = 0; x < W; x++) {
+      if (!hF[x]) continue; let R = hF[x];
+      for (let z = 0; z < D; z++) R = Math.max(R, Math.min(hF[x], hS[z]) + z * t);
+      const E = Math.round(R - hF[x]);
+      for (let k = 0; k < E; k++) {
+        const c = tileAt(s, x, k);   // courses across, as a 2D roof is drawn
+        put(x, hF[x] + k, frontGable && x > ridge ? shade(c, .84) : c, 0); roof.push([x, hF[x] + k]);
+      }
+    }
+  } else if (!side && s.pixel && pic.roofs) {
+    // a building drawn in code: its gable roofs from their own data, the fascia under them, then its ghosts moved up
+    for (const R of pic.roofs) {
+      const run = R.cx - R.xl, E = Math.round((R.zf - R.zb) * t), len = Math.hypot(run, R.yR - R.yE);
+      for (let x = Math.ceil(R.xl); x < R.xr; x++) {
+        const d = Math.abs(x + .5 - R.cx), y0 = Math.round(R.yE + (R.yR - R.yE) * (1 - d / run) + 1), slope = Math.round((run - d) * len / run);
+        for (let y = y0 - R.t; y < y0; y++) if (!at(x, y)) put(x, y, shade(tileAt(s, 0, 3), .8), 0);   // the fascia: the tiles' joint colour
+        for (let k = 0; k < E; k++) { const c = tileAt(s, x, y0 + k); put(x, y0 + k, x + .5 > R.cx ? shade(c, .84) : c, 0); roof.push([x, y0 + k]); }   // courses across, as a 2D roof is drawn
+      }
+    }
+    // the ghosts (the chimney, the sign): a pixel z back from the card's plane stands z tan(pitch) rows higher
+    const zc = cardPlane(s, 0) / P;
+    const moved = [];
+    for (let r = 0; r < H0; r++) for (let x = 0; x < W; x++) { const i = r * W + x; if (src[i] < 0 || !ghost(i)) continue; const y = H0 - 1 - r + Math.max(0, Math.round((zc - s.zf[i]) * t)); put(x, y, src[i], 0); moved.push([x, y, y !== H0 - 1 - r]); }
+    // a part moved up onto the roof gets an outline of its own, so it reads against the tiles
+    const mv = new Set(moved.map(([x, y]) => x + ',' + y));
+    for (const [x, y, up] of moved) if (up) for (const [a, b] of [[x - 1, y], [x + 1, y], [x, y + 1]]) if (!mv.has(a + ',' + b) && at(a, b)) put(a, b, 0x2a1d18, 0);
+  }
+  // the roof's outline: a roof pixel with nothing above it or beside it
+  const edge = roof.filter(([x, y]) => !at(x, y + 1) || !at(x - 1, y) || !at(x + 1, y));
+  for (const [x, y] of edge) put(x, y, outline, 0);
+  // an open chest: its lid stands up behind the body, inside out (the lid's rows mirrored, darker), the body's top dark
+  if (lid && !side) {
+    const seam = H0 - CHEST.seam;
+    for (let x = 0; x < W; x++) {
+      const col = cols[x] || [], lidRows = col.slice(seam, H0); for (let y = seam; y < col.length; y++) col[y] = undefined;
+      for (let k = 0; k < lidRows.length; k++) if (lidRows[k]) put(x, seam + 1 + (lidRows.length - 1 - k), shade(lidRows[k][0], .62), 0);
+      for (let y = seam - 2; y < seam; y++) if (col[y]) col[y] = [shade(col[y][0], .4), 0];
+    }
+  }
+  const x0 = side ? -Math.floor(W / 2) : -s.px, px = new Uint8Array(W * H * 4);
+  for (let x = 0; x < W; x++) for (let y = 0; y < H; y++) { const p = at(x, y); if (!p) continue; const k = (y * W + x) * 4; px[k] = p[0] >> 16 & 255; px[k + 1] = p[0] >> 8 & 255; px[k + 2] = p[0] & 255; px[k + 3] = p[1] ? 200 : 255; }
+  return { w: W, h: H, x0, px };
+}
+// where the card stands, from the anchor: a crossed thing through its trunk; one drawn in code at its wall (its most
+// common front depth); else the front of its footprint, as turned
+function cardPlane(s, rot) {
+  if (BUILD[s.key] === 'cross') return 0;
+  if (s.pixel) { const n = new Map(); s.each((x, y, i) => { if (!(s.fl[i] & F_GHOST)) n.set(s.zf[i], (n.get(s.zf[i]) || 0) + 1); }); return [...n].sort((a, b) => b[1] - a[1])[0][0] * P; }
+  return (rot % 2 ? (rot === 1 ? s.px : s.w - s.px) : s.depth / 2) * P;
+}
+
+// the card of thing s turned by rot quarter turns (a chest: lid open or not), as quads for putLow; null when the shared
+// texture is full (then the thing is left out, and said so once)
+function cardFor(s, rot, lid) {
+  rot = ((rot || 0) % 4 + 4) % 4;
+  const id = s.key + '|' + rot + '|' + (lid ? 1 : 0); if (cardPics.has(id)) return cardPics.get(id);
+  const pc = cardPicture(s, rot, lid), W = pc.w, H = pc.h;
+  if (cardShelf.x + W > CARD_W) { cardShelf.x = 0; cardShelf.y += cardShelf.h; cardShelf.h = 0; }
+  if (W > CARD_W || cardShelf.y + H > CARD_H) { cardPics.set(id, null); console.warn('2D style: no room left for the picture of ' + s.key); return null; }
+  const ax = cardShelf.x, ay = cardShelf.y; cardShelf.x += W; cardShelf.h = Math.max(cardShelf.h, H);
+  for (let y = 0; y < H; y++) cardPx.set(pc.px.subarray(y * W * 4, (y + 1) * W * 4), ((ay + y) * CARD_W + ax) * 4);
+  cardDirty = true;
+  const zz = cardPlane(s, rot) / P, u = (c) => c / CARD_W, v = (r) => r / CARD_H, X0 = pc.x0;
+  const card = [{ p: [[X0, 0, zz], [X0 + W, 0, zz], [X0 + W, H, zz], [X0, H, zz]], n: [0, 0, 1], uv: [u(ax), v(ay), u(ax + W), v(ay), u(ax + W), v(ay + H), u(ax), v(ay + H)], layer: 0 }];
+  cardPics.set(id, card);
+  return card;
+}
+// for the checks (tools/flat-check.mjs): how many rows tall thing s's 3D model stands on screen at the fixed view, in
+// the card's rows (one art row at the card's plane)
+function modelRows(s, rot) {
+  const prevS = S, prevB = B; S = new SlabBuilder(256); B = new Builder(256);
+  if (BUILD[s.key] === 'cross') putLow(flatOf(s), 0, 0, { y: 0 }); else { if (s.pixel) put(s, 0, 0, { rot, y: 0 }); if (s.low.length) putLow(s.low, 0, 0, { rot, y: 0 }); }
+  const pos = S.pos.a, n = S.pos.n, cp = Math.cos(PITCH), sn = Math.sin(PITCH); S = prevS; B = prevB;
+  let u0 = 1e9, u1 = -1e9; for (let i = 0; i < n; i += 3) { const u = pos[i + 1] * cp - pos[i + 2] * sn; u0 = Math.min(u0, u); u1 = Math.max(u1, u); }
+  return n ? (u1 - u0) / (P * cp) : 0;
+}
+// after a batch of pictures: send the texture once
+function cardUpload() { if (cardDirty && cardTex) { cardTex.needsUpdate = true; cardDirty = false; } }
+
 // ---- engine/40-area.js
 /* ---------- areas: a map is built in chunks around the cat (the open world) or as one piece (an interior) ---------- */
 // def: { id, name, cell (world units per map cell, default 2 = one 32 px tile), map: rows of legend chars,
@@ -1114,8 +1260,11 @@ function openArea(def) {
         k = e;
       }
     }
-    // things whose foot stands in this chunk (chests are not baked: they are props, see propMesh)
-    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); }
+    // things whose foot stands in this chunk (chests are not baked: they are props, see propMesh). In the 2D style a thing
+    // is its card, and its 3D model is built as well, drawn only into the shadow map: the ground keeps the 3D's shadows
+    let shadowS = null;
+    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); if (settings.flat) { const c = cardFor(th.s, o.rot); if (c) putLow(c, th.x, th.z, Object.assign({}, o, { rot: 0 })); const keep = S; S = shadowS = shadowS || new SlabBuilder(256); if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); S = keep; continue; } if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); }
+    cardUpload();
     // baked light, meshes
     B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
     const gPack = new Uint8Array(w * h * 2);
@@ -1126,7 +1275,8 @@ function openArea(def) {
     // chunks are culled against the view (one kept off screen costs nothing); the bounds are padded a little
     const cull = (m) => { const g = m.geometry; if (!g.attributes.position || !g.attributes.position.count) { m.visible = false; return m; } g.computeBoundingSphere(); g.boundingSphere.radius += 1; return m; };
     const staticMesh = cull(new THREE.Mesh(B.geometry(), matStatic)); staticMesh.castShadow = staticMesh.receiveShadow = true; group.add(staticMesh);
-    const slabMesh = cull(new THREE.Mesh(S.geometry(), matSlab)); slabMesh.castShadow = slabMesh.receiveShadow = true; slabMesh.customDepthMaterial = slabDepth; group.add(slabMesh);
+    const slabMesh = cull(new THREE.Mesh(S.geometry(), settings.flat ? matCard : matSlab)); slabMesh.castShadow = !settings.flat; slabMesh.receiveShadow = true; slabMesh.customDepthMaterial = settings.flat ? cardDepth : slabDepth; group.add(slabMesh);
+    if (shadowS) { const m = cull(new THREE.Mesh(shadowS.geometry(), shadowOnly)); m.castShadow = true; m.customDepthMaterial = slabDepth; group.add(m); }
     const pos = [], uv = [], idx = [], open = new Map(), rects = [];
     // flat rectangles of equal height, merged cell by cell (a chunk starts on a cell boundary), then sized in pixels
     const cw = Math.ceil(w / cellPx), chh = Math.ceil(h / cellPx), cx0 = x0 / cellPx, cz0 = z0 / cellPx, ch = (x, z) => cellH[(cz0 + z) * cols + cx0 + x];
@@ -1211,7 +1361,8 @@ function propMesh(items) {
   for (const [quads, x, z, o] of items) { const oo = Object.assign({}, o || {}); if (oo.y === undefined) oo.y = A.groundY(x, z); putLow(quads, x, z, oo); }
   B.bakeLamps(A.lampLight); S.bakeLamps(A.lampLight);
   const group = new THREE.Group();
-  for (const [bld, mat, depth] of [[B, matStatic], [S, matSlab, slabDepth]]) {
+  cardUpload();
+  for (const [bld, mat, depth] of [[B, matStatic], settings.flat ? [S, matCard, cardDepth] : [S, matSlab, slabDepth]]) {
     const g = bld.geometry(); if (!g.attributes.position || !g.attributes.position.count) continue;
     const m = new THREE.Mesh(g, mat); m.castShadow = m.receiveShadow = true; if (depth) m.customDepthMaterial = depth; group.add(m);
   }
@@ -1870,7 +2021,7 @@ function chestProp(id, key, x, z, o) {
 function chestsBuild() {
   if (settings.wire) setTimeout(applyWire);   // after the mesh below exists
   if (chestMesh) chestMesh.dispose(); chestMesh = null; if (!chests.size) return;
-  chestMesh = propMesh([...chests.values()].map((c) => [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
+  chestMesh = propMesh([...chests.values()].map((c) => settings.flat ? [cardFor(sp[c.key], c.o.rot, c.lid) || [], c.x, c.z, { flip: c.o.flip }] : [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
 }
 function openChestProp(id) {
   const c = chests.get(id); if (!c) return;
@@ -1987,7 +2138,7 @@ let hintState = null;
 function setHint(a) {
   const key = a ? 'z:' + a.label : 'base';
   if (key === hintState) return; hintState = key;
-  $('hint').textContent = a ? t(coarse ? 'hint.act.touch' : 'hint.act', { what: t(a.label) }) : t(coarse ? 'hint.touch' : 'hint.keys');
+  $('hint').textContent = a ? t(coarse ? 'hint.act.touch' : 'hint.act', { what: t(a.label) }) : t((coarse ? 'hint.touch' : 'hint.keys') + (settings.flat ? '.flat' : ''));   // the 2D style does not turn
   $('bAtk').textContent = t(a ? 'btn.talk' : 'btn.atk');
 }
 
@@ -2111,8 +2262,9 @@ function optionsSetup() {
     b.setAttribute('aria-pressed', String(b.dataset.v === String(val())));
     b.onclick = () => { apply(b.dataset.v); saveSettings(); sfx('move'); document.querySelectorAll(`#${id} button`).forEach((o) => o.setAttribute('aria-pressed', String(o === b))); };
   });
-  seg('optLang', () => settings.lang, (v) => { settings.lang = v; applyLang(); hintState = null; hudKey = ''; if (A) $('areaName').textContent = t(A.name); if (ui.screen === 'menu') renderTab(); });
+  seg('optLang', () => settings.lang, (v) => { settings.lang = v; applyLang(); syncStyle(); hintState = null; hudKey = ''; if (A) $('areaName').textContent = t(A.name); if (ui.screen === 'menu') renderTab(); });
   seg('optFps', () => settings.fps, (v) => { settings.fps = +v; });
+  seg('optStyle', () => settings.flat ? 'flat' : 'diorama', (v) => { settings.flat = v === 'flat'; restyle(); syncStyle(); });
   seg('optWire', () => settings.wire ? 'on' : 'off', (v) => { settings.wire = v === 'on'; applyWire(); });
   seg('optShadows', () => settings.shadows ? 'on' : 'off', (v) => { settings.shadows = v === 'on'; sun.castShadow = settings.shadows; shadowHold = 3; });
   seg('optShake', () => settings.shake ? 'on' : 'off', (v) => { settings.shake = v === 'on'; });
@@ -2162,7 +2314,21 @@ let simTime = 0;   // the simulation's own clock (time below is the drawing cloc
 let player = null, shadowHold = 8, time = 0, intro = 1, transitioning = false;
 let last = performance.now(), acc = 0, drawAcc = 0, frames = 0, fpsT = 0, fps = 0, calls = 0;
 const TURN = Math.PI / 4;   // the view turns and settles in steps of 45 degrees
-const rotate = (d) => { yawT = Math.round(yawT / TURN) * TURN + d * TURN; };
+const rotate = (d) => { if (settings.flat) return; yawT = Math.round(yawT / TURN) * TURN + d * TURN; };   // the 2D style: a fixed view
+// the style changed: every area is built again (the kept open world too), the cat where it stands
+function restyle() {
+  if (!A) return; const name = G ? G.area : A.def.id, at = [player.x, player.z], face = [player.fx, player.fz];
+  for (const k of Object.keys(kept)) { if (kept[k] !== A) kept[k].dispose(); delete kept[k]; }
+  if (A.def.keep) { A.dispose(); A = null; }
+  if (settings.flat) yaw = yawT = 0;
+  enterArea(name, at, face);
+}
+// the style from the button by the menu (it names the style in use; a click swaps it) or from the options
+function setStyle(flat) { settings.flat = !!flat; saveSettings(); restyle(); syncStyle(); }
+function syncStyle() {
+  const b = $('styleBtn'); if (b) { const now = settings.flat ? '2D' : '3D'; b.textContent = now; b.setAttribute('aria-label', t('btn.style') + ': ' + now); }
+  document.querySelectorAll('#optStyle button').forEach((o) => o.setAttribute('aria-pressed', String(o.dataset.v === (settings.flat ? 'flat' : 'diorama'))));
+}
 
 function enterArea(name, at, face) {
   const def = AREAS[name]; if (!def) throw new Error('no area "' + name + '"');
@@ -2238,7 +2404,7 @@ function draw(dt) {
   time += dt;
   if (!A) { renderer.setRenderTarget(null); renderer.setClearColor(0x17121c, 1); renderer.clear(); return; }
   setHint(dlg ? null : nearAct);
-  if (intro < 1) { intro = Math.min(1, intro + dt / 2.8); const e = 1 - Math.pow(1 - intro, 3); yaw = yawT + (1 - e) * -1.05; Vz = lerp(28, VT, e); }
+  if (intro < 1) { intro = Math.min(1, intro + dt / 2.8); const e = 1 - Math.pow(1 - intro, 3); yaw = yawT + (settings.flat ? 0 : (1 - e) * -1.05); Vz = lerp(28, VT, e); }
   else { yaw += (yawT - yaw) * (1 - Math.exp(-dt * 9)); Vz += (VT - Vz) * (1 - Math.exp(-dt * 8)); }
   const vv = Math.max(Vz, minV()), [tx, tz] = camGoal(vv), kf = 1 - Math.exp(-dt * 5);
   camT.x += (tx - camT.x) * kf; camT.z += (tz - camT.z) * kf; camT.y += (A.groundY(player.x, player.z) * .5 - camT.y) * kf;
@@ -2957,7 +3123,8 @@ function refreshTitle() { $('bContinue').hidden = !hasSave(); }
 function closeShop() { ui.screen = 'game'; showScreen(null); }
 
 (async function boot() {
-  applyLang();
+  applyLang(); syncStyle();
+  $('styleBtn').onclick = () => setStyle(!settings.flat);
   if (!renderer) { $('fallback').hidden = false; return; }
   inputSetup(); optionsSetup();
   try { await loadArt(); } catch (e) { $('fallback').textContent = e.message; $('fallback').hidden = false; return; }
@@ -2984,7 +3151,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   // drag turns the view, the wheel zooms (as in the dioramas)
   let drag = null;
   canvas.addEventListener('pointerdown', (e) => { drag = { id: e.pointerId, x: e.clientX }; canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); });
-  canvas.addEventListener('pointermove', (e) => { if (!drag || drag.id !== e.pointerId) return; const dx = e.clientX - drag.x; drag.x = e.clientX; yawT -= dx * .007; yaw = yawT; });
+  canvas.addEventListener('pointermove', (e) => { if (!drag || drag.id !== e.pointerId) return; const dx = e.clientX - drag.x; drag.x = e.clientX; if (settings.flat) return; yawT -= dx * .007; yaw = yawT; });
   const endDrag = (e) => { if (drag && drag.id === e.pointerId) { drag = null; yawT = Math.round(yawT / TURN) * TURN; } };
   canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); VT = clamp(VT * Math.exp(e.deltaY * .0012), 7, 26); }, { passive: false });
@@ -3019,6 +3186,11 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     // material discards, since they cost the same
     wire: (on) => { settings.wire = !!on; applyWire(); },
     aa: (on) => setAA(on),
+    flat: (on) => { settings.flat = !!on; restyle(); syncStyle(); },
+    cards: () => {
+      let shadows = 0; scene.traverse((o) => { if (o.isMesh && o.material === shadowOnly && o.visible) shadows++; });
+      return { pics: [...cardPics].map(([k, c]) => { const [key, rot] = k.split('|'), s = sp[key]; return [k, !!c, c ? c[0].p[2][1] : 0, modelRows(s, +rot), s.sheet || '', !!(s.pic && s.pic.roofs)]; }), shelf: Object.assign({}, cardShelf), size: [CARD_W, CARD_H], shadows };
+    },
     strips: (k) => { const s = sp[k]; return s.strips.map((q) => { const xs = [0, 3, 6, 9].map((o) => q.p[o]), ys = [1, 4, 7, 10].map((o) => q.p[o]); return [(Math.min(...xs) + Math.max(...xs)) / 2 + s.px, s.base - (Math.min(...ys) + Math.max(...ys)) / 2, q.n[0], q.n[1]]; }); },
     parts: (k) => { const s = sp[k]; return s.pixel ? { front: 2 * s.layF.length, back: 2 * s.layB.length, sides: 2 * s.strips.length, roof: 2 * s.low.length } : { faces: 2 * s.low.length }; },
     low: (k) => sp[k].low.map((q) => ({ n: q.n.map((v) => +v.toFixed(2)), y: q.p.map((p) => p[1]), layer: q.layer })),

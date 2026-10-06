@@ -25,6 +25,7 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 .top{position:absolute;inset:0 0 auto 0;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));pointer-events:none}
 .top h2{margin:0 0 6px;font-family:var(--display);font-weight:600;font-size:20px;text-shadow:0 2px 0 rgba(0,0,0,.6)}
 .top button{pointer-events:auto}
+.topBtns{display:flex;gap:8px}
 #hud{display:grid;grid-template-columns:auto 120px auto;gap:3px 6px;align-items:center;font-size:11px;text-shadow:0 1px 0 #000}
 #hud .bar{height:9px;background:rgba(0,0,0,.55);border:1px solid var(--line)}
 #hud .bar i{display:block;height:100%;transition:width .15s}
@@ -108,7 +109,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
         <span class="tags"><span id="hLv"></span><span id="hCoins"></span></span>
       </div>
     </div>
-    <button type="button" data-action="menu" data-t="btn.menu">Menu</button>
+    <div class="topBtns"><button type="button" id="styleBtn">3D</button><button type="button" data-action="menu" data-t="btn.menu">Menu</button></div>
   </div>
   <div id="bossBar" hidden role="progressbar" aria-valuemin="0" aria-valuemax="100"><b id="bossName"></b><span class="bar"><i id="bossFill"></i><u></u></span></div>
   <div id="toast" hidden role="status"></div>
@@ -155,6 +156,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
           <span data-t="opt.sound">Effects</span><div class="seg" id="optSound"><button type="button" data-v="0" data-t="opt.off">Off</button><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button></div>
           <span data-t="opt.shake">Screen shake</span><div class="seg" id="optShake"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
           <span data-t="opt.shadows">Shadows</span><div class="seg" id="optShadows"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+          <span data-t="opt.style">Style</span><div class="seg" id="optStyle"><button type="button" data-v="diorama">3D</button><button type="button" data-v="flat">2D</button></div>
           <span data-t="opt.wire">Wireframe</span><div class="seg" id="optWire"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
         </div>
         <p id="diag" aria-live="off"></p>
