@@ -701,7 +701,9 @@ function voxelMaterial(kind, o) {
     else if (ground) f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * texture2D(uHeightTex, vUv).r * uGlow * 1.6;');
     else if (!ground && !sprite) f = f.replace('#include <color_fragment>', '#include <color_fragment>\nvec3 vxBase = pow(vCol.rgb, vec3(2.2)); diffuseColor.rgb *= vxBase;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vxBase * vCol.a * uGlow * 1.5;');
-    const coord = sprite
+    // things (slab) cast shadows on the ground but receive none: their shadow lookup falls outside the map, which reads
+    // as lit (self-shadowing drew streaks on walls: the awning's hem, the chimney on the roof)
+    const coord = slab ? 'vec4 vxShadowCoord = vec4(-1.0, -1.0, 0.5, 1.0);\n' : sprite
       ? 'vec4 vxShadowCoord = uShadowMat * vec4(uProbe.x, uProbe.y + (floor((vWPos.y - uProbe.y) / uRow.x) + 0.5) * uRow.y, uProbe.z, 1.0);\n'
       : 'vec3 vxP = vWPos + normalize(vWNrm) * 0.03125;\nvec4 vxShadowCoord = uShadowMat * vec4((floor(vxP * 16.0) + 0.5) * 0.0625, 1.0);\n';
     sh.fragmentShader = diag.flat
@@ -844,7 +846,9 @@ function resize() {
   if (!renderer) return;
   const r = canvas.getBoundingClientRect(); if (r.width < 2 || r.height < 2) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 2) * quality; bw = Math.max(2, Math.round(r.width * dpr)); bh = Math.max(2, Math.round(r.height * dpr));
-  const ss = dpr >= 1.5 ? 1.5 / dpr : 1.25; renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
+  // the scene is drawn at the screen's resolution divided by a whole number (1, or 2 on a 2x screen) and enlarged by
+  // exactly that number: at 1.25 or 0.75 the pixel pattern crawled while the camera moved, even by whole pixels
+  const ss = window.__ss || 1 / Math.max(1, Math.floor(dpr + .01)); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
   aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = Math.max(ss, .75);
 }
 
@@ -2790,6 +2794,8 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     clearEnemies: () => clearEnemies(),
     internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS }),
     view: (y) => { yaw = yawT = y; intro = 1; },
+    rescale: (k) => { window.__ss = k; resize(); },
+    camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: Math.max(Vz, minV()), rt: [rt.width, rt.height] }),
     shadowAt: (x, z) => { A.shadowPin = x === undefined ? null : { x, z }; },
     // the triangle edges of every thing drawn over it (for the review): every triangle, also those whose pixels the
     // material discards, since they cost the same
