@@ -578,7 +578,7 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
 // roof tiles drawn in code (courses along the eaves, counted down from the ridge), the fascia along the front and back
 // edges and the eave ends in the tiles' dark joint colour. A few quads instead of a staircase of 1-pixel steps
 function roofQuads(s) {
-  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes && !s.pic.discs && !s.pic.rings) return out;
+  const T = AP.sprites[s.key].tiles || [0, 0, 1, 1], out = []; if (!s.pic.roofs && !s.pic.slopes && !s.pic.discs && !s.pic.rings && !s.pic.boxes) return out;
   const uv = (u, v) => [(T[0] + clamp(u, 0, T[2])) / AW2, (T[1] + clamp(v, 0, T[3])) / AH];
   const q = (pts, n, uvs) => out.push({ p: pts.map(([x, y, z]) => [x - s.px, y, z]), n, uv: uvs.flat(), layer: 0 });
   // sloping panels (an awning): the panel reads the sprite's own front pixels by height, the two ends are triangles
@@ -604,6 +604,20 @@ function roofQuads(s) {
   // rings (a round window's frame, an arch): an elliptic band in front of the wall, from angle a0 to a1, n segments.
   // Its front at zf, its outer edge down to the wall (zw), its inner edge a tube down to zi (the glass, the door):
   // the curved soffit the pixels drew as steps. All of it in the colour of the drawn frame at radius ru
+  // boxes: { x0, x1 columns (x1 past the last), r0, r1 rows from the ground, zf, zb, faces } - a cornice, a chimney,
+  // a frame. faces 'all': a solid with 6 faces; 'sides': the 4 side faces only (its front is drawn as pixels); 'in': the
+  // 4 faces of a hole looking inward (a recess). Front and back read the front pixels; a side face the drawn row or
+  // column along its edge, stretched over its depth
+  for (const b of s.pic.boxes || []) {
+    const { x0, x1, r0, r1, zf, zb } = b, F = b.faces || 'all', o = F === 'in' ? -1 : 1, e = .02;
+    const side = (pts, n, uvs) => q(pts, n.map((v) => v * o), uvs);
+    const ux0 = F === 'in' ? x0 - .5 : x0 + .5, ux1 = F === 'in' ? x1 + .5 : x1 - .5, vy0 = F === 'in' ? r0 - .5 : r0 + .5, vy1 = F === 'in' ? r1 + .5 : r1 - .5;
+    side([[x0, r0, zf], [x0, r0, zb], [x0, r1, zb], [x0, r1, zf]], [-1, 0, 0], [fuv(ux0, r0 + e), fuv(ux0, r0 + e), fuv(ux0, r1 - e), fuv(ux0, r1 - e)]);
+    side([[x1, r0, zb], [x1, r0, zf], [x1, r1, zf], [x1, r1, zb]], [1, 0, 0], [fuv(ux1, r0 + e), fuv(ux1, r0 + e), fuv(ux1, r1 - e), fuv(ux1, r1 - e)]);
+    side([[x0, r1, zf], [x1, r1, zf], [x1, r1, zb], [x0, r1, zb]], [0, 1, 0], [fuv(x0 + e, vy1), fuv(x1 - e, vy1), fuv(x1 - e, vy1), fuv(x0 + e, vy1)]);
+    side([[x0, r0, zb], [x1, r0, zb], [x1, r0, zf], [x0, r0, zf]], [0, -1, 0], [fuv(x0 + e, vy0), fuv(x1 - e, vy0), fuv(x1 - e, vy0), fuv(x0 + e, vy0)]);
+    if (F === 'all') for (const [z, nz] of [[zf, 1], [zb, -1]]) q([[x0, r0, z], [x1, r0, z], [x1, r1, z], [x0, r1, z]], [0, 0, nz], [fuv(x0 + e, r0 + e), fuv(x1 - e, r0 + e), fuv(x1 - e, r1 - e), fuv(x0 + e, r1 - e)]);
+  }
   for (const g of s.pic.rings || []) {
     const n = g.n || 12, at = (t, rx, ry) => [g.cx + Math.cos(t) * rx, g.cy + Math.sin(t) * ry];
     for (let k = 0; k < n; k++) {
@@ -2339,7 +2353,7 @@ AREAS.overworld = (() => {
 // The bakery, after the ChatGPT design: a front-gable house in ochre plaster on a stone plinth, a shop window full of
 // bread under a green and cream awning, an arched door, a round attic window, a bread sign on an iron bracket, a brick
 // chimney near the back. 108 × 74 art pixels, 60 deep.
-const SIGN_N = 12, SIGN_DISC = true, DOOR_RING = true, ATTIC_RING = true;   // the round parts as smooth rings (false: per pixel, for comparison)
+const SIGN_N = 12, SIGN_DISC = true, DOOR_RING = true, ATTIC_RING = true, BOXES = true;   // smooth parts (false: per pixel, for comparison)   // the round parts as smooth rings (false: per pixel, for comparison)
 CODE_ART.bakery = () => {
   const W = 108, H = 74, p = new Pic(W, H), hd = 30, cx = 56;
   const PLASTER = 0xe6bf78, STONE = 0xb9ad96, WOOD = 0x6e4628, ROOF = 0xc2603a, BRICK = 0xa2553a, GREEN = 0x3f8650, CREAM = 0xf0e6cf;
@@ -2352,18 +2366,27 @@ CODE_ART.bakery = () => {
   p.wall(x0, 5, x1 - x0 + 1, 35, plaster, hd, -hd);
   for (let r = 5; r < 40; r++) { const long = Math.floor((r - 5) / 4) % 2 === 0, n = long ? 5 : 3; for (let k = 1; k <= n; k++) { p.at(x0 + k, r, stone(x0 + k, r), hd, -hd); p.at(x1 - k, r, stone(x1 - k, r), hd, -hd); } }
   // the corner columns: their side faces are the side walls, in one plain colour each (F_OWN), plaster above the plinth
-  for (let r = 0; r < 40; r++) for (const x of [x0, x1]) p.at(x, r, r < 5 ? STONE : PLASTER, r < 5 ? hd + 1 : hd, -hd, F_OWN);
+  for (let r = 0; r < 40; r++) for (const x of [x0, x1]) p.at(x, r, r < 5 ? STONE : PLASTER, r < 5 ? hd + 1 : hd, -hd, BOXES ? F_NOSIDE : F_OWN);
+  const boxes = p.boxes = [];
+  if (BOXES) { for (let r = 0; r < 5; r++) for (let x = x0; x <= x1; x++) p.fl[p.Y(r) * W + x] |= F_NOSIDE;   // plinth and side walls: two boxes' sides
+    boxes.push({ x0, x1: x1 + 1, r0: 0, r1: 5, zf: hd + 1, zb: -hd, faces: 'sides' }, { x0, x1: x1 + 1, r0: 5, r1: 40, zf: hd, zb: -hd, faces: 'sides' }); }
 
   // the shop window: a wooden frame, mullions, bread on two shelves in a warm lit room, a stone sill
   const wx0 = 18, wx1 = 63, wr0 = 9, wr1 = 24;
   for (let r = wr0; r <= wr1; r++) for (let x = wx0; x <= wx1; x++) {
     const frame = x === wx0 || x === wx1 || r === wr0 || r === wr1, mull = (x - wx0) % 15 === 0;
-    if (frame || mull) { p.at(x, r, mull && !frame ? shade(WOOD, .9) : WOOD, frame ? hd + 1 : hd - 1, -hd); continue; }
+    const nos = BOXES ? F_NOSIDE : 0;
+    if (frame || mull) { p.at(x, r, mull && !frame ? shade(WOOD, .9) : WOOD, frame ? hd + 1 : hd - 1, -hd, nos); continue; }
     const shelf = r === 13 || r === 18, loaf = !shelf && ((r >= 14 && r <= 16) || (r >= 19 && r <= 21)) && ((x + (r > 17 ? 3 : 0)) % 6) < 4;
     const c = shelf ? 0x5a3a22 : loaf ? (r === 16 || r === 21 ? 0xc07e3a : 0xe0a454) : jit(0x6a4226, x, r, 9, .1);
-    p.at(x, r, c, hd - 4, -hd, loaf ? F_GLOW : 0);
+    p.at(x, r, c, hd - 4, -hd, (loaf ? F_GLOW : 0) | nos);
   }
-  for (let x = wx0 - 2; x <= wx1 + 2; x++) p.at(x, wr0 - 1, shade(STONE, 1.08), hd + 2, -hd);
+  if (BOXES) {   // the frame proud of the wall, the room set in, two mullions; the sill a ledge
+    boxes.push({ x0: wx0, x1: wx1 + 1, r0: wr0, r1: wr1 + 1, zf: hd + 1, zb: hd, faces: 'sides' }, { x0: wx0 + 1, x1: wx1, r0: wr0 + 1, r1: wr1, zf: hd + 1, zb: hd - 4, faces: 'in' });
+    for (const mx of [wx0 + 15, wx0 + 30]) boxes.push({ x0: mx, x1: mx + 1, r0: wr0 + 1, r1: wr1, zf: hd - 1, zb: hd - 4, faces: 'sides' });
+    boxes.push({ x0: wx0 - 2, x1: wx1 + 3, r0: wr0 - 1, r1: wr0, zf: hd + 2, zb: hd, faces: 'all' });
+  }
+  for (let x = wx0 - 2; x <= wx1 + 2; x++) p.at(x, wr0 - 1, shade(STONE, 1.08), BOXES ? hd : hd + 2, -hd, BOXES ? F_NOSIDE : 0);
 
   // the awning: stripes 5 wide on one smooth sloping panel built by the engine (p.slopes: it reads these pixels, painted
   // flat on the wall behind it), two triangular ends, and the scalloped hem hanging from its lower edge as pixels
@@ -2391,13 +2414,14 @@ CODE_ART.bakery = () => {
   if (DOOR_RING) (p.rings = p.rings || []).push({ cx: dx0 + dw / 2, cy: dr0 + dh - ah, rx0: dw / 2 - .3, ry0: ah - .3, rx1: dw / 2 + 1.4, ry1: ah + 1.4, ru: dw / 2 + .5, a0: 0, a1: Math.PI, n: 10, zf: hd + 1, zw: hd, zi: hd - 3 });
 
   // cornice under the gable
-  for (let x = x0 - 2; x <= x1 + 2; x++) { p.at(x, 40, shade(STONE, .82), hd + 2, -hd - 2); p.at(x, 41, STONE, hd + 2, -hd - 2); }
+  for (let x = x0 - 2; x <= x1 + 2; x++) { const o = BOXES ? F_NOSIDE : 0; p.at(x, 40, shade(STONE, .82), hd + 2, -hd - 2, o); p.at(x, 41, STONE, hd + 2, -hd - 2, o); }
+  if (BOXES) boxes.push({ x0: x0 - 2, x1: x1 + 3, r0: 40, r1: 42, zf: hd + 2, zb: -hd - 2, faces: 'sides' });
 
   // the gable wall under the roof. The roof itself is two smooth slopes built by the engine (p.roofs, see roofQuads),
   // tiled like the other buildings' roofs, overhanging 3 px front and back and 4 px at the eaves
   const rise = 27, half0 = x1 - cx + 4;
   const roofLine = (x) => 42 + rise * (1 - Math.abs(x + .5 - cx) / half0);
-  for (let r = 42; r < 42 + rise; r++) { const hw = (x1 - cx) * (1 - (r - 42) / rise); for (let x = Math.ceil(cx - hw); x <= Math.floor(cx + hw); x++) p.at(x, r, plaster(x, r), hd, -hd, F_OWN); }   // its stepped edges (under the roof) one strip each
+  for (let r = 42; r < 42 + rise; r++) { const hw = (x1 - cx) * (1 - (r - 42) / rise); for (let x = Math.ceil(cx - hw); x <= Math.floor(cx + hw); x++) p.at(x, r, plaster(x, r), hd, -hd, F_NOSIDE); }   // no side faces: under the roof (their tops fought it near the ridge)
   p.roofs = [{ cx: cx + .5, xl: cx + .5 - half0, xr: cx + .5 + half0, yE: 42, yR: 42 + rise, zf: hd + 3, zb: -hd - 3, t: 3 }];
 
   // the round attic window, lit
@@ -2412,9 +2436,10 @@ CODE_ART.bakery = () => {
   // the chimney: bricks above the roof line, a stone cap; a straight block near the back
   for (let x = 82; x <= 90; x++) for (let r = Math.ceil(roofLine(x)) + 1; r <= 70; r++) {
     const cap = r >= 68, brick = (r % 3 === 0) || ((x + (Math.floor(r / 3) % 2) * 2) % 4 === 0);
-    p.at(x, r, cap ? shade(STONE, r === 70 ? 1.1 : .9) : brick ? shade(BRICK, .78) : jit(BRICK, x, r, 7, .1), -10, -22);
+    p.at(x, r, cap ? shade(STONE, r === 70 ? 1.1 : .9) : brick ? shade(BRICK, .78) : jit(BRICK, x, r, 7, .1), -10, -22, BOXES ? F_GHOST : 0);
   }
-  for (let x = 81; x <= 91; x++) p.at(x, 70, shade(STONE, 1.1), -9, -23);
+  for (let x = 81; x <= 91; x++) p.at(x, 70, shade(STONE, 1.1), -9, -23, BOXES ? F_GHOST : 0);
+  if (BOXES) boxes.push({ x0: 82, x1: 91, r0: 56, r1: 70, zf: -10, zb: -22, faces: 'all' }, { x0: 81, x1: 92, r0: 70, r1: 71, zf: -9, zb: -23, faces: 'all' });   // body (its foot inside the roof), cap
 
   // the bread sign: an iron bracket from the corner, a round board with a loaf, a thin board at the front
   for (let x = 1; x <= x0 - 1; x++) p.at(x, 33, 0x2a2420, hd + 2, hd - 2);
@@ -2822,6 +2847,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     // the triangle edges of every thing drawn over it (for the review): every triangle, also those whose pixels the
     // material discards, since they cost the same
     wire: (on) => { settings.wire = !!on; applyWire(); },
+    strips: (k) => { const s = sp[k]; return s.strips.map((q) => { const xs = [0, 3, 6, 9].map((o) => q.p[o]), ys = [1, 4, 7, 10].map((o) => q.p[o]); return [(Math.min(...xs) + Math.max(...xs)) / 2 + s.px, s.base - (Math.min(...ys) + Math.max(...ys)) / 2, q.n[0], q.n[1]]; }); },
     parts: (k) => { const s = sp[k]; return s.pixel ? { front: 2 * s.layF.length, back: 2 * s.layB.length, sides: 2 * s.strips.length, roof: 2 * s.low.length } : { faces: 2 * s.low.length }; },
     low: (k) => sp[k].low.map((q) => ({ n: q.n.map((v) => +v.toFixed(2)), y: q.p.map((p) => p[1]), layer: q.layer })),
     atlas: () => ({ AW2, AH, sprites: AP.sprites, px: (x, y) => [...atlasPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)], aux: (x, y) => [...auxPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)] }),
