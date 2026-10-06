@@ -285,8 +285,8 @@ let S = null, B = null;   // the current area's builders: S textured quads (thin
 //   cross  the front drawing and the side drawing as two crossed cards, both faces (8 triangles): for trees and thin
 //          things, whose outline matters more than their volume.
 // Every face reads the atlas: the front for faces toward the camera and for faces looking up, the side view for side faces, the plain
-// back for faces away. Layer CUT makes the material discard what the art left empty, so the outline stays as drawn
-// (upright faces only).
+// back for faces away. Cards use layer CUT: the material discards what the art left empty, so the outline stays as
+// drawn. Lofts are not cut.
 // A sprite is built once at load (s.low) in local art pixels: X right of the anchor, Y up from the ground, Z toward
 // the camera from the middle of its depth. putLow places a copy in the current area's builder S.
 const CUT = 300;
@@ -312,9 +312,9 @@ function face(s, pts, region) {
     if (pick === 'lidIn') return auv(A.lidIn[0] + x, A.lidIn[1] + (d - z) / d * CHEST.seam);
     return auv(A.dark[0] + 1, A.dark[1] + 1);                                   // 'dark'
   });
-  // only upright faces are cut to the drawing's outline; a face looking up (a roof, a top) is not, or the empty sky
-  // above the eaves would punch holes in it
-  return { p: pts.map(([x, y, z]) => [x - s.px, y, z - d / 2]), n, uv: uv.flat(), layer: n[1] > .5 ? 0 : CUT };
+  // a loft's faces are not cut to the drawing's outline: the shell follows the outline every two rows, so a cut only
+  // opened windows into the empty shell (the ground showed through); empty pixels take their nearest colour instead
+  return { p: pts.map(([x, y, z]) => [x - s.px, y, z - d / 2]), n, uv: uv.flat(), layer: 0 };
 }
 
 // the loft of image rows r0…r1 (r1 exclusive). opts: noTop (leave the top open), bottom (close the bottom with region)
@@ -350,7 +350,7 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
 // the cross: the front card through the middle of the depth, the side card through the anchor; each with both faces
 function crossOf(s) {
   const d = s.depth, h = s.h, w = s.w, zc = d / 2, xc = s.px, out = [];
-  const both = (pts, region) => { const f = face(s, pts, region), b = face(s, [pts[1], pts[0], pts[3], pts[2]], region); if (f) out.push(f); if (b) out.push(b); };
+  const both = (pts, region) => { for (const q of [pts, [pts[1], pts[0], pts[3], pts[2]]]) { const f = face(s, q, region); if (f) { f.layer = CUT; out.push(f); } } };   // cards: cut to the outline
   both([[0, 0, zc], [w, 0, zc], [w, h, zc], [0, h, zc]], 'front');
   both([[xc, 0, d], [xc, 0, 0], [xc, h, 0], [xc, h, d]], 'side');
   return out;
