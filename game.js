@@ -98,7 +98,8 @@ function buildSprites() {
   for (const d of order) { if (x + d.pic.w + 1 > AW) { x = 1; y += rowH + 1; rowH = 0; } d.ax = x; d.ay = y; x += d.pic.w + 1; rowH = Math.max(rowH, d.pic.h); }
   // a sprite with a side view also gets two more regions: the side view (for its side walls) and a plain back
   const extra = DEFS.filter((d) => d.pic.side).flatMap((d) => [{ d, kind: 'side', w: d.pic.side.w, h: d.pic.side.h }, { d, kind: 'back', w: d.pic.w, h: d.pic.h },
-    { d, kind: 'roofF', w: d.pic.w, h: d.pic.side.w }, { d, kind: 'roofS', w: d.pic.side.w, h: d.pic.w }]);
+    { d, kind: 'roofF', w: d.pic.w, h: d.pic.side.w }, { d, kind: 'roofS', w: d.pic.side.w, h: d.pic.w },
+    ...(d.sheet.startsWith('buildings') ? [{ d, kind: 'tiles', w: Math.max(d.pic.w, d.pic.side.w) + 1, h: d.pic.h + Math.ceil(Math.max(d.pic.w, d.pic.side.w) / 2) + 1 }] : [])]);
   // the chest also gets the underside of its lid (its planks, darker) and the dark of its inside
   const chest = DEFS.find((d) => d.key === CHEST.key); if (chest) extra.push({ d: chest, kind: 'lidIn', w: chest.pic.w, h: CHEST.seam }, { d: chest, kind: 'dark', w: 2, h: 2 });
   for (const e of extra) { if (x + e.w + 1 > AW) { x = 1; y += rowH + 1; rowH = 0; } e.x = x; e.y = y; x += e.w + 1; rowH = Math.max(rowH, e.h); }
@@ -109,7 +110,7 @@ function buildSprites() {
   for (const d of DEFS) { const p = d.pic; for (let yy = 0; yy < p.h; yy++) for (let xx = 0; xx < p.w; xx++) { const i = yy * p.w + xx; if (p.c[i] < 0) continue; const q = (d.ay + yy) * AW + d.ax + xx, c = p.c[i]; propsPx[q * 4] = c >> 16 & 255; propsPx[q * 4 + 1] = c >> 8 & 255; propsPx[q * 4 + 2] = c & 255; propsPx[q * 4 + 3] = 255; zfPl[q] = p.f[i] + 64; zbPl[q] = p.b[i] + 64; flPl[q] = p.fl[i]; } }
   atlasPx = new Uint8Array(AW2 * AH * 4); auxPx = new Uint8Array(AW2 * AH * 4);
   for (const key in AP.sprites) new Spr(key);
-  for (const e of extra) ({ side: writeSide, back: writeBack, lidIn: writeLidIn, dark: writeDark, roofF: writeRoof, roofS: writeRoof })[e.kind](e);
+  for (const e of extra) ({ side: writeSide, back: writeBack, lidIn: writeLidIn, dark: writeDark, roofF: writeRoof, roofS: writeRoof, tiles: writeTiles })[e.kind](e);
   for (const d of DEFS) { const s = sp[d.key]; s.pic = d.pic; s.depth = d.pic.side ? d.pic.side.w : d.pic.d; }
   for (const s of SPRITES) s.low = s.side ? (BUILD[s.key] === 'cross' ? crossOf(s) : loftOf(s)) : [];
 }
@@ -126,8 +127,42 @@ function writeRoof(e) {
     for (let y = 0; y < e.h; y++) { atlasSet(e.x + x, e.y + y, col[y % col.length]); auxPx[((e.y + y) * AW2 + e.x + x) * 4] = 1; }
   }
 }
+// roof tiles drawn in code: courses 4 px tall, tiles 6 px wide and staggered, each lit on top, shaded under, a dark gap
+// between tiles, a little colour play per tile. The colour: CURATE roof, else the drawing's commonest terracotta
+function roofColour(p, key) {
+  const cur = (CURATE[key] || {}).roof; if (cur) return parseInt(cur.slice(1), 16);
+  const n = new Map();
+  for (let y = 0; y < p.h * .6; y++) for (let x = 0; x < p.w; x++) { const c = p.c[y * p.w + x]; if (c < 0) continue; const r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255; if (r > 140 && r - g > 70 && r - b > 90) n.set(c, (n.get(c) || 0) + 1); }   // terracotta, not ochre plaster
+  return n.size ? [...n].sort((a, b) => b[1] - a[1])[0][0] : 0xb4502a;
+}
+function writeTiles(e) {
+  const base = roofColour(e.d.pic, e.d.key);
+  for (let v = 0; v < e.h; v++) for (let u = 0; u < e.w; u++) {
+    const course = Math.floor(v / 4), ry = v % 4, uu = u + (course % 2) * 3, tx = Math.floor(uu / 6), rx = uu % 6;
+    const f = ry === 3 ? .6 : rx === 0 ? .74 : ry === 0 ? 1.16 : rx === 5 ? .88 : rx === 1 ? 1.06 : 1;
+    atlasSet(e.x + u, e.y + v, shade(base, f * (.94 + hash2(tx, course) * .12))); auxPx[((e.y + v) * AW2 + e.x + u) * 4] = 1;
+  }
+}
 function writeLidIn(e) { const p = e.d.pic; for (let y = 0; y < e.h; y++) for (let x = 0; x < e.w; x++) { const c = p.c[y * p.w + x]; atlasSet(e.x + x, e.y + y, c >= 0 ? shade(c, .62) : 0x3a2418); auxPx[((e.y + y) * AW2 + e.x + x) * 4] = 1; } }
 function writeDark(e) { for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) { atlasSet(e.x + x, e.y + y, 0x24160e); auxPx[((e.y + y) * AW2 + e.x + x) * 4] = 1; } }
+
+// a curated back: the wall in the side view's commonest bright colour, as plaster (a calm wash with rare flecks) or
+// stone (blocks 7 x 3, staggered, mortar lines), then the pasted rectangles of the front drawing
+function writeBackCurated(e, cur) {
+  const p = e.d.pic, s = p.side, lum = (c) => ((c >> 16 & 255) * .3 + (c >> 8 & 255) * .59 + (c & 255) * .11), n = new Map();
+  for (const c of s.c) if (c >= 0 && lum(c) >= 50) n.set(c, (n.get(c) || 0) + 1);
+  const wall = n.size ? [...n].sort((a, b) => b[1] - a[1])[0][0] : 0xc8b090;
+  for (let y = 0; y < e.h; y++) for (let x = 0; x < e.w; x++) {
+    let c;
+    if (cur.wall === 'stone') { const row = Math.floor(y / 3), xx = x + (row % 2) * 3; c = y % 3 === 2 || xx % 7 === 0 ? shade(wall, .78) : shade(wall, .95 + hash2(Math.floor(xx / 7), row) * .1); }
+    else { const k = hash2(x >> 1, y >> 1); c = k < .05 ? shade(wall, .9) : k > .97 ? shade(wall, 1.06) : wall; }
+    atlasSet(e.x + x, e.y + y, c);
+  }
+  for (const [sx, sy, w, h, dx, dy] of cur.paste || []) for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const c = p.c[(sy + y) * p.w + sx + x]; if (c >= 0 && dx + x < e.w && dy + y < e.h) atlasSet(e.x + dx + x, e.y + dy + y, c);
+  }
+  for (let y = 0; y < e.h; y++) for (let x = 0; x < e.w; x++) { const o = ((e.d.ay + y) * AW2 + e.d.ax + x) * 4, q = ((e.y + y) * AW2 + e.x + x) * 4; auxPx[q] = auxPx[o]; auxPx[q + 1] = auxPx[o + 1]; }
+}
 
 /* side views and plain backs (no art was made for the back of anything) */
 const atlasSet = (x, y, c, k) => { const o = (y * AW2 + x) * 4; for (const h of [0, AW * 4]) { atlasPx[o + h] = c >> 16 & 255; atlasPx[o + h + 1] = c >> 8 & 255; atlasPx[o + h + 2] = c & 255; atlasPx[o + h + 3] = k === undefined ? 255 : k; } };
@@ -157,6 +192,7 @@ function writeSide(e) {
 // the doors and windows of the front), skipping its dark outline: its two commonest, so the wall reads plain;
 // the depth codes are copied from the front region, which the back faces' layer test reads
 function writeBack(e) {
+  const cur = (CURATE[e.d.key] || {}).back; if (cur) { writeBackCurated(e, cur); return; }
   const p = e.d.pic, s = p.side, lum = (c) => ((c >> 16 & 255) * .3 + (c >> 8 & 255) * .59 + (c & 255) * .11);
   for (let y = 0; y < e.h; y++) {
     let pool = []; for (let x = 0; x < s.w; x++) { const c = s.c[y * s.w + x]; if (c >= 0 && lum(c) >= 50) pool.push(c); }
@@ -167,7 +203,7 @@ function writeBack(e) {
     pool = top.length > 1 ? [top[0], top[0], top[0], top[1]] : top;
     for (let x = 0; x < e.w; x++) {
       const i = y * p.w + x, o = ((e.d.ay + y) * AW2 + e.d.ax + x) * 4, q = ((e.y + y) * AW2 + e.x + x) * 4;
-      atlasSet(e.x + x, e.y + y, p.c[i] >= 0 ? pool[Math.floor(hash2(x >> 1, y) * pool.length)] : 0, p.c[i] >= 0 ? 255 : 0);
+      atlasSet(e.x + x, e.y + y, pool[Math.floor(hash2(x >> 1, y) * pool.length)]);   // everywhere: a loft face may reach past the front's outline
       auxPx[q] = auxPx[o]; auxPx[q + 1] = auxPx[o + 1];   // the outline of the front; no glow (its windows are not here)
     }
   }
@@ -299,6 +335,13 @@ let S = null, B = null;   // the current area's builders: S textured quads (thin
 // A sprite is built once at load (s.low) in local art pixels: X right of the anchor, Y up from the ground, Z toward
 // the camera from the middle of its depth. putLow places a copy in the current area's builder S.
 const CUT = 300;
+// hand curation per sprite (content/curate.js fills it), applied at load, so a redrawn sheet keeps its fixes:
+//   cuts: [{ front: [x0, y0, x1, y1], side: [z0, y0, z1, y1] }]  parts that stand out of the shell (a chimney, a sign):
+//         left out of the loft and built as boxes of their own (front rect: x and rows; side rect: depth from the front)
+//   back: { wall: 'plaster' | 'stone', paste: [[sx, sy, w, h, dx, dy]] }  the back painted: a wall pattern in the side
+//         view's commonest colour, then rectangles of the front drawing pasted on it (a door, the plinth)
+//   roof: '#rrggbb'  the roof tiles' colour (default: the drawing's commonest terracotta)
+const CURATE = {};
 const BUILD = { oak: 'cross', cypress: 'cross', olive: 'cross', bush: 'cross', lamp_post: 'cross', signpost: 'cross', lever: 'cross' };   // the statue is a loft: a figure, seen all round
 const CHEST = { key: 'chest', seam: 11, open: -105 * Math.PI / 180, inset: 4, time: .35 };   // props-1's chest: rows 0-10 lid, 11-20 body
 
@@ -316,6 +359,8 @@ function face(s, pts, region) {
     if (pick === 'front') return auv(s.ax + x, s.ay + h - y);
     if (pick === 'back') return auv(back[0] + x, back[1] + h - y);
     if (pick === 'side') return auv(side[0] + (d - z), side[1] + h - y);
+    if (A.tiles && pick === 'top') return auv(A.tiles[0] + clamp(x, 0, A.tiles[2]), A.tiles[1] + clamp(h - y + Math.abs(z - d / 2), 0, A.tiles[3]));   // tiled roof: courses along the eaves
+    if (A.tiles && pick === 'topSide') return auv(A.tiles[0] + clamp(d - z, 0, A.tiles[2]), A.tiles[1] + clamp(h - y + Math.abs(x - s.w / 2), 0, A.tiles[3]));
     if (pick === 'top') return auv(A.roofF[0] + clamp(x, .5, s.w - .5), A.roofF[1] + clamp(d - z, 0, d));        // the front's roof tiles, across the depth
     if (pick === 'topSide') return auv(A.roofS[0] + clamp(d - z, .5, d - .5), A.roofS[1] + clamp(x, 0, s.w));   // a slope tilted sideways: the side view's
     if (pick === 'lidIn') return auv(A.lidIn[0] + x, A.lidIn[1] + (d - z) / d * CHEST.seam);
@@ -328,12 +373,14 @@ function face(s, pts, region) {
 
 // the loft of image rows r0…r1 (r1 exclusive). opts: noTop (leave the top open), bottom (close the bottom with region)
 function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
-  const pic = s.pic, sd = pic.side, d = s.depth, h = s.h, out = [], rings = [];
+  const pic = s.pic, sd = pic.side, d = s.depth, h = s.h, out = [], rings = [], cuts = (CURATE[s.key] || {}).cuts || [];
+  const cutF = (x, r) => cuts.some(({ front: [x0, y0, x1, y1] }) => x >= x0 && x < x1 && r >= y0 && r < y1);
+  const cutS = (z, r) => cuts.some(({ side: [z0, y0, z1, y1] }) => z >= z0 && z < z1 && r >= y0 && r < y1);
   const span = (yi) => {
     let x0 = 1e9, x1 = -1, z0 = 1e9, z1 = -1;
     for (let r = Math.max(r0, yi - 1); r <= Math.min(r1 - 1, yi + 1); r++) {
-      for (let x = 0; x < s.w; x++) if (pic.c[r * s.w + x] >= 0) { if (x < x0) x0 = x; if (x + 1 > x1) x1 = x + 1; }
-      for (let z = 0; z < sd.w; z++) if (sd.c[r * sd.w + z] >= 0) { if (z < z0) z0 = z; if (z + 1 > z1) z1 = z + 1; }
+      for (let x = 0; x < s.w; x++) if (pic.c[r * s.w + x] >= 0 && !cutF(x, r)) { if (x < x0) x0 = x; if (x + 1 > x1) x1 = x + 1; }
+      for (let z = 0; z < sd.w; z++) if (sd.c[r * sd.w + z] >= 0 && !cutS(z, r)) { if (z < z0) z0 = z; if (z + 1 > z1) z1 = z + 1; }
     }
     return x1 < 0 || z1 < 0 ? null : { x0, x1, zf: d - z0, zb: Math.max(0, d - z1) };
   };
@@ -353,6 +400,13 @@ function loftOf(s, r0 = 0, r1 = s.h, opts = {}) {
   if (!opts.noTop) add([[t.x0, t.y, t.zf], [t.x1, t.y, t.zf], [t.x1, t.y, t.zb], [t.x0, t.y, t.zb]], 'top');
   if (opts.bottom) add([[f.x0, f.y, f.zb], [f.x1, f.y, f.zb], [f.x1, f.y, f.zf], [f.x0, f.y, f.zf]], opts.bottom);
   out.ring = (y) => keep.reduce((best, r) => Math.abs(r.y - y) < Math.abs(best.y - y) ? r : best);
+  // the cut parts, as boxes: front and back read the front drawing, the sides the side view, the top the front's top row
+  if (r0 === 0 && r1 === h) for (const { front: [x0, y0, x1, y1], side: [z0, , z1] } of cuts) {
+    const Y0 = h - y1, Y1 = h - y0, Zf = d - z0, Zb = d - z1;
+    add([[x0, Y0, Zf], [x1, Y0, Zf], [x1, Y1, Zf], [x0, Y1, Zf]], 'front'); add([[x1, Y0, Zb], [x0, Y0, Zb], [x0, Y1, Zb], [x1, Y1, Zb]], 'front');
+    add([[x1, Y0, Zf], [x1, Y0, Zb], [x1, Y1, Zb], [x1, Y1, Zf]], 'side'); add([[x0, Y0, Zb], [x0, Y0, Zf], [x0, Y1, Zf], [x0, Y1, Zb]], 'side');
+    add([[x0, Y1, Zf], [x1, Y1, Zf], [x1, Y1, Zb], [x0, Y1, Zb]], 'front');
+  }
   return out;
 }
 
@@ -439,7 +493,8 @@ function voxelMaterial(kind, o) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWNrm = normalize(mat3(modelMatrix) * normal);\n' + (ground || sprite ? '' : slab ? 'vLayer = aLayer; vLamp = aLamp;' : 'vCol = aCol; vLamp = aLamp;'));
     let f = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm; uniform mat4 uShadowMat; uniform float uGlow; uniform vec3 uLampCol;\n' + (ground ? 'uniform sampler2D uHeightTex;' : sprite ? 'uniform vec3 uProbe; uniform vec2 uRow; uniform float uLampL;' : slab ? 'uniform sampler2D uAux; varying float vLayer; varying float vLamp;' : 'varying vec4 vCol; varying float vLamp;'));
     f = f.replace('void main() {', 'void main() {\n' + (ground ? 'float vxLamp = texture2D(uHeightTex, vUv).a * 2.0;' : sprite ? 'float vxLamp = uLampL;' : slab ? LAYER_TEST + ' float vxLamp = vLamp * 2.0;' : 'float vxLamp = vLamp * 2.0;'));
-    if (slab) f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vxA.b * uGlow * 1.5;');
+    // a solid surface is opaque even where its texel is not: the post pass shows the sky through any alpha below 1
+    if (slab) f = f.replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.a = 1.0;').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vxA.b * uGlow * 1.5;');
     else if (ground) f = f.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * texture2D(uHeightTex, vUv).r * uGlow * 1.6;');
     else if (!ground && !sprite) f = f.replace('#include <color_fragment>', '#include <color_fragment>\nvec3 vxBase = pow(vCol.rgb, vec3(2.2)); diffuseColor.rgb *= vxBase;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vxBase * vCol.a * uGlow * 1.5;');
@@ -2318,6 +2373,20 @@ function showEnding() {
   setFlag('chapter_done'); saveGame(); sfx('quest'); playTrack('village');
   ui.screen = 'end'; showScreen('end');
 }
+
+// ---- content/curate.js
+/* ---------- curation: hand fixes per building, applied at load (see CURATE in engine/22-lowpoly.js) ---------- */
+// Coordinates are art pixels of the sprite's own drawings: front (x, row), side view (depth from the front, row).
+Object.assign(CURATE, {
+  bakery: {
+    cuts: [
+      { front: [95, 0, 104, 22], side: [65, 0, 77, 22] },   // the chimney, near the back
+      { front: [0, 32, 15, 53], side: [0, 32, 3, 53] },      // the bread sign, hanging at the front corner
+    ],
+    back: { wall: 'plaster', paste: [[82, 37, 16, 26, 22, 37], [18, 63, 93, 8, 18, 63]] },   // a back door; the stone plinth
+  },
+  library: { back: { wall: 'stone' } },
+});
 
 // ---- engine/90-boot.js
 /* ---------- boot: art, atlas, materials, title screen; play starts from New game, Continue or a save code ---------- */
