@@ -839,16 +839,16 @@ function makeMaterials() {
 /* ---------- passata finale: sfondo, antialias leggero, vignettatura ---------- */
 const rt = new THREE.WebGLRenderTarget(4, 4, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, stencilBuffer: false });
 rt.texture.encoding = THREE.sRGBEncoding; rt.texture.generateMipmaps = false;
-const postU = { tColor: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uSpread: { value: 1 }, uAspect: { value: 1 }, uTime: { value: 0 }, uStars: { value: 0 }, uAur: { value: 0 }, uAurT: { value: 0 }, uBgTop: { value: new THREE.Vector3() }, uBgBot: { value: new THREE.Vector3() } };
+const postU = { tColor: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uShift: { value: new THREE.Vector2() }, uSpread: { value: 1 }, uAspect: { value: 1 }, uTime: { value: 0 }, uStars: { value: 0 }, uAur: { value: 0 }, uAurT: { value: 0 }, uBgTop: { value: new THREE.Vector3() }, uBgBot: { value: new THREE.Vector3() } };
 const postMat = new THREE.ShaderMaterial({
   uniforms: postU, depthTest: false, depthWrite: false,
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
     precision highp float;
-    uniform sampler2D tColor; uniform vec2 uTexel; uniform float uSpread, uAspect, uTime, uStars, uAur, uAurT;
+    uniform sampler2D tColor; uniform vec2 uTexel, uShift; uniform float uSpread, uAspect, uTime, uStars, uAur, uAurT;
     uniform vec3 uBgTop, uBgBot; varying vec2 vUv;
     float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    vec4 tap(vec2 o){ vec4 s = texture2D(tColor, vUv + o * uSpread * uTexel); vec3 c = s.a > 0.001 ? min(s.rgb / s.a, vec3(1.0)) : vec3(0.0); return vec4(c * c * s.a, s.a); }
+    vec4 tap(vec2 o){ vec4 s = texture2D(tColor, vUv - uShift + o * uSpread * uTexel); vec3 c = s.a > 0.001 ? min(s.rgb / s.a, vec3(1.0)) : vec3(0.0); return vec4(c * c * s.a, s.a); }
     void main(){
       vec4 acc = (tap(vec2(0.0)) * 2.0 + tap(vec2(0.375, 0.125)) + tap(vec2(-0.125, 0.375)) + tap(vec2(-0.375, -0.125)) + tap(vec2(0.125, -0.375))) / 6.0;
       vec2 q = vUv - 0.5;
@@ -948,6 +948,10 @@ function setCamera() {
   const a = camT.x * X[0] + camT.z * X[2], b = camT.x * U[0] + camT.y * U[1] + camT.z * U[2];
   const da = Math.round(a / px) * px - a, db = Math.round(b / px) * px - b;
   _camS.set(camT.x + da * X[0] + db * U[0], camT.y + db * U[1], camT.z + da * X[2] + db * U[2]);
+  // drawn at half the screen (a 2x screen), a whole pixel of the scene is two of the screen: the post pass moves the
+  // picture back by the snap's remainder in whole screen pixels, so it walks in steps of one screen pixel, not two
+  const k = Math.max(1, Math.round(bh / Math.max(1, rt.height)));
+  postU.uShift.value.set(Math.round(da / px * k) / k / Math.max(1, rt.width), Math.round(db / px * k) / k / Math.max(1, rt.height));
   cam.position.set(_camS.x + sy * cp * CD, _camS.y + spn * CD, _camS.z + cy * cp * CD); cam.lookAt(_camS);
   cam.top = v / 2; cam.bottom = -v / 2; cam.right = v / 2 * aspect; cam.left = -cam.right; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
 }
