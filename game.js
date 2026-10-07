@@ -8,6 +8,7 @@ const PITCH = 0.62, SPR_Y = 1 / Math.cos(PITCH);    // figures stand upright; st
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const coarse = matchMedia('(pointer: coarse)').matches;
 const F_ROOF = 1, F_GLOW = 2, F_WRAP = 4, F_TEXTOP = 8, F_TEXALL = 16, F_OWN = 32, F_GHOST = 64, F_NOSIDE = 128;   // F_NOSIDE: extruded without side faces (a smooth part covers its edges)   // F_GHOST: in the atlas only (a smooth part reads it), never extruded
+const LP = window.__STYLE === 'lowpoly';            // lowpoly.html: things and figures modelled in code (engine/25-lpkit.js)
 const GLOW = 0xffe7a0;                              // the prompts' night-glow colour
 
 function hash2(x, y) { let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
@@ -63,6 +64,7 @@ function loadArt() {
         else if (r.depth) DEFS.push({ key, name: key, sheet, pic: applyDepthRules(key, depthPic(S, r)) });
       }
     }
+    if (LP && LP_TILES) Object.assign(TILES, LP_TILES());   // lowpoly.html: the ground painted in code
     // art drawn in code replaces the sheet's drawing of the same key
     // (a building shaped from a spec gets the sheet's drawing it replaces)
     for (const [key, draw] of Object.entries(CODE_ART)) { const k = DEFS.findIndex((d) => d.key === key), old = k >= 0 ? DEFS[k] : null; if (k >= 0) DEFS.splice(k, 1); DEFS.push({ key, name: key, sheet: 'code', pic: draw(old) }); }
@@ -362,6 +364,15 @@ class Builder {
     this.pos.need(12); this.nrm.need(12); this.col.need(16); this.idx.need(6);
     const pa = this.pos.a, na = this.nrm.a, ca = this.col.a, ia = this.idx.a; let pn = this.pos.n, nn = this.nrm.n, cn = this.col.n;
     for (let k = 0; k < 4; k++) { const o = order[k] * 3; pa[pn++] = p[o]; pa[pn++] = p[o + 1]; pa[pn++] = p[o + 2]; na[nn++] = sx * 127; na[nn++] = sy * 127; na[nn++] = sz * 127; ca[cn++] = r; ca[cn++] = g; ca[cn++] = b; ca[cn++] = gl ? 255 : 0; }
+    this.pos.n = pn; this.nrm.n = nn; this.col.n = cn;
+    const v = this.v, i = this.idx.n; ia[i] = v; ia[i + 1] = v + 1; ia[i + 2] = v + 2; ia[i + 3] = v; ia[i + 4] = v + 2; ia[i + 5] = v + 3; this.idx.n += 6; this.v += 4;
+  }
+  // a face with its own colour at each corner (the low-poly kit bakes a contact shade into the colours); cols: 12 bytes
+  quadC(p, nx, ny, nz, cols, gl) {
+    const order = flipped(p, nx, ny, nz) ? [0, 3, 2, 1] : [0, 1, 2, 3];
+    this.pos.need(12); this.nrm.need(12); this.col.need(16); this.idx.need(6);
+    const pa = this.pos.a, na = this.nrm.a, ca = this.col.a, ia = this.idx.a; let pn = this.pos.n, nn = this.nrm.n, cn = this.col.n;
+    for (let k = 0; k < 4; k++) { const o = order[k]; pa[pn++] = p[o * 3]; pa[pn++] = p[o * 3 + 1]; pa[pn++] = p[o * 3 + 2]; na[nn++] = nx * 127; na[nn++] = ny * 127; na[nn++] = nz * 127; ca[cn++] = cols[o * 3]; ca[cn++] = cols[o * 3 + 1]; ca[cn++] = cols[o * 3 + 2]; ca[cn++] = gl ? 255 : 0; }
     this.pos.n = pn; this.nrm.n = nn; this.col.n = cn;
     const v = this.v, i = this.idx.n; ia[i] = v; ia[i + 1] = v + 1; ia[i + 2] = v + 2; ia[i + 3] = v; ia[i + 4] = v + 2; ia[i + 5] = v + 3; this.idx.n += 6; this.v += 4;
   }
@@ -890,10 +901,16 @@ function putLow(quads, x, z, o) {
 // when it lies within 4 pixels of them (their drawn edges).
 //   spec.erase: [[x0, x1, r0, r1], ...]  something drawn that is not wanted (an unreadable chimney): what stands above the
 //       roof line there goes; the roof under it is the nearest column outside, moved to the same roof line
-const SHAPES = {};
+// The editor's brushes, per pixel "x,r" (applied after the parts, so a hand change wins):
+//   spec.paint: { "x,r": "#rrggbb" | "none" }   the front's colour ("none" takes the pixel away), in 3D and in 2D
+//   spec.backPaint: { "x,r": "#rrggbb" }        the back's colour
+//   spec.relief: { "x,r": [front, back] }       the pixel's depths from the front, by hand (it and its neighbours get
+//       their side faces, so a step in or out is closed)
+//   spec.flags: { "x,r": { glow, sides, hidden } }   1 or 0 each: lit at night; side faces; colour only (not built)
+const SHAPES = {}, SHAPE_EDITS = {};   // SHAPE_EDITS: content/edits/<key>.json, put in by the build (tools/lib/edits.mjs)
 
 function shapeBuilding(src, spec, sheet) {
-  if (spec.erase) src = eraseFrom(src, spec.erase);
+  const original = src; if (spec.erase) src = eraseFrom(src, spec.erase); if (spec.paint) src = paintFrom(src, spec.paint);
   // depths on whole pixels (an odd depth's half pixel left a seam between the pixels and the wall boxes)
   const W = src.w, H = src.h, D = spec.depth || (src.side ? src.side.w : src.d), hd = Math.floor(D / 2), Z = (zs) => hd - zs;
   const p = new Pic(W, H), own = new Int16Array(W * H).fill(-1), parts = spec.parts;
@@ -957,6 +974,20 @@ function shapeBuilding(src, spec, sheet) {
       const i = at(x, r); if (i < 0 || p.c[i] >= 0) continue;
       for (let d = 1; d <= x1 - x0; d++) { const a = at(x - d, r), b = at(x + d, r), c = (a >= 0 && x - d >= x0 && src.c[a] >= 0) ? src.c[a] : (b >= 0 && x + d <= x1 && src.c[b] >= 0) ? src.c[b] : -1; if (c >= 0) { p.at(x, r, c, zf, zb, F_NOSIDE); break; } }
     }
+  }
+  // the brushes: depths by hand, then flags
+  const pix = (k) => { const [x, r] = k.split(',').map(Number); const i = at(x, r); return i >= 0 && p.c[i] >= 0 ? [x, r, i] : null; };
+  for (const [k, v] of Object.entries(spec.relief || {})) {
+    const q = pix(k); if (!q) continue; const [x, r, i] = q;
+    p.at(x, r, p.c[i], Z(v[0]), Z(v[1]), p.fl[i] & F_GLOW);
+    for (const [a, b] of [[x - 1, r], [x + 1, r], [x, r - 1], [x, r + 1]]) { const j = at(a, b); if (j >= 0 && p.c[j] >= 0 && !(p.fl[j] & F_GHOST)) p.fl[j] &= ~F_NOSIDE; }
+  }
+  for (const [k, v] of Object.entries(spec.flags || {})) {
+    const q = pix(k); if (!q) continue; const i = q[2]; let f = p.fl[i];
+    if ('glow' in v) f = v.glow ? f | F_GLOW : f & ~F_GLOW;
+    if ('sides' in v) f = v.sides ? f & ~F_NOSIDE : f | F_NOSIDE;
+    if ('hidden' in v) f = v.hidden ? (f | F_GHOST) & ~F_NOSIDE : f & ~F_GHOST;   // (ghost and no-sides together mark a card's pixel)
+    p.fl[i] = f;
   }
   // the smooth parts
   const front0 = block0 ? Z(block0.z[0]) : hd;
@@ -1024,10 +1055,29 @@ function shapeBuilding(src, spec, sheet) {
   }
   // pixels added to close a block's front: the wall's colour behind
   for (let r = 0; r < H; r++) for (let x = 0; x < W; x++) { const i = at(x, r); if (p.c[i] >= 0 && back[i] < 0) { const k = parts.indexOf(host(x, r)); back[i] = k >= 0 && dom[k] >= 0 ? dom[k] : p.c[i]; } }
-  p.back = back; p.tiles = true; p.source = src; p.sourceSheet = sheet;   // the 2D style shows the sheet's own drawing
+  // each pixel's body front (its block's, a tower's front, a card's plane): the 2D card raises a body set back by how far
+  // back it stands, as the camera sees it (engine/34-bake.js)
+  const ownZ = new Float32Array(W * H).fill(NaN);
+  for (let r = 0; r < H; r++) for (let x = 0; x < W; x++) {
+    const i = at(x, r); if (src.c[i] < 0) continue; const q = parts[own[i]];
+    const b = !q ? host(x, r) : q.block ? q : q.cyl ? null : (q.card || q.sails) ? null : host(q.open ? (q.open[0] + q.open[1]) / 2 : x, q.open ? (q.open[2] + q.open[3]) / 2 : r);
+    ownZ[i] = q && q.cyl ? Z(q.z) + q.cyl[1] : q && (q.card || q.sails) ? Z(q.z) : b && b.z ? Z(b.z[0]) : hd;
+  }
+  p.ownZ = ownZ;
+  for (const [k, v] of Object.entries(spec.backPaint || {})) { const q = pix(k); if (q) back[q[2]] = parseInt(v.slice(1), 16); }
+  p.back = back; p.tiles = true; p.source = src; p.original = original; p.sourceSheet = sheet;   // the 2D style shows the sheet's own drawing
   return p.done();
 }
 
+// a copy of the drawing with spec.paint's colours ("none": no pixel there)
+function paintFrom(src, paint) {
+  const c = Int32Array.from(src.c), fl = src.fl ? Uint8Array.from(src.fl) : new Uint8Array(src.w * src.h);
+  for (const [k, v] of Object.entries(paint)) {
+    const [x, r] = k.split(',').map(Number); if (x < 0 || r < 0 || x >= src.w || r >= src.h) continue;
+    const i = (src.h - 1 - r) * src.w + x; if (v === 'none') { c[i] = -1; fl[i] = 0; } else c[i] = parseInt(v.slice(1), 16);
+  }
+  return Object.assign({}, src, { c, fl });
+}
 // a copy of the drawing without what spec.erase covers: per column, the pixels above the roof line (interpolated between the
 // columns just outside) go, and below it the column takes the nearest outside column's pixels shifted to that line
 function eraseFrom(src, rects) {
@@ -1045,6 +1095,188 @@ function eraseFrom(src, rects) {
     }
   }
   return Object.assign({}, src, { c, fl });
+}
+
+// ---- engine/25-lpkit.js
+/* ---------- the low-poly style (lowpoly.html): things and figures modelled in code ---------- */
+// Units are art pixels (PPU to a world unit), y up from the ground; x across the front, 0 at the thing's anchor column;
+// z toward the front (+), 0 at the middle of its depth: where the sheet sprites stand, so collisions, doors and shadows
+// stay where they were. A model (LPM) is a list of flat faces, each with a colour: the light comes from the scene (sun,
+// sky, lamps, shadows); the kit adds a soft darkening near the ground (contact shade) and a slight variation per face,
+// so surfaces read as made by hand rather than as plastic. Faces that glow at night (windows) carry glow.
+// LP_MODELS[key]: () => LPM, built once. LP_FIGURES[key]: a figure with parts and a pose function (lpFigure).
+const LP_MODELS = {}, LP_FIGURES = {}, lpCache = {};
+let LP_CHEST = null, LP_TILES = null;   // the chest with its lid at an angle (radians); the ground tiles painted in code
+const lpRGB = (c) => [c >> 16 & 255, c >> 8 & 255, c & 255];
+const lpShade = (c, k) => { const [r, g, b] = lpRGB(c); const f = (v) => Math.max(0, Math.min(255, Math.round(v * k))); return f(r) << 16 | f(g) << 8 | f(b); };
+const lpMix = (a, b, t) => { const A2 = lpRGB(a), B2 = lpRGB(b); return A2.map((v, i) => Math.round(v + (B2[i] - v) * t)).reduce((s, v) => s << 8 | v, 0); };
+// a polygon's normal (Newell's method): counter-clockwise seen from the side it points to
+function lpNormal(p) {
+  let x = 0, y = 0, z = 0;
+  for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; x += (a[1] - b[1]) * (a[2] + b[2]); y += (a[2] - b[2]) * (a[0] + b[0]); z += (a[0] - b[0]) * (a[1] + b[1]); }
+  const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l];
+}
+const lpMid = (p) => p.reduce((m, q) => [m[0] + q[0] / p.length, m[1] + q[1] / p.length, m[2] + q[2] / p.length], [0, 0, 0]);
+
+class LPM {
+  constructor() { this.f = []; }
+  // a flat face of 3 or 4 corners; o.from: a point inside the solid, the face is turned to look away from it
+  face(pts, c, o = {}) {
+    let p = pts.map((q) => q.slice());
+    if (o.from) { const n = lpNormal(p), m = lpMid(p); if ((m[0] - o.from[0]) * n[0] + (m[1] - o.from[1]) * n[1] + (m[2] - o.from[2]) * n[2] < 0) p = p.reverse(); }
+    const F = (q) => this.f.push({ p: q, c, g: o.glow ? 1 : 0, j: o.jit === undefined ? .035 : o.jit, ao: o.ao === undefined ? 1 : o.ao });
+    if (p.length <= 4) F(p); else for (let i = 1; i + 1 < p.length; i++) F([p[0], p[i], p[i + 1]]);   // a convex polygon: a fan of triangles
+    return this;
+  }
+  // another model's faces, moved: { x, y, z } and turned ry radians about the vertical
+  add(m, t = {}) {
+    const cy = Math.cos(t.ry || 0), sy = Math.sin(t.ry || 0), s = t.s || 1;
+    for (const f of m.f) this.f.push(Object.assign({}, f, { p: f.p.map(([x, y, z]) => [(x * cy + z * sy) * s + (t.x || 0), y * s + (t.y || 0), (-x * sy + z * cy) * s + (t.z || 0)]) }));
+    return this;
+  }
+  // a box; o: colours per face (top, front, back, left, right), skip: faces left out (bottom is left out by default)
+  box(x0, y0, z0, x1, y1, z1, c, o = {}) {
+    const from = [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2], skip = o.skip || ['bottom'], F = (k) => o[k] === undefined ? c : o[k], fo = Object.assign({ from }, o.f || {});
+    const faces = {
+      top: [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], bottom: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+      front: [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], back: [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]],
+      left: [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], right: [[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]],
+    };
+    for (const k of Object.keys(faces)) if (!skip.includes(k)) this.face(faces[k], F(k), Object.assign({}, fo, k === 'front' && o.glowFront ? { glow: 1 } : {}));
+    return this;
+  }
+  // a convex polygon (u, y) extruded along x (axis 'x': u is z) or along z (axis 'z': u is x), from a0 to a1
+  prism(poly, axis, a0, a1, c, o = {}) {
+    const P3 = (u, y, a) => (axis === 'x' ? [a, y, u] : [u, y, a]), m = lpMid(poly.map(([u, y]) => [u, y, 0])), from = P3(m[0], m[1], (a0 + a1) / 2);
+    if (o.caps !== false) for (const a of [a0, a1]) this.face(poly.map(([u, y]) => P3(u, y, a)), o.cap === undefined ? c : o.cap, { from });
+    for (let i = 0; i < poly.length; i++) { const [u0, v0] = poly[i], [u1, v1] = poly[(i + 1) % poly.length]; if (o.skipEdge && o.skipEdge(i)) continue; this.face([P3(u0, v0, a0), P3(u1, v1, a0), P3(u1, v1, a1), P3(u0, v0, a1)], o.side ? o.side(i) : c, { from }); }
+    return this;
+  }
+  // a frustum (a cone when r1 is 0) of n sides around (cx, cz), from y0 to y1; o.top: its lid's colour or false;
+  // o.col(k): side k's colour; o.rot: the first side's angle
+  frustum(cx, cz, r0, r1, y0, y1, n, c, o = {}) {
+    const at = (k, r, y) => { const t = (o.rot || 0) + k / n * Math.PI * 2; return [cx + Math.sin(t) * r, y, cz + Math.cos(t) * r]; }, from = [cx, (y0 + y1) / 2, cz];
+    for (let k = 0; k < n; k++) {
+      const col = o.col ? o.col(k) : c;
+      if (r1 > 0) this.face([at(k, r0, y0), at(k + 1, r0, y0), at(k + 1, r1, y1), at(k, r1, y1)], col, { from, glow: o.glow });
+      else this.face([at(k, r0, y0), at(k + 1, r0, y0), [cx, y1, cz]], col, { from });
+    }
+    if (o.top !== false && r1 > 0) this.face(Array.from({ length: n }, (_, k) => at(k, r1, y1)), o.top === undefined ? c : o.top, { from: [cx, y0, cz] });
+    if (o.bottom) this.face(Array.from({ length: n }, (_, k) => at(k, r0, y0)), o.bottom, { from: [cx, y1, cz] });
+    return this;
+  }
+  // a turned shape: rings [[r, y], ...] from the bottom up, n sides; o.col(band, side) or c; o.top: lid colour or false
+  lathe(cx, cz, rings, n, c, o = {}) {
+    for (let b = 0; b + 1 < rings.length; b++) {
+      const [ra, ya] = rings[b], [rb, yb] = rings[b + 1];
+      this.frustum(cx, cz, ra, rb, ya, yb, n, c, { top: false, rot: o.rot, col: o.col ? (k) => o.col(b, k) : undefined });
+    }
+    const [rt, yt] = rings[rings.length - 1];
+    if (o.top !== false && rt > 0) this.frustum(cx, cz, rt, rt, yt, yt, n, o.top === undefined ? c : o.top, { top: o.top === undefined ? c : o.top, rot: o.rot });
+    return this;
+  }
+  // a rounded blob: an icosahedron split once (80 faces), its corners nudged by a seeded amount; o.sx, o.sy, o.sz stretch it
+  // vertically, o.col(face centre) colours it, o.flat cuts it flat below y (a canopy's underside)
+  blob(cx, cy, cz, r, c, o = {}) {
+    const t = (1 + Math.sqrt(5)) / 2, V = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((v) => { const l = Math.hypot(...v); return v.map((q) => q / l); });
+    const F0 = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+    const mid = new Map(), verts = V.slice(), M = (a, b) => { const k = a < b ? a + '_' + b : b + '_' + a; if (!mid.has(k)) { const v = verts[a].map((q, i) => (q + verts[b][i]) / 2), l = Math.hypot(...v); verts.push(v.map((q) => q / l)); mid.set(k, verts.length - 1); } return mid.get(k); };
+    const F = []; for (const [a, b, d] of F0) { const ab = M(a, b), bd = M(b, d), da = M(d, a); F.push([a, ab, da], [b, bd, ab], [d, da, bd], [ab, bd, da]); }
+    const rnd = rng(o.seed || 7), j = o.jit === undefined ? .14 : o.jit, sy = o.sy || 1;
+    const sx = o.sx || 1, sz = o.sz || 1, P3 = verts.map((v) => { const k = 1 + (rnd() * 2 - 1) * j; return [cx + v[0] * r * k * sx, cy + v[1] * r * k * sy, cz + v[2] * r * k * sz]; });
+    if (o.flat !== undefined) for (const p of P3) p[1] = Math.max(p[1], o.flat);
+    for (const tri of F) { const p = tri.map((i) => P3[i]); if (p.every((q) => o.flat !== undefined && q[1] <= o.flat + 1e-6)) continue; this.face(p, o.col ? o.col(lpMid(p)) : c, { from: [cx, cy, cz], jit: o.facej === undefined ? .06 : o.facej }); }
+    return this;
+  }
+  // a roof over the rectangle x0-x1 by z0-z1 (back to front), eaves at yE, ridge at yR, along x or z; hip 0 a gable,
+  // 1 a pyramid; over: overhang; t: thickness; courses of tiles every `row` px in two shades; a ridge cap on top.
+  // A gable's end is left open with verge boards along its slopes, so the building's own wall gable shows under it;
+  // o.ends draws a triangle there in the underside colour, for a roof with no wall gable under it (a well, a porch).
+  roof(o) {
+    const alongX = (o.ridge || 'x') === 'x', over = o.over === undefined ? 3 : o.over, t = o.t === undefined ? 2 : o.t, c = o.c, under = o.under === undefined ? lpShade(c, .55) : o.under;
+    const [a0, a1] = alongX ? [o.x0, o.x1] : [o.z0, o.z1], [b0, b1] = alongX ? [o.z0, o.z1] : [o.x0, o.x1];
+    const half = (b1 - b0) / 2, rise = o.yR - o.yE, drop = over * rise / half, A0 = a0 - over, A1 = a1 + over, B0 = b0 - over, B1 = b1 + over, bm = (b0 + b1) / 2, yE = o.yE - drop;
+    const h = (o.hip || 0) * (half + over), ra0 = A0 + h, ra1 = A1 - h;
+    const Q = (a, y, b) => (alongX ? [a, y, b] : [b, y, a]), from = Q((a0 + a1) / 2, o.yE - t - 1, bm);
+    const fas = o.fascia === undefined ? lpShade(c, .7) : o.fascia, row = o.row || 4, len = Math.hypot(half + over, rise + drop), n = Math.max(1, Math.round(len / row)), dark = lpShade(c, .9);
+    for (const [be, sgn] of [[B1, 1], [B0, -1]]) for (let i = 0; i < n; i++) {   // the two slopes, course by course from the eave up
+      const f0 = i / n, f1 = (i + 1) / n, yy = (f) => yE + (o.yR - yE) * f, bb = (f) => be + (bm - be) * f, aa0 = (f) => A0 + (ra0 - A0) * f, aa1 = (f) => A1 + (ra1 - A1) * f;
+      this.face([Q(aa0(f0), yy(f0), bb(f0)), Q(aa1(f0), yy(f0), bb(f0)), Q(aa1(f1), yy(f1), bb(f1)), Q(aa0(f1), yy(f1), bb(f1))], i % 2 ? dark : c, { from, jit: .02 });
+    }
+    for (const [ae, ra] of [[A0, ra0], [A1, ra1]]) {
+      if (h > 0) for (let i = 0; i < n; i++) { const f0 = i / n, f1 = (i + 1) / n, yy = (f) => yE + (o.yR - yE) * f, aa = (f) => ae + (ra - ae) * f, bb0 = (f) => B0 + (bm - B0) * f, bb1 = (f) => B1 + (bm - B1) * f; this.face([Q(aa(f0), yy(f0), bb0(f0)), Q(aa(f0), yy(f0), bb1(f0)), Q(aa(f1), yy(f1), bb1(f1)), Q(aa(f1), yy(f1), bb0(f1))], i % 2 ? dark : lpShade(c, .96), { from, jit: .02 }); }
+      else {
+        if (o.ends) this.face([Q(ae, yE, B0), Q(ae, yE, B1), Q(ae, o.yR, bm)], under, { from });
+        for (const be of [B0, B1]) this.face([Q(ae, yE, be), Q(ae, o.yR, bm), Q(ae, o.yR - t, bm), Q(ae, yE - t, be)], fas, { from });   // the verge
+      }
+    }
+    // the fascia all round, the underside, the ridge cap
+    const ring = [Q(A0, yE, B0), Q(A1, yE, B0), Q(A1, yE, B1), Q(A0, yE, B1)];
+    for (let i = 0; i < 4; i++) { const p = ring[i], q = ring[(i + 1) % 4]; this.face([[p[0], p[1] - t, p[2]], [q[0], q[1] - t, q[2]], q, p], fas, { from }); }
+    this.face(ring.map((p) => [p[0], p[1] - t, p[2]]), under, { from: Q((a0 + a1) / 2, o.yR, bm) });
+    if (o.cap !== false && ra1 > ra0) { const w = 1.2; this.prism([[bm - w, o.yR - .5], [bm + w, o.yR - .5], [bm, o.yR + 1.6]], alongX ? 'x' : 'z', ra0 - .5, ra1 + .5, lpShade(c, .8)); }
+    return this;
+  }
+}
+const lpModel = (key) => lpCache[key] || (lpCache[key] = LP_MODELS[key] ? LP_MODELS[key]() : null);
+
+// a model set down in a builder (the chunk's B): at (x, z) on the ground o.y, turned o.rot quarter turns, o.flip
+function lpPut(Bd, m, x, z, o = {}) {
+  const rot = (((o.rot || 0) % 4) + 4) % 4, fl = o.flip ? -1 : 1, oy = o.y || 0, ox = Math.round(x * PPU) / PPU, oz = Math.round(z * PPU) / PPU;
+  const tf = (X, Z) => { let a = X * fl, c = Z; for (let r = 0; r < rot; r++) { const t = a; a = c; c = -t; } return [a, c]; };
+  const pts = new Array(12), cols = new Array(12);
+  m.f.forEach((f, fi) => {
+    const p = f.p.length === 3 ? [f.p[0], f.p[1], f.p[2], f.p[2]] : f.p, wp = p.map(([X, Y, Z]) => { const [a, c] = tf(X, Z); return [ox + a * P, oy + Y * P, oz + c * P]; });
+    const n = lpNormal(f.p.map(([X, Y, Z]) => { const [a, c] = tf(X, Z); return [a, Y, c]; })), j = 1 + (hash2(fi * 7 + 3, m.f.length) * 2 - 1) * f.j, base = lpRGB(f.c);
+    for (let k = 0; k < 4; k++) {
+      const y = p[k][1], ao = f.ao ? .72 + .28 * Math.min(1, Math.max(0, y) / 14) : 1;   // contact shade: darker where it meets the ground
+      for (let i = 0; i < 3; i++) { pts[k * 3 + i] = wp[k][i]; cols[k * 3 + i] = Math.max(0, Math.min(255, Math.round(base[i] * j * ao))); }
+    }
+    Bd.quadC(pts, n[0], n[1], n[2], cols, f.g);
+  });
+}
+
+/* ---- figures: the cat and the people as parts that move ---- */
+// LP_FIGURES[key] = { parts: { name: { m: LPM (figure space, art px), pivot: [x, y, z], parent } }, pose(a, t) }
+// pose returns per part { rx, ry, rz, x, y, z } (radians, art px) and may set root: { y, rx, rz, sy } for the whole body.
+// One mesh per figure, its vertices moved on the CPU each frame (a few hundred): one draw call, real shadows.
+function lpFigure(key, o) {
+  const def = LP_FIGURES[key], names = Object.keys(def.parts), segs = [];
+  let nv = 0; for (const k of names) { const m = def.parts[k].m; let n = 0; for (const f of m.f) n += f.p.length === 4 ? 6 : 3; segs.push({ k, from: nv, n }); nv += n; }
+  const base = new Float32Array(nv * 3), bn = new Float32Array(nv * 3), col = new Uint8Array(nv * 4);
+  let v = 0;
+  for (const k of names) for (const [fi, f] of def.parts[k].m.f.entries()) {
+    const tris = f.p.length === 4 ? [[0, 1, 2], [0, 2, 3]] : [[0, 1, 2]], n = lpNormal(f.p), j = 1 + (hash2(fi * 5 + 1, k.length) * 2 - 1) * f.j, c = lpRGB(f.c);
+    for (const t of tris) for (const i of t) { base.set(f.p[i], v * 3); bn.set(n, v * 3); col.set([...c.map((q) => Math.min(255, Math.round(q * j))), f.g ? 255 : 0], v * 4); v++; }
+  }
+  const g = new THREE.BufferGeometry(), pos = new Float32Array(nv * 3), nrm = new Float32Array(nv * 3), lamp = new Uint8Array(nv);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setAttribute('aCol', new THREE.BufferAttribute(col, 4, true)); g.setAttribute('aLamp', new THREE.BufferAttribute(lamp, 1, true));
+  const mesh = new THREE.Mesh(g, matStatic); mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false; scene.add(mesh);
+  const a = Object.assign({ x: 0, z: 0, fx: 0, fz: 1, step: 0, moving: false, anim: null, at: 0, fps: 10, lift: 0, blink: false, size: 1, face: 0 }, o || {});
+  a.mesh = mesh;
+  const M = {}, tmp = new THREE.Matrix4(), rot = new THREE.Matrix4(), e = new THREE.Euler(), V3 = new THREE.Vector3(), N3 = new THREE.Vector3(), root = new THREE.Matrix4(), nm = new THREE.Matrix3();
+  a.pose = () => {
+    const want = Math.atan2(a.fx, a.fz); let d = want - a.face; d = Math.atan2(Math.sin(d), Math.cos(d)); a.face += d * (a.anim ? 1 : .35);   // turn toward where it goes
+    // (window.__still: the checks hold the idle motion, breathing and glancing, to compare frames)
+    const t = window.__still ? 0 : typeof simTime !== 'undefined' ? simTime : performance.now() / 1000, P0 = def.pose(a, t) || {}, R = P0.root || {}, y = A.groundY(a.x, a.z) + a.lift;
+    root.makeTranslation(a.x, y + (R.y || 0) * P, a.z).multiply(tmp.makeRotationY(a.face)).multiply(rot.makeRotationFromEuler(e.set(R.rx || 0, 0, R.rz || 0))).multiply(tmp.makeScale(P * a.size, P * a.size * (R.sy || 1), P * a.size));
+    for (const k of names) {
+      const part = def.parts[k], q = P0[k] || {}, pv = part.pivot || [0, 0, 0];
+      const m = M[k] || (M[k] = new THREE.Matrix4());
+      m.copy(part.parent ? M[part.parent] : root).multiply(tmp.makeTranslation(pv[0] + (q.x || 0), pv[1] + (q.y || 0), pv[2] + (q.z || 0))).multiply(rot.makeRotationFromEuler(e.set(q.rx || 0, q.ry || 0, q.rz || 0, 'YXZ'))).multiply(tmp.makeTranslation(-pv[0], -pv[1], -pv[2]));
+    }
+    for (const s of segs) {
+      const m = M[s.k]; nm.getNormalMatrix(m);
+      for (let i = s.from; i < s.from + s.n; i++) { V3.fromArray(base, i * 3).applyMatrix4(m).toArray(pos, i * 3); N3.fromArray(bn, i * 3).applyMatrix3(nm).normalize().toArray(nrm, i * 3); }
+    }
+    lamp.fill(Math.min(255, Math.round(A.lampLight(a.x, y + .6, a.z, 0, 1, 0) * 127.5)));
+    g.attributes.position.needsUpdate = g.attributes.normal.needsUpdate = g.attributes.aLamp.needsUpdate = true;
+    mesh.visible = !a.blink;
+  };
+  a.dispose = () => { scene.remove(mesh); g.dispose(); actors.splice(actors.indexOf(a), 1); };
+  actors.push(a);
+  return a;
 }
 
 // ---- engine/30-render.js
@@ -1133,18 +1365,23 @@ function makeMaterials() {
 /* ---------- passata finale: sfondo, antialias leggero, vignettatura ---------- */
 const rt = new THREE.WebGLRenderTarget(4, 4, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, stencilBuffer: false });
 rt.texture.encoding = THREE.sRGBEncoding; rt.texture.generateMipmaps = false;
-const postU = { tColor: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uShift: { value: new THREE.Vector2() }, uSpread: { value: 1 }, uAspect: { value: 1 }, uTime: { value: 0 }, uStars: { value: 0 }, uAur: { value: 0 }, uAurT: { value: 0 }, uBgTop: { value: new THREE.Vector3() }, uBgBot: { value: new THREE.Vector3() } };
+if (LP) rt.texture.minFilter = rt.texture.magFilter = THREE.NearestFilter;   // lowpoly.html: hard pixels
+const postU = { tColor: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uShift: { value: new THREE.Vector2() }, uK: { value: 0 }, uSpread: { value: 1 }, uAspect: { value: 1 }, uTime: { value: 0 }, uStars: { value: 0 }, uAur: { value: 0 }, uAurT: { value: 0 }, uBgTop: { value: new THREE.Vector3() }, uBgBot: { value: new THREE.Vector3() } };
 const postMat = new THREE.ShaderMaterial({
   uniforms: postU, depthTest: false, depthWrite: false,
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
     precision highp float;
-    uniform sampler2D tColor; uniform vec2 uTexel, uShift; uniform float uSpread, uAspect, uTime, uStars, uAur, uAurT;
+    uniform sampler2D tColor; uniform vec2 uTexel, uShift; uniform float uK, uSpread, uAspect, uTime, uStars, uAur, uAurT;
     uniform vec3 uBgTop, uBgBot; varying vec2 vUv;
     float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     vec4 tap(vec2 o){ vec4 s = texture2D(tColor, vUv - uShift + o * uSpread * uTexel); vec3 c = s.a > 0.001 ? min(s.rgb / s.a, vec3(1.0)) : vec3(0.0); return vec4(c * c * s.a, s.a); }
     void main(){
-      vec4 acc = (tap(vec2(0.0)) * 2.0 + tap(vec2(0.375, 0.125)) + tap(vec2(-0.125, 0.375)) + tap(vec2(-0.375, -0.125)) + tap(vec2(0.125, -0.375))) / 6.0;
+      // (lowpoly.html, uK > 0: each screen pixel reads the picture's pixel it lies in, counted in whole screen pixels from
+      // the corner, so the enlargement is exact even when the screen is not a whole number of picture pixels across)
+      vec4 acc;
+      if (uK > 0.0) { vec2 sp = floor(gl_FragCoord.xy - uShift / uTexel * uK); vec4 s = texture2D(tColor, (floor(sp / uK) + 0.5) * uTexel); vec3 c = s.a > 0.001 ? min(s.rgb / s.a, vec3(1.0)) : vec3(0.0); acc = vec4(c * c * s.a, s.a); }
+      else acc = (tap(vec2(0.0)) * 2.0 + tap(vec2(0.375, 0.125)) + tap(vec2(-0.125, 0.375)) + tap(vec2(-0.375, -0.125)) + tap(vec2(0.125, -0.375))) / 6.0;
       vec2 q = vUv - 0.5;
       vec3 bg = mix(uBgBot, uBgTop, smoothstep(0.05, 0.95, vUv.y));
       bg += mix(uBgBot, uBgTop, 0.5) * 0.35 * exp(-dot(q, q) * 5.0);
@@ -1234,7 +1471,10 @@ function applyWire() {
 }
 const _camS = new THREE.Vector3();
 function setCamera() {
-  const cp = Math.cos(PITCH), spn = Math.sin(PITCH), v = Math.max(Vz, minV());
+  const cp = Math.cos(PITCH), spn = Math.sin(PITCH);
+  // (lowpoly.html: the view's height is rounded so one art pixel is a whole number of pixels of the picture: a texel's
+  // edge then falls on the same pixel wherever the camera stands, and the ground does not crawl as the cat walks)
+  let v = Math.max(Vz, minV()); if (LP && rt.height > 2) v = rt.height / (PPU * Math.max(1, Math.round(rt.height / (PPU * v))));
   // the camera moves by whole pixels of the render target: moving by a fraction of a pixel, thin lines (shadow edges,
   // window bars) fell on one pixel in a frame and on its neighbour in the next, and shimmered while walking
   const px = v / Math.max(1, rt.height), sy = Math.sin(yaw), cy = Math.cos(yaw);
@@ -1257,8 +1497,9 @@ function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2) * quality; bw = Math.max(2, Math.round(r.width * dpr)); bh = Math.max(2, Math.round(r.height * dpr));
   // the scene is drawn at the screen's resolution divided by a whole number (1, or 2 on a 2x screen) and enlarged by
   // exactly that number: at 1.25 or 0.75 the pixel pattern crawled while the camera moved, even by whole pixels
-  const ss = window.__ss || 1 / Math.max(1, Math.floor(dpr + .01)); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
-  aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = Math.max(ss, .75);
+  // (lowpoly.html: about 240 rows, one art pixel each at the usual view, every row a block of whole screen pixels)
+  const ss = window.__ss || (LP ? 1 / Math.max(1, Math.round(bh / 240)) : 1 / Math.max(1, Math.floor(dpr + .01))); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
+  aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = LP ? 0 : Math.max(ss, .75); postU.uK.value = LP ? Math.round(1 / ss) : 0;
 }
 
 // ---- engine/34-bake.js
@@ -1293,7 +1534,9 @@ function cardPicture(s, rot, lid) {
   let H = H0; const put = (x, y, c, g) => { if (x < 0 || x >= W || y < 0) return; const col = cols[x] || (cols[x] = []); col[y] = [c, g]; H = Math.max(H, y + 1); };
   const at = (x, y) => (x >= 0 && x < W && cols[x] && cols[x][y]) || null;
   // the drawing as drawn (a ghost pixel of a building drawn in code belongs to a smooth part: placed below)
-  for (let r = 0; r < H0; r++) for (let x = 0; x < W; x++) { const i = r * W + x, c = src[i]; if (c >= 0 && !ghost(i)) put(side && rot === 3 ? W - 1 - x : x, H0 - 1 - r, c, !side && s.glow[i]); }
+  // (a building shaped from a spec: a body set back stands higher by how far back it is, so the card agrees with the 3D)
+  const lift = (i) => !side && s.pic.ownZ && !isNaN(s.pic.ownZ[i]) ? Math.max(0, Math.round((s.pic.front - s.pic.ownZ[i]) * t)) : 0;
+  for (let r = 0; r < H0; r++) for (let x = 0; x < W; x++) { const i = r * W + x, c = src[i]; if (c >= 0 && !ghost(i)) put(side && rot === 3 ? W - 1 - x : x, H0 - 1 - r + lift(i), c, !side && s.glow[i]); }
   const top = (x) => { const col = cols[x] || []; for (let y = col.length - 1; y >= 0; y--) if (col[y]) return y + 1; return 0; };
   let outline = 0x2a1d18, ol = 1e9; for (const col of cols) for (const p of col || []) if (p && lumOf(p[0]) < ol) { ol = lumOf(p[0]); outline = p[0]; }
   const roof = [];   // [x, y]: the pixels added for the roof, outlined at the end
@@ -1480,9 +1723,10 @@ function openArea(def) {
 
   /* one chunk: ground texture and mesh, walls, the things standing in it, baked light, halos */
   const [ccw, cch] = def.chunk || [cols, rows], CW = ccw * cellPx, CH = cch * cellPx, NI = Math.ceil(cols / ccw), NJ = Math.ceil(rows / cch);
-  const wallCol = (t, a, y) => { const g = GT[t]; if (g.cliff) return edgeCol(t, a, y, g.h); const c = g.wall !== undefined ? g.wall : shade(avg(g), .62); return (Math.floor(y / 4) + Math.floor(a / 8)) % 2 ? c : shade(c, .9); };
+  const wallCol = (t, a, y) => { const g = GT[t]; if (g.cliff) return edgeCol(t, a, y, g.h); const c = g.wall !== undefined ? g.wall : shade(avg(g), .62); if (LP) return Math.floor(y / 6) % 2 ? c : shade(c, .94); return (Math.floor(y / 4) + Math.floor(a / 8)) % 2 ? c : shade(c, .9); };
   const STRATA = [0x6b4a32, 0x5e4230, 0x6f5238, 0x52392a];
-  const edgeCol = (t, k, y, top) => top - y <= 2 ? shade(avg(GT[t]), .8) : STRATA[Math.floor((top - y + (k % 7)) / 7) % STRATA.length];
+  const LP_STRATA = [0x8a6a4a, 0x7a5c40, 0x93745a, 0x6e5240];   // lowpoly.html: level strata, wide, a grass lip
+  const edgeCol = (t, k, y, top) => LP ? (top - y <= 3 ? shade(avg(GT[t]), .78) : LP_STRATA[Math.floor((top - y + 6) / 11) % LP_STRATA.length]) : top - y <= 2 ? shade(avg(GT[t]), .8) : STRATA[Math.floor((top - y + (k % 7)) / 7) % STRATA.length];
   // every drop too tall to walk is drawn on the ground: a light lip along the top, a dark line at the foot. From the
   // default view the cliff faces turned away from the camera cannot be seen, and both levels wear the same grass.
   const DROP = STEP * PPU, N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -1551,7 +1795,7 @@ function openArea(def) {
     // things whose foot stands in this chunk (chests are not baked: they are props, see propMesh). In the 2D style a thing
     // is its card, and its 3D model is built as well, drawn only into the shadow map: the ground keeps the 3D's shadows
     let shadowS = null;
-    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); if (settings.flat) { const c = cardFor(th.s, o.rot); if (c) putLow(c, th.x, th.z, Object.assign({}, o, { rot: 0 })); const keep = S; S = shadowS = shadowS || new SlabBuilder(256); if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); S = keep; continue; } if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); }
+    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); if (LP && lpModel(th.s.key)) { lpPut(B, lpModel(th.s.key), th.x, th.z, o); continue; } if (settings.flat) { const c = cardFor(th.s, o.rot); if (c) putLow(c, th.x, th.z, Object.assign({}, o, { rot: 0 })); const keep = S; S = shadowS = shadowS || new SlabBuilder(256); if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); S = keep; continue; } if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); }
     cardUpload();
     // baked light, meshes
     B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
@@ -1646,7 +1890,7 @@ const SHADOW_HALF = 30;
 // items: [[quads, x, z, o]]
 function propMesh(items) {
   const prevS = S, prevB = B; S = new SlabBuilder(256); B = new Builder(256);
-  for (const [quads, x, z, o] of items) { const oo = Object.assign({}, o || {}); if (oo.y === undefined) oo.y = A.groundY(x, z); putLow(quads, x, z, oo); }
+  for (const [quads, x, z, o] of items) { const oo = Object.assign({}, o || {}); if (oo.y === undefined) oo.y = A.groundY(x, z); if (quads instanceof LPM) lpPut(B, quads, x, z, oo); else putLow(quads, x, z, oo); }
   B.bakeLamps(A.lampLight); S.bakeLamps(A.lampLight);
   const group = new THREE.Group();
   cardUpload();
@@ -1670,6 +1914,7 @@ const actors = [];
 const casterMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide });
 
 function sheetActor(sheet, views, anims, o) {
+  if (LP) { const k = views.down === 'cat_down' ? 'cat' : views.down; if (LP_FIGURES[k]) return lpFigure(k, o); }   // lowpoly.html: modelled
   const SH = SHEETS[sheet]; if (!SH) throw new Error('actor: sheet "' + sheet + '" is not in the art');
   const idle0 = Array.isArray(anims.idle) ? anims.idle[0] : anims.idle.down[0], first = SH.meta.sprites[idle0.includes('.') ? idle0 : views.down + '.' + idle0];
   if (!first) throw new Error(`actor: frame "${views.down}.${idle0}" missing in ${sheet}`);
@@ -2309,7 +2554,7 @@ function chestProp(id, key, x, z, o) {
 function chestsBuild() {
   if (settings.wire) setTimeout(applyWire);   // after the mesh below exists
   if (chestMesh) chestMesh.dispose(); chestMesh = null; if (!chests.size) return;
-  chestMesh = propMesh([...chests.values()].map((c) => settings.flat ? [cardFor(sp[c.key], c.o.rot, c.lid) || [], c.x, c.z, { flip: c.o.flip }] : [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
+  chestMesh = propMesh([...chests.values()].map((c) => LP && LP_CHEST ? [LP_CHEST(c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }] : settings.flat ? [cardFor(sp[c.key], c.o.rot, c.lid) || [], c.x, c.z, { flip: c.o.flip }] : [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
 }
 function openChestProp(id) {
   const c = chests.get(id); if (!c) return;
@@ -2798,6 +3043,35 @@ function holePass() {
   return { magenta: n, at: n ? [Math.round(sx / n), Math.round(sy / n)] : null, spots: [...cells].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, m]) => [...c.split(',').map(Number), m]) };
 }
 
+/* ---------- fingerprints: what a thing is, as data, for the approvals (tools/approve-check.mjs, the viewer) ---------- */
+// Four hashes per thing, computed on the CPU from data only (the same on any machine and GPU): its drawing (colours,
+// depths, flags, back), its atlas regions (side, back, roof tiles…, wherever they lie), its model (every face's
+// corners, normals and layer, built alone at the origin; not the UVs, which move when another thing's region moves),
+// and its 2D card. Any change to any of them, from a spec, the art or the engine's code, changes the fingerprint.
+function qaHash() {
+  let a = 0x811c9dc5, b = 0x9e3779b9;
+  const add = (v) => { v |= 0; for (let k = 0; k < 4; k++) { const byte = (v >>> (k * 8)) & 255; a = Math.imul(a ^ byte, 16777619); b = Math.imul(b ^ byte, 2246822519) ^ (b >>> 13); } };
+  return { add, addArr: (arr, scale) => { add(arr.length); for (let i = 0; i < arr.length; i++) add(scale ? Math.round(arr[i] * scale) : arr[i]); }, hex: () => (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0') };
+}
+function qaFingerprint(s) {
+  const pic = qaHash(), p = s.pic; for (const arr of [p.c, p.f, p.b, p.fl, p.back || []]) pic.addArr(arr);
+  const reg = qaHash(), R = AP.sprites[s.key];
+  for (const kind of Object.keys(R).filter((k) => Array.isArray(R[k]) && R[k].length === 4).sort()) {
+    const [x0, y0, w, h] = R[kind]; reg.add(w); reg.add(h);
+    for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) { const k = (y * AW2 + x) * 4; for (let c = 0; c < 4; c++) { reg.add(atlasPx[k + c]); reg.add(auxPx[k + c]); } }
+  }
+  const prevS = S, prevB = B; S = new SlabBuilder(256); B = new Builder(256);
+  if (s.key === CHEST.key) putLow(chestQuads(s, 0), 0, 0, { y: 0 }); else { if (s.pixel) put(s, 0, 0, { y: 0 }); if (s.low.length) putLow(s.low, 0, 0, { y: 0 }); }
+  const geo = qaHash(); geo.addArr(S.pos.a.subarray(0, S.pos.n), 1e4); geo.addArr(S.nrm.a.subarray(0, S.nrm.n)); geo.addArr(S.lay.a.subarray(0, S.lay.n)); geo.addArr(S.idx.a.subarray(0, S.idx.n));
+  const tris = S.idx.n / 3; S = prevS; B = prevB;
+  const card = qaHash(), cp = cardPicture(s, 0); card.add(cp.w); card.add(cp.h); card.addArr(cp.px);
+  return { pic: pic.hex(), regions: reg.hex(), geo: geo.hex(), card: card.hex(), tris };
+}
+const qaFingerprints = () => Object.fromEntries(SPRITES.filter((s) => s.count || s.low.length || (s.pic && s.pic.source)).map((s) => [s.key, qaFingerprint(s)]));
+
+// ---- content/edits/*.json
+Object.assign(SHAPE_EDITS, {"church":{"note":"a nave with its gable to the front, a bell tower set back on the right with a pyramid roof and a cross, a low chapel on the left, a lean-to on the right behind the tower","parts":[{"block":[8,69,0,65],"z":[0,52],"roof":{"ridge":"z","yR":85,"over":3,"x":[13,76]}},{"block":[0,7,0,35],"z":[2,26],"roof":{"shed":"x1","yR":41,"over":1}},{"block":[93,99,0,21],"z":[50,86],"roof":{"shed":"x0","yR":31,"over":1}},{"block":[70,93,0,106],"z":[49,84],"roof":{"ridge":"x","hip":1,"yR":115,"over":2}},{"ring":[45,58,8.5,10.5],"in":2},{"open":[38,50,1,28],"in":4},{"open":[21,24,43,55],"in":2},{"open":[62,65,43,55],"in":2},{"open":[77,86,83,99],"in":5},{"open":[80,84,21,31],"in":2},{"card":[41,47,86,96],"z":4,"t":2},{"card":[79,85,116,126],"z":68,"t":2}]},"house_a":{"note":"a tall side-gabled house with a chimney on the left","parts":[{"block":[1,52,0,64],"z":[8,58],"roof":{"ridge":"x","yR":80,"over":2}},{"box":[5,11,70,87],"z":[12,20]},{"open":[10,25,39,53],"in":2},{"open":[31,45,39,53],"in":2},{"open":[21,32,1,24],"in":3}]},"house_b":{"note":"a cottage with its gable to the front, a round attic window, a little roof over the door; its chimney read as a lantern: erased","erase":[[13,23,38,60]],"parts":[{"block":[4,88,0,37],"z":[8,58],"roof":{"ridge":"z","yR":58,"over":3,"x":[6,93]}},{"ring":[46.5,42.5,4.5,6.5],"in":2},{"open":[15,29,12,25],"in":2},{"open":[63,77,12,25],"in":2},{"open":[40,52,1,24],"in":3},{"slope":[33,59,27,32],"out":5}]},"library":{"note":"two storeys under a hipped roof, a bell cote over the door, a cornice between the floors","parts":[{"block":[5,101,0,81],"z":[0,85],"roof":{"ridge":"z","hip":0.5,"yR":104,"over":4}},{"box":[3,104,41,46],"z":[-1,86]},{"block":[42,64,82,110],"z":[2,14],"roof":{"ridge":"z","yR":115,"over":1,"x":[40,66]}},{"open":[47,58,94,105],"in":4},{"open":[21,35,53,72],"in":3},{"open":[71,85,53,72],"in":3},{"open":[20,33,14,34],"in":3},{"open":[74,87,14,34],"in":3},{"open":[44,62,2,30],"in":4}]},"shop":{"note":"a side-gabled house, its chimney, two windows upstairs, the awning over the shop window, the door, the key hanging from its bracket","parts":[{"block":[11,92,0,58],"z":[6,68],"roof":{"ridge":"x","yR":73,"over":3}},{"box":[19,26,64,81],"z":[20,30]},{"open":[21,39,38,55],"in":2},{"open":[57,72,38,55],"in":2},{"open":[20,63,7,27],"in":4},{"open":[72,83,1,26],"in":3},{"slope":[17,69,28,34],"out":6},{"card":[0,9,31,53],"z":3,"t":2}]},"windmill":{"note":"a round stone tower under a conical cap, four sails across its front","parts":[{"cyl":[44,28,23,0,73],"z":38},{"cone":[44,32,74,113],"z":38},{"sails":{"hub":[44.5,82],"arms":[[6,106],[84,108],[6,33],[84,34]],"w":13},"z":2,"t":2}]}});
+
 // ---- content/chapter1/areas/crypt.js
 /* ---------- the crypt under the church: an ink pool crossed with the dash, three levers, the arch to the Scribe ---------- */
 // legend: W walls, V low walls (the front, and walls across the room the camera must see past), o floor, w the ink pool
@@ -3282,80 +3556,11 @@ Object.assign(NPCS, {
 });
 
 // ---- content/chapter1/shapes.js
-/* ---------- buildings shaped from a spec (engine/24-shapes.js): what each piece of the sheet's drawing is ---------- */
-// Measured with tools/shape-measure.mjs <key> (front) and --side (depths z from the front). Columns x, rows from the
-// ground. Later parts win a pixel over earlier ones.
-Object.assign(SHAPES, {
-  // the church: a nave with its gable to the front, a bell tower set back on the right with a pyramid roof and a cross,
-  // a low chapel on the left, a lean-to on the right behind the tower
-  church: {
-    parts: [
-      { block: [8, 69, 0, 65], z: [0, 52], roof: { ridge: 'z', yR: 85, over: 3, x: [13, 76] } },
-      { block: [0, 7, 0, 35], z: [2, 26], roof: { shed: 'x1', yR: 41, over: 1 } },
-      { block: [93, 99, 0, 21], z: [50, 86], roof: { shed: 'x0', yR: 31, over: 1 } },
-      { block: [70, 93, 0, 106], z: [49, 84], roof: { ridge: 'x', hip: 1, yR: 115, over: 2 } },   // its front just before the nave's back gable
-      { ring: [45, 58, 8.5, 10.5], in: 2 },
-      { open: [38, 50, 1, 28], in: 4 },
-      { open: [21, 24, 43, 55], in: 2 }, { open: [62, 65, 43, 55], in: 2 },
-      { open: [77, 86, 83, 99], in: 5 }, { open: [80, 84, 21, 31], in: 2 },
-      { card: [41, 47, 86, 96], z: 4, t: 2 },
-      { card: [79, 85, 116, 126], z: 68, t: 2 },
-    ],
-  },
-  // the library: two storeys under a hipped roof, a bell cote over the door, a cornice between the floors
-  library: {
-    parts: [
-      { block: [5, 101, 0, 81], z: [0, 85], roof: { ridge: 'z', hip: .5, yR: 104, over: 4 } },
-      { box: [3, 104, 41, 46], z: [-1, 86] },
-      { block: [42, 64, 82, 110], z: [2, 14], roof: { ridge: 'z', yR: 115, over: 1, x: [40, 66] } },
-      { open: [47, 58, 94, 105], in: 4 },
-      { open: [21, 35, 53, 72], in: 3 }, { open: [71, 85, 53, 72], in: 3 },
-      { open: [20, 33, 14, 34], in: 3 }, { open: [74, 87, 14, 34], in: 3 },
-      { open: [44, 62, 2, 30], in: 4 },
-    ],
-  },
-  // the windmill: a round stone tower under a conical cap, four sails across its front
-  windmill: {
-    parts: [
-      { cyl: [44, 28, 23, 0, 73], z: 38 },
-      { cone: [44, 32, 74, 113], z: 38 },
-      { sails: { hub: [44.5, 82], arms: [[6, 106], [84, 108], [6, 33], [84, 34]], w: 13 }, z: 2, t: 2 },
-    ],
-  },
-  // the shop: a side-gabled house, its chimney, two windows upstairs, the awning over the shop window, the door, the
-  // key hanging from its bracket
-  shop: {
-    parts: [
-      { block: [11, 92, 0, 58], z: [6, 68], roof: { ridge: 'x', yR: 73, over: 3 } },
-      { box: [19, 26, 64, 81], z: [20, 30] },
-      { open: [21, 39, 38, 55], in: 2 }, { open: [57, 72, 38, 55], in: 2 },
-      { open: [20, 63, 7, 27], in: 4 }, { open: [72, 83, 1, 26], in: 3 },
-      { slope: [17, 69, 28, 34], out: 6 },
-      { card: [0, 9, 31, 53], z: 3, t: 2 },
-    ],
-  },
-  // a tall side-gabled house with a chimney on the left
-  house_a: {
-    parts: [
-      { block: [1, 52, 0, 64], z: [8, 58], roof: { ridge: 'x', yR: 80, over: 2 } },
-      { box: [5, 11, 70, 87], z: [12, 20] },
-      { open: [10, 25, 39, 53], in: 2 }, { open: [31, 45, 39, 53], in: 2 },
-      { open: [21, 32, 1, 24], in: 3 },
-    ],
-  },
-  // a cottage with its gable to the front: a round attic window, a little roof over the door
-  // (its chimney read as a lantern: erased)
-  house_b: {
-    erase: [[13, 23, 38, 60]],
-    parts: [
-      { block: [4, 88, 0, 37], z: [8, 58], roof: { ridge: 'z', yR: 58, over: 3, x: [6, 93] } },
-      { ring: [46.5, 42.5, 4.5, 6.5], in: 2 },
-      { open: [15, 29, 12, 25], in: 2 }, { open: [63, 77, 12, 25], in: 2 },
-      { open: [40, 52, 1, 24], in: 3 },
-      { slope: [33, 59, 27, 32], out: 5 },
-    ],
-  },
-});
+/* ---------- buildings shaped from a spec (engine/24-shapes.js) ---------- */
+// The specs are content/edits/<key>.json, one per thing: what each piece of the sheet's drawing is, measured in columns x
+// and rows from the ground (tools/shape-measure.mjs), depths z from the front. The editor (tools/editor.mjs) writes
+// them; the build puts them in SHAPE_EDITS. A thing with a spec is built from it in place of its sheet extrusion.
+Object.assign(SHAPES, SHAPE_EDITS);
 for (const key of Object.keys(SHAPES)) { BUILD[key] = 'pixel'; CODE_ART[key] = (old) => shapeBuilding(old.pic, SHAPES[key], old.sheet); }
 
 // ---- content/chapter1/story.js
@@ -3461,6 +3666,580 @@ Object.assign(CURATE, {
   signpost: { depth: { rules: [{ box: [0, 0, 23, 26], half: 2 }, { box: [0, 26, 23, 33], half: 5 }] } },
 });
 
+// ---- content/lowpoly/00-palette.js
+/* ---------- lowpoly.html: the palette and the ground, painted in code ---------- */
+// One warm palette for the whole village (an Italian hill town in late afternoon light): every model and tile takes its
+// colours from here, so nothing clashes. The light, the shadows and the night come from the scene.
+const LPC = {
+  plaster: 0xe7c587, plasterHi: 0xf0d8a6, cream: 0xefe2c2, ochre: 0xd9a25a, rose: 0xdca58c,
+  stone: 0xbdb29d, stoneDk: 0x958b78, stoneLt: 0xd3cab6, slate: 0x7d7a80,
+  roof: 0xc65a3a, roofDk: 0xa9462c, roofLt: 0xd8754e, roofOld: 0xb06a46,
+  wood: 0x8a5a34, woodDk: 0x5e3a22, woodLt: 0xa8774a, door: 0x6c3d22, doorDk: 0x4e2a17,
+  shutter: 0x4f8a50, shutterDk: 0x3c6d3e, blue: 0x3f6aa8, blueDk: 0x2f5084, red: 0xb8433a, gold: 0xd7a83c,
+  glass: 0xffd98a, glassDk: 0x6e5a48, iron: 0x3b3735, ironLt: 0x5a5450,
+  awnGreen: 0x3e8a54, awnCream: 0xf3ead4, awnRed: 0xc0473b,
+  leaf: 0x5e9a3c, leafDk: 0x447a2c, leafLt: 0x7db64c, cypress: 0x3f6e38, cypressDk: 0x2f5a2c, olive: 0x8aa05a, trunk: 0x6e4c2e,
+  grape: 0x6a3f7a, hay: 0xd8b860, bread: 0xd99a4c, white: 0xf4efe6,
+};
+
+// the ground tiles, 128 x 128 art px each (the pattern repeats every 8 world units, not every 2), seamless: a few flat
+// shades in soft patches, small details sparse
+function lpTileSet() {
+  const W = 128, H = 128, tile = (fn) => { const px = new Uint8ClampedArray(W * H * 4); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = fn(x, y), o = (y * W + x) * 4; px[o] = c >> 16 & 255; px[o + 1] = c >> 8 & 255; px[o + 2] = c & 255; px[o + 3] = 255; } return { w: W, h: H, px }; };
+  // seamless value noise with period 32 (cells of `s` px)
+  const noise = (seed, s) => { const n = W / s, at = (i, j) => hash2(((i % n) + n) % n + seed * 131, ((j % n) + n) % n + seed * 71); return (x, y) => { const fx = x / s, fy = y / s, i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j, sm = (t) => t * t * (3 - 2 * t); const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1); return a + (b - a) * sm(u) + (c - a) * sm(v) + (a - b - c + d) * sm(u) * sm(v); }; };
+  const n8 = noise(1, 8), n16 = noise(2, 16), n4 = noise(3, 4), n32 = noise(4, 32), n64 = noise(5, 64);
+  const patch = (x, y) => n64(x, y) * .45 + n32(x, y) * .35 + n8(x, y) * .2;
+  const grass = (x, y) => { const v = patch(x, y); let c = v < .4 ? 0x64a245 : v < .6 ? 0x6aa94a : 0x72b04f; if (hash2(x * 3 + 1, y * 5 + 2) < .035 && n4(x, y) > .5) c = 0x8cc35e; if (hash2(x * 7 + 5, y * 3 + 9) < .02) c = 0x548f3a; return c; };
+  // flowers: a few 3 px blossoms in white, yellow and rose
+  const FL = []; { const r = rng(57); for (let i = 0; i < 70; i++) FL.push([Math.floor(r() * 128), Math.floor(r() * 128), [0xf6f2ea, 0xf3d24e, 0xe9a3b6][i % 3]]); }
+  const flowerAt = (x, y) => { for (const [fx, fy, c] of FL) { const dx = ((x - fx + 192) % 128) - 64, dy = ((y - fy + 192) % 128) - 64; if (Math.abs(dx) + Math.abs(dy) <= 1) return dx === 0 && dy === 0 ? 0xe2a13a : c; } return 0; };
+  // cobbles: rounded stones from a seamless Voronoi, mortar between, a light edge toward the sun
+  const seeds = []; { const r = rng(91); for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) seeds.push([i * 8 + 1.5 + r() * 5, j * 8 + 1.5 + r() * 5, r()]); }
+  const cell = (x, y) => { let best = 1e9, second = 1e9, id = 0; for (const [sx, sy, k] of seeds) { if (Math.abs(((sx - x + 192) % 128) - 64) > 14 || Math.abs(((sy - y + 192) % 128) - 64) > 14) continue; for (const ox of [-128, 0, 128]) for (const oy of [-128, 0, 128]) { const d = Math.hypot(x + .5 - sx - ox, y + .5 - sy - oy); if (d < best) { second = best; best = d; id = k; } else if (d < second) second = d; } } return [second - best, id]; };
+  const cobble = (x, y) => { const [edge, id] = cell(x, y); if (edge < 1.1) return 0x8a8478; const base = id < .33 ? 0xb9b1a2 : id < .66 ? 0xaaa293 : 0xc3bba9; const [e2] = cell(x + 1, y + 1); return e2 < 1.1 ? lpShade(base, 1.08) : base; };
+  const dirt = (x, y) => { const v = patch(x, y); let c = v < .4 ? 0xbf9a62 : v < .7 ? 0xc9a56c : 0xd2b07a; if (hash2(x * 5 + 3, y * 9 + 1) < .02) c = 0xa58a66; return c; };
+  const farm = (x, y) => { const row = y % 8; if (row < 2) return 0x6f4529; if (row === 2) return 0x7d5131; const v = n8(x, y); return v < .5 ? 0x8a5a36 : 0x93623c; };
+  const water = (x, y) => { const v = n8(x, y) * .6 + n16(x, y) * .4, w = Math.sin((x + y * .5) / 128 * Math.PI * 16 + v * 3); return w > .92 ? 0x8fcbe6 : v < .45 ? 0x3f8fbd : 0x4a9cc8; };
+  const planks = (x, y) => { const row = Math.floor(y / 6), off = (row * 11) % 32, xx = (x + off) % 32; if (y % 6 === 5 || y === 127) return 0x5e3a22; if (xx === 0) return 0x6a4227; const c = row % 2 ? 0x9a6b3e : 0xa57444; return (xx === 2 || xx === 29) && y % 6 === 2 ? 0x4e3020 : (n4(x, y) > .7 ? lpShade(c, 1.05) : c); };
+  const crypt = (x, y) => { const bx = Math.floor(x / 16), by = Math.floor(y / 16), xx = x % 16, yy = y % 16; if (xx === 0 || yy === 0) return 0x3e3a44; const c = (bx + by) % 2 ? 0x6a6672 : 0x625e6a; return n4(x, y) > .75 ? lpShade(c, .92) : c; };
+  return {
+    grass: tile(grass), grass_flowers: tile((x, y) => flowerAt(x, y) || grass(x, y)), cobblestone: tile(cobble), dirt_path: tile(dirt),
+    farmland: tile(farm), water: tile(water), wood_planks: tile(planks), crypt_floor: tile(crypt),
+  };
+}
+LP_TILES = lpTileSet;
+
+// ---- content/lowpoly/01-parts.js
+/* ---------- lowpoly.html: the pieces buildings are made of ---------- */
+// Each returns a small model facing +z with its back at z = 0, the plane of the wall it sits on, so a building puts
+// it on any wall with LPM.add (ry: 0 front, PI back, PI/2 the right side, -PI/2 the left). No holes are cut: frames,
+// sills and reveals stand proud of the wall, so the glass between them reads as set in.
+
+// a window: glass that lights up at night, a frame, a cross of mullions, a sill, optional open shutters and arched top
+function lpWindow(w, h, o = {}) {
+  const m = new LPM(), x0 = -w / 2, x1 = w / 2, fr = o.frame === undefined ? LPC.woodDk : o.frame, t = 1.2, d = 1.4, arch = o.arch ? w / 2 : 0;
+  const glass = arch ? [[x0, 0, .2], [x1, 0, .2], ...Array.from({ length: 7 }, (_, k) => { const a = k / 6 * Math.PI; return [Math.cos(a) * w / 2, h - arch + Math.sin(a) * arch, .2]; })] : [[x0, 0, .2], [x1, 0, .2], [x1, h, .2], [x0, h, .2]];
+  m.face(glass, o.dark ? LPC.glassDk : LPC.glass, { glow: !o.dark, jit: 0 });
+  m.box(x0 - t, -t, 0, x0, h - arch, d, fr).box(x1, -t, 0, x1 + t, h - arch, d, fr);
+  if (arch) for (let k = 0; k < 6; k++) { const a0 = k / 6 * Math.PI, a1 = (k + 1) / 6 * Math.PI, P2 = (a, r) => [Math.cos(a) * r, h - arch + Math.sin(a) * r]; const [ax, ay] = P2(a0, arch), [bx, by] = P2(a1, arch), [cx, cy] = P2(a1, arch + t), [dx, dy] = P2(a0, arch + t); m.face([[ax, ay, d], [bx, by, d], [cx, cy, d], [dx, dy, d]], fr, { from: [0, h - arch, -5] }); m.face([[dx, dy, 0], [cx, cy, 0], [cx, cy, d], [dx, dy, d]], fr, { from: [0, h - arch, d / 2] }); }
+  else m.box(x0 - t, h, 0, x1 + t, h + t, d, fr);
+  m.box(-.45, 0, 0, .45, h - (arch ? arch * .2 : 0), .9, fr).box(x0, h * .55 - .45, 0, x1, h * .55 + .45, .9, fr);   // mullions
+  m.box(x0 - t - 1, -t - 1.2, 0, x1 + t + 1, -t, d + 1.2, o.sill === undefined ? LPC.stoneLt : o.sill);   // sill
+  if (o.shutters) for (const s of [-1, 1]) { const a = s < 0 ? x0 - t - w / 2 - .4 : x1 + t + .4, b = a + w / 2; m.box(a, 0, 0, b, h - arch, .9, o.shutters); for (let y = 2; y < h - arch - 1; y += 3) m.box(a + .4, y, .9, b - .4, y + .7, 1.2, lpShade(o.shutters, .82)); }
+  if (o.flowers) { m.box(x0 - t, -t - 4, .2, x1 + t, -t - 1.2, 3.6, LPC.wood); for (let k = 0; k < 4; k++) m.blob(x0 + (k + .5) * w / 4, -t + 1.2, 2.4, 1.9, [0xe0503a, 0xf2d24a, 0xe7a0c0, 0xf4efe6][k], { seed: k + 3, jit: .2, sy: .8, facej: .02 }); }
+  return m;
+}
+// a door: planks in two shades, a frame (stone or wood), a ring handle; o.arch: a round top; o.double: two leaves
+function lpDoor(w, h, o = {}) {
+  const m = new LPM(), x0 = -w / 2, x1 = w / 2, fr = o.frame === undefined ? LPC.stoneLt : o.frame, t = 2, arch = o.arch ? w / 2 : 0, c = o.col || LPC.door;
+  const n = Math.max(3, Math.round(w / 3)), top = (x) => arch ? h - arch + Math.sqrt(Math.max(0, arch * arch - x * x)) : h;
+  for (let i = 0; i < n; i++) { const a = x0 + i * w / n, b = x0 + (i + 1) * w / n; m.face([[a, 0, .3], [b, 0, .3], [b, top(b), .3], [a, top(a), .3]], i % 2 ? lpShade(c, .88) : c, { jit: .03 }); }
+  if (o.double) m.box(-.5, 0, .3, .5, top(0), .8, LPC.doorDk);
+  m.box(x0 - t, 0, 0, x0, h - arch, 2, fr).box(x1, 0, 0, x1 + t, h - arch, 2, fr);
+  if (arch) for (let k = 0; k < 8; k++) { const a0 = k / 8 * Math.PI, a1 = (k + 1) / 8 * Math.PI, P2 = (a, r) => [Math.cos(a) * r, h - arch + Math.sin(a) * r]; const [ax, ay] = P2(a0, arch), [bx, by] = P2(a1, arch), [cx, cy] = P2(a1, arch + t), [dx, dy] = P2(a0, arch + t); m.face([[ax, ay, 2], [bx, by, 2], [cx, cy, 2], [dx, dy, 2]], k === 4 || k === 3 ? lpShade(fr, 1.06) : fr, { from: [0, h - arch, -5] }); m.face([[dx, dy, 0], [cx, cy, 0], [cx, cy, 2], [dx, dy, 2]], fr, { from: [0, h - arch, 1] }); }
+  else m.box(x0 - t, h, 0, x1 + t, h + t, 2, fr);
+  for (const s of o.double ? [-1, 1] : [1]) m.box(s * w / 4 - .6, h * .42, .3, s * w / 4 + .6, h * .42 + 1.2, 1.4, LPC.gold);
+  m.box(x0 - t - 1, -.01, 0, x1 + t + 1, 1, 3.5, LPC.stoneDk);   // the step
+  return m;
+}
+// an awning: a striped panel from the wall (top, at z 0) down and out, a scalloped hem, two side triangles
+function lpAwning(w, drop, out, a, b, o = {}) {
+  const m = new LPM(), n = Math.max(2, Math.round(w / (o.stripe || 5))), sw = w / n, x0 = -w / 2, hem = o.hem === undefined ? 2.5 : o.hem;
+  for (let i = 0; i < n; i++) { const xa = x0 + i * sw, xb = xa + sw, c = i % 2 ? b : a; m.face([[xa, -drop, out], [xb, -drop, out], [xb, 0, 0], [xa, 0, 0]], c, { from: [0, -drop * 2, 0], jit: .02 }); m.face([[xa, -drop, out], [xb, -drop, out], [(xa + xb) / 2, -drop - hem, out]], c, { from: [0, -drop, -1] }); }
+  for (const x of [x0, -x0]) m.face([[x, 0, 0], [x, -drop, out], [x, -drop, 0]], lpShade(a, .85), { from: [0, -drop / 2, out / 3] });
+  m.box(x0 - .5, -.6, 0, -x0 + .5, .6, 1, LPC.ironLt);   // its iron rail
+  return m;
+}
+// stones at a corner, every other one long (quoins), proud of the wall by 0.6
+function lpQuoins(m, x, zf, zb, y0, y1, side, c) {
+  for (let y = y0, k = 0; y < y1; y += 5, k++) {
+    const long = k % 2 === 0, h = Math.min(4.4, y1 - y);
+    m.box(side < 0 ? x - .6 : x - (long ? 7 : 4), y, zf - .01, side < 0 ? x + (long ? 7 : 4) : x + .6, y + h, zf + .6, c);
+    m.box(side < 0 ? x - .6 : x - .01, y, zf - (long ? 4 : 7), side < 0 ? x + .01 : x + .6, y + h, zf, c);
+  }
+}
+// a chimney of bricks with a stone cap
+function lpChimney(m, x, z, w, d, y0, y1) {
+  m.box(x - w / 2, y0, z - d / 2, x + w / 2, y1, z + d / 2, 0xa85a40, { top: 0x6a4436 });
+  for (let y = y0 + 3; y < y1 - 2; y += 3) m.box(x - w / 2 - .2, y, z - d / 2 - .2, x + w / 2 + .2, y + .5, z + d / 2 + .2, 0x8e4a34);
+  m.box(x - w / 2 - 1, y1, z - d / 2 - 1, x + w / 2 + 1, y1 + 1.6, z + d / 2 + 1, LPC.stoneLt, { top: LPC.stone });
+}
+// a house body: walls up to the eaves and, for a gable, its two end triangles, as one prism (ridge along x or z)
+function lpBody(m, x0, x1, z0, z1, yE, yR, ridge, c, o = {}) {
+  if (!yR || o.flat) return m.box(x0, 0, z0, x1, yE, z1, c, { top: o.top === undefined ? c : o.top });
+  // (the gable a little under the roof: on the roof's own plane the two fought for the pixels, in stripes)
+  const yA = yR - 4, yB = yE - .6;
+  if (ridge === 'x') { const zm = (z0 + z1) / 2; return m.prism([[z0, 0], [z1, 0], [z1, yB], [zm, yA], [z0, yB]], 'x', x0, x1, c); }
+  const xm = (x0 + x1) / 2; return m.prism([[x0, 0], [x1, 0], [x1, yB], [xm, yA], [x0, yB]], 'z', z0, z1, c);
+}
+// a stone plinth round a body, a little proud
+function lpPlinth(m, x0, x1, z0, z1, h, c) { return m.box(x0 - .8, 0, z0 - .8, x1 + .8, h, z1 + .8, c || LPC.stoneDk, { top: lpShade(c || LPC.stoneDk, 1.1) }); }
+// a band of stone (cornice, string course) round a body
+function lpBand(m, x0, x1, z0, z1, y, h, out, c) { return m.box(x0 - out, y, z0 - out, x1 + out, y + h, z1 + out, c || LPC.stoneLt); }
+
+// ---- content/lowpoly/02-buildings.js
+/* ---------- lowpoly.html: the village's buildings ---------- */
+// Each on the footprint of its sheet sprite (x from its anchor column, z from the middle of its depth, front +z), its
+// door where the sprite's door is, so the doorways, collisions and shadows of the game stay as they were.
+
+// a feature (window, door…) put on a wall: side front/back/left/right, u along the wall, y up, plane the wall's x or z
+const lpOn = (m, f, side, u, y, plane) => m.add(f, side === 'front' ? { x: u, y, z: plane } : side === 'back' ? { x: u, y, z: plane, ry: Math.PI } : side === 'right' ? { x: plane, y, z: -u, ry: Math.PI / 2 } : { x: plane, y, z: u, ry: -Math.PI / 2 });
+// a round window: glass disc and a stone ring, facing +z
+function lpRound(r0, r1, o = {}) {
+  const m = new LPM(), n = 12, at = (k, r) => [Math.cos(k / n * Math.PI * 2) * r, Math.sin(k / n * Math.PI * 2) * r];
+  m.face(Array.from({ length: n }, (_, k) => [...at(k, r0), .2]), LPC.glass, { glow: 1, jit: 0 });
+  for (let k = 0; k < n; k++) { const [ax, ay] = at(k, r0), [bx, by] = at(k + 1, r0), [cx, cy] = at(k + 1, r1), [dx, dy] = at(k, r1), c = o.c || LPC.stoneLt; m.face([[ax, ay, 1.6], [bx, by, 1.6], [cx, cy, 1.6], [dx, dy, 1.6]], k % 2 ? lpShade(c, .94) : c, { from: [0, 0, -5] }); m.face([[ax, ay, 0], [bx, by, 0], [bx, by, 1.6], [ax, ay, 1.6]], lpShade(c, .8), { from: [0, 0, 1] }); m.face([[dx, dy, 0], [cx, cy, 0], [cx, cy, 1.6], [dx, dy, 1.6]], c, { from: [0, 0, 1] }); }
+  if (o.cross) m.box(-.5, -r0, .2, .5, r0, .9, LPC.woodDk).box(-r0, -.5, .2, r0, .5, .9, LPC.woodDk);
+  return m;
+}
+// a disc facing +z (a sign board), n sides, thickness t
+const lpDisc = (r, t, c, rim) => new LPM().prism(Array.from({ length: 14 }, (_, k) => [Math.cos(k / 14 * Math.PI * 2) * r, Math.sin(k / 14 * Math.PI * 2) * r]), 'z', 0, t, rim || c, { cap: c });
+
+LP_MODELS.library = () => {
+  const m = new LPM(), x0 = -50, x1 = 49, z0 = -38, z1 = 37, yE = 80, S = LPC.stone;
+  lpBody(m, x0, x1, z0, z1, yE, 0, 'x', S, { top: LPC.stoneDk });
+  lpPlinth(m, x0, x1, z0, z1, 5);
+  lpBand(m, x0, x1, z0, z1, 39, 3, 1.2); lpBand(m, x0, x1, z0, z1, 76, 4, 2, LPC.stoneLt);
+  for (const [x, s] of [[x0, -1], [x1, 1]]) { lpQuoins(m, x, z1, z0, 5, 76, s, LPC.stoneLt); }
+  m.roof({ x0, x1, z0, z1, yE: 80, yR: 104, ridge: 'x', hip: .55, over: 4, t: 2.5, c: LPC.roof });
+  lpOn(m, lpDoor(18, 28, { arch: 1, double: 1, frame: LPC.stoneLt }), 'front', 0, 5, z1);
+  m.box(-14, 0, z1, 14, 2, z1 + 6, LPC.stoneDk, { top: LPC.stone });   // the steps
+  m.box(-11, 2, z1, 11, 3.6, z1 + 3, LPC.stoneDk, { top: LPC.stone });
+  for (const side of ['front', 'back']) for (const u of side === 'front' ? [-28, 28] : [-28, 0, 28]) { lpOn(m, lpWindow(10, 17, { arch: 1, frame: LPC.stoneLt, sill: LPC.stoneLt }), side, u, 14, side === 'front' ? z1 : z0); }
+  for (const side of ['front', 'back']) for (const u of [-28, 0, 28]) lpOn(m, lpWindow(10, 16, { arch: 1, frame: LPC.stoneLt }), side, u, 52, side === 'front' ? z1 : z0);
+  for (const side of ['left', 'right']) for (const u of [-18, 18]) for (const y of [14, 52]) lpOn(m, lpWindow(9, 15, { arch: 1, frame: LPC.stoneLt }), side, u, y, side === 'right' ? x1 : x0);
+  // the bell cote over the door: a little gabled tower on the roof's front, its bell in an arch
+  const bz0 = 22, bz1 = z1 + 1;
+  m.box(-9, 74, bz0, 9, 98, bz1, LPC.stoneLt, { top: LPC.stone });
+  m.roof({ x0: -9, x1: 9, z0: bz0, z1: bz1, yE: 98, yR: 107, ridge: 'z', over: 1.5, t: 1.5, c: LPC.roof, ends: 1 });
+  m.prism([[-9, 98], [9, 98], [0, 107]], 'z', bz1 - 1, bz1, LPC.stoneLt);
+  m.box(-5, 84, bz1 - 3, 5, 95, bz1 + .05, 0x2e2622);
+  m.lathe(0, bz1 - 1.5, [[1, 86.5], [3.2, 87.5], [3.6, 89], [2.6, 92], [1.2, 93.2]], 8, LPC.gold, { top: LPC.gold });
+  lpOn(m, lpRound(2.2, 3.4, { cross: 1 }), 'front', 0, 101.5, bz1);
+  return m;
+};
+
+LP_MODELS.bakery = () => {
+  const m = new LPM(), x0 = -44, x1 = 47, z0 = -30, z1 = 30, yE = 40, yR = 69, xm = (x0 + x1) / 2, W = LPC.plaster;
+  lpBody(m, x0, x1, z0, z1, yE, yR, 'z', W);
+  lpPlinth(m, x0, x1, z0, z1, 5);
+  for (const [x, s] of [[x0, -1], [x1, 1]]) lpQuoins(m, x, z1, z0, 5, yE, s, LPC.stoneLt);
+  lpBand(m, x0, x1, z0, z1, yE - 1, 2.5, 1.5, LPC.stoneLt);
+  m.roof({ x0, x1, z0, z1, yE, yR, ridge: 'z', over: 4, t: 2.5, c: LPC.roof });
+  // the shop window, bread on two shelves, lit from inside; its sill; the awning over it
+  lpOn(m, lpWindow(44, 15, { frame: LPC.wood, sill: LPC.stoneLt }), 'front', -13.5, 9, z1);
+  for (const [y, n] of [[10.2, 6], [15.8, 6]]) { m.box(-35, y - 1.2, z1 + .2, 8, y - .4, z1 + 2.2, LPC.woodDk); for (let i = 0; i < n; i++) m.blob(-32 + i * 7.2, y + 1.5, z1 + 3, 2.2, i % 2 ? LPC.bread : lpShade(LPC.bread, 1.1), { seed: i * 3 + y, sy: .6, jit: .1, facej: .02 }); }
+  lpOn(m, lpAwning(54, 6, 9, LPC.awnGreen, LPC.awnCream), 'front', -13.5, 32, z1);
+  lpOn(m, lpDoor(15, 23, { arch: 1, frame: LPC.stoneLt }), 'front', 29.5, 5, z1);
+  lpOn(m, lpRound(4, 6, { cross: 1 }), 'front', xm, 54, z1);
+  for (const side of ['left', 'right']) for (const u of [-14, 12]) lpOn(m, lpWindow(9, 11, { shutters: LPC.shutter }), side, u, 18, side === 'right' ? x1 : x0);
+  lpOn(m, lpWindow(10, 12, { shutters: LPC.shutter }), 'back', 20, 18, z0);
+  lpChimney(m, 32.5, -16, 9, 10, 50, 72);
+  // the bread sign on an iron bracket at the corner: a round board with a loaf on it
+  m.box(x0 - 9, 32.5, z1 - 2, x0, 33.6, z1 - 1, LPC.iron);
+  m.box(x0 - 7.6, 30, z1 - 1.8, x0 - 7, 33, z1 - 1.2, LPC.iron).box(x0 - 2.6, 30, z1 - 1.8, x0 - 2, 33, z1 - 1.2, LPC.iron);
+  m.add(lpDisc(5.6, 1.8, LPC.cream, LPC.wood), { x: x0 - 5, y: 25, z: z1 - 2.4 });
+  m.blob(x0 - 5, 25, z1 - .2, 2.6, LPC.bread, { seed: 9, sy: .55, jit: .08 });
+  return m;
+};
+
+LP_MODELS.shop = () => {
+  const m = new LPM(), x0 = -38, x1 = 43, z0 = -32, z1 = 28, yE = 59, yR = 73, W = LPC.cream;
+  lpBody(m, x0, x1, z0, z1, yE, yR, 'x', W);
+  m.box(x0 - .3, 0, z0 - .3, x1 + .3, 30, z1 + .3, LPC.stoneLt, { top: LPC.stone });   // the stone ground floor
+  lpPlinth(m, x0, x1, z0, z1, 4);
+  lpBand(m, x0, x1, z0, z1, 30, 2, 1, LPC.stone);
+  for (const [x, s] of [[x0, -1], [x1, 1]]) lpQuoins(m, x, z1, z0, 32, yE, s, LPC.stoneLt);
+  m.roof({ x0, x1, z0, z1, yE, yR, ridge: 'x', over: 3.5, t: 2.5, c: LPC.roof });
+  lpChimney(m, -26.5, 6, 7, 8, 62, 82);
+  for (const u of [-19, 15.5]) lpOn(m, lpWindow(12, 13, { shutters: LPC.shutter, flowers: 1 }), 'front', u, 40, z1);
+  for (const u of [-19, 15.5]) lpOn(m, lpWindow(11, 12, { shutters: LPC.shutter }), 'back', u, 40, z0);
+  for (const side of ['left', 'right']) lpOn(m, lpWindow(10, 12, { shutters: LPC.shutter }), side, 0, 40, side === 'right' ? x1 : x0);
+  // the shop window full of goods, the awning over it, the door
+  lpOn(m, lpWindow(40, 18, { frame: LPC.woodDk, dark: 0 }), 'front', -7.5, 8, z1);
+  const goods = [LPC.red, LPC.gold, LPC.awnGreen, LPC.bread, LPC.blue, LPC.cream, LPC.red, LPC.leaf];
+  for (let i = 0; i < 8; i++) m.box(-26 + i * 4.6, 9, z1 + .3, -23 + i * 4.6, 12 + (i % 3), z1 + 2.4, goods[i]);
+  for (let i = 0; i < 6; i++) m.blob(-24 + i * 6.4, 17.5, z1 + 1.2, 1.9, goods[(i + 3) % 8], { seed: i + 21, sy: .9, jit: .1 });
+  lpOn(m, lpAwning(52, 6, 7, LPC.awnGreen, LPC.awnCream), 'front', -6, 34, z1);
+  lpOn(m, lpDoor(11, 24, { frame: LPC.woodDk }), 'front', 28.5, 2, z1);
+  // the key hanging from its bracket
+  m.box(x0 - 10, 50, z1 - 2, x0, 51.2, z1 - 1, LPC.iron).box(x0 - 7.5, 45, z1 - 1.8, x0 - 7, 50, z1 - 1.2, LPC.iron);
+  m.add(lpDisc(3.6, 1.4, LPC.gold, lpShade(LPC.gold, .8)), { x: x0 - 7.2, y: 42, z: z1 - 2.2 });
+  m.box(x0 - 7.8, 31, z1 - 1.8, x0 - 6.6, 39, z1 - .8, LPC.gold).box(x0 - 6.6, 32, z1 - 1.8, x0 - 4.4, 33.2, z1 - .8, LPC.gold).box(x0 - 6.6, 34.6, z1 - 1.8, x0 - 5, 35.8, z1 - .8, LPC.gold);
+  for (const [x, c] of [[x0 + 3, 0xe0503a], [x1 - 3, LPC.leaf]]) { m.frustum(x, z1 + 3, 2.4, 3.2, 0, 4.5, 8, 0xb5603c, { top: 0x5a3a24 }); m.blob(x, 7, z1 + 3, 3.2, c === LPC.leaf ? LPC.leaf : LPC.leafDk, { seed: x | 0, sy: 1.1 }); if (c !== LPC.leaf) m.blob(x, 8.5, z1 + 4.4, 1.2, c, { seed: 3 }); }
+  m.lathe(x0 + 6, z1 + 6, [[3.4, 0], [4, 3], [4, 8], [3.4, 11]], 10, LPC.wood, { top: LPC.woodLt, col: (b, k) => (k % 2 ? LPC.wood : LPC.woodLt) });   // a barrel by the corner
+  return m;
+};
+
+LP_MODELS.house_a = () => {
+  const m = new LPM(), x0 = -26, x1 = 25, z0 = -28, z1 = 21, yE = 64, yR = 80, W = 0xe8bf62;
+  lpBody(m, x0, x1, z0, z1, yE, yR, 'x', W);
+  m.box(x0 - .3, 0, z0 - .3, x1 + .3, 9, z1 + .3, LPC.stone, { top: LPC.stoneLt });
+  lpBand(m, x0, x1, z0, z1, 34, 1.6, .8, LPC.plasterHi);
+  for (const [x, s] of [[x0, -1], [x1, 1]]) lpQuoins(m, x, z1, z0, 9, yE, s, LPC.stoneLt);
+  m.roof({ x0, x1, z0, z1, yE, yR, ridge: 'x', over: 3, t: 2.5, c: LPC.roof });
+  lpChimney(m, -19, 13, 6, 7, 66, 88);
+  lpOn(m, lpDoor(11, 22, { arch: 1, frame: LPC.stoneLt }), 'front', -.5, 1, z1);
+  for (const u of [-14, 13]) lpOn(m, lpWindow(9, 11, { shutters: LPC.shutter, flowers: u > 0 }), 'front', u, 40, z1);
+  lpOn(m, lpWindow(9, 10, { shutters: LPC.shutter }), 'front', -14, 13, z1);
+  for (const u of [-12, 12]) lpOn(m, lpWindow(8, 10, { shutters: LPC.shutter }), 'back', u, 40, z0);
+  for (const side of ['left', 'right']) for (const y of [16, 42]) lpOn(m, lpWindow(8, 10, { shutters: LPC.shutter }), side, -4, y, side === 'right' ? x1 : x0);
+  lpOn(m, lpWindow(6, 7, {}), 'front', 0, 52, z1);
+  m.box(x1 - 3, 1, z1, x1 - 1, 30, z1 + 1.2, LPC.leafDk);   // a climbing vine at the corner, and a lamp by the door
+  for (let y = 4; y < 30; y += 4.5) m.blob(x1 - 2 + Math.sin(y) * 1.5, y, z1 + 1.4, 2.2, y % 9 > 4 ? LPC.leaf : LPC.leafDk, { seed: y | 0, jit: .2 });
+  m.box(10, 18, z1, 11, 22, z1 + 2.5, LPC.iron).box(9, 13.5, z1 + 1.5, 12, 17.5, z1 + 3.5, LPC.glass, { f: { glow: 1 } });
+  m.frustum(18, z1 + 3, 2, 2.8, 0, 4, 8, 0xb5603c, { top: 0x5a3a24 }); m.blob(18, 6.6, z1 + 3, 3, LPC.leafDk, { seed: 4, sy: 1.3 });
+  return m;
+};
+
+LP_MODELS.house_b = () => {
+  const m = new LPM(), x0 = -43, x1 = 41, z0 = -22, z1 = 20, yE = 37, yR = 58, xm = (x0 + x1) / 2, W = LPC.cream;
+  lpBody(m, x0, x1, z0, z1, yE, yR, 'z', W);
+  lpPlinth(m, x0, x1, z0, z1, 4);
+  for (const [x, s] of [[x0, -1], [x1, 1]]) lpQuoins(m, x, z1, z0, 4, yE, s, LPC.stone);
+  m.roof({ x0, x1, z0, z1, yE, yR, ridge: 'z', over: 3, t: 2.5, c: LPC.roof });
+  lpOn(m, lpRound(4.2, 6.2, { cross: 1 }), 'front', xm, 44, z1);
+  for (const u of [-25, 23]) lpOn(m, lpWindow(11, 11, { shutters: LPC.shutter, flowers: 1 }), 'front', u, 13, z1);
+  for (const u of [-24, 0, 22]) lpOn(m, lpWindow(10, 10, { shutters: LPC.shutter }), 'back', u, 13, z0);
+  for (const side of ['left', 'right']) lpOn(m, lpWindow(9, 10, { shutters: LPC.shutter }), side, 0, 13, side === 'right' ? x1 : x0);
+  lpOn(m, lpDoor(12, 22, { frame: LPC.stoneLt }), 'front', -1, 2, z1);
+  // the little tiled roof over the door on two brackets
+  m.roof({ x0: -14, x1: 12, z0: z1, z1: z1 + 7, yE: 28.5, yR: 32, ridge: 'x', over: 1, t: 1.5, c: LPC.roof, cap: false, ends: 1 });
+  for (const x of [-12, 10]) m.box(x - .6, 26, z1, x + .6, 28.5, z1 + 6, LPC.woodDk);
+  for (const [x, c] of [[-38, LPC.leaf], [-12, 0xe05a8a], [10, LPC.leafDk], [36, 0xf2d24a]]) { m.frustum(x, z1 + 3.5, 2.2, 3, 0, 4, 8, 0xb5603c, { top: 0x5a3a24 }); m.blob(x, 6.4, z1 + 3.5, 3, c === LPC.leaf || c === LPC.leafDk ? c : LPC.leaf, { seed: x + 50, sy: 1.1 }); if (c !== LPC.leaf && c !== LPC.leafDk) for (let k = 0; k < 3; k++) m.blob(x - 1.5 + k * 1.5, 8 + (k % 2), z1 + 5, .9, c, { seed: k }); }
+  return m;
+};
+
+LP_MODELS.church = () => {
+  const m = new LPM(), S = LPC.stoneLt, nx0 = -42, nx1 = 19, nz0 = -9, nz1 = 43, xm = (nx0 + nx1) / 2;
+  // the nave, its gable to the front, buttresses at the corners, a pediment over the door
+  lpBody(m, nx0, nx1, nz0, nz1, 65, 85, 'z', S);
+  lpPlinth(m, nx0, nx1, nz0, nz1, 4, LPC.stone);
+  m.roof({ x0: nx0, x1: nx1, z0: nz0, z1: nz1, yE: 65, yR: 85, ridge: 'z', over: 3, t: 2.5, c: LPC.roof });
+  for (const x of [nx0 - 3, nx1]) m.box(x, 0, nz1 - 6, x + 3, 50, nz1 + 2, LPC.stone, { top: LPC.stoneDk });
+  for (const z of [10, 26]) for (const x of [nx0 - 2.5, nx1]) m.box(x, 0, z, x + 2.5, 44, z + 4, LPC.stone, { top: LPC.stoneDk });
+  lpOn(m, lpDoor(14, 26, { arch: 1, double: 1, frame: LPC.stone }), 'front', xm, 2, nz1);
+  m.prism([[xm - 12, 33], [xm + 12, 33], [xm, 41]], 'z', nz1, nz1 + 2.5, LPC.stone);
+  m.box(xm - 11, 31, nz1, xm + 11, 33, nz1 + 2.5, LPC.stone);
+  for (const x of [xm - 10, xm + 10]) m.box(x - 1.3, 2, nz1, x + 1.3, 31, nz1 + 2.2, LPC.stone);
+  lpOn(m, lpRound(7.5, 10.5, { cross: 1, c: LPC.stone }), 'front', xm, 54, nz1);
+  for (const u of [xm - 17, xm + 17]) lpOn(m, lpWindow(4.5, 13, { arch: 1, frame: LPC.stone }), 'front', u, 42, nz1);
+  for (const side of ['left', 'right']) for (const u of [-24, -2, 20]) lpOn(m, lpWindow(5, 16, { arch: 1, frame: LPC.stone }), side, side === 'left' ? u + 17 : -(u + 17), 28, side === 'right' ? nx1 : nx0);
+  m.box(xm - .8, 85, nz1 - 1, xm + .8, 96, nz1 + .6, LPC.iron).box(xm - 3.5, 91, nz1 - 1, xm + 3.5, 92.6, nz1 + .6, LPC.iron);
+  // the bell tower, set back on the right: openings with the bell, a pyramid roof and a cross
+  const tx0 = 20, tx1 = 43, tz0 = -41, tz1 = -6, tm = (tx0 + tx1) / 2;
+  m.box(tx0, 0, tz0, tx1, 106, tz1, S, { top: LPC.stone });
+  lpPlinth(m, tx0, tx1, tz0, tz1, 4, LPC.stone);
+  for (const y of [40, 80, 102]) lpBand(m, tx0, tx1, tz0, tz1, y, 2, .8, LPC.stone);
+  m.roof({ x0: tx0, x1: tx1, z0: tz0, z1: tz1, yE: 106, yR: 122, ridge: 'x', hip: 1, over: 2.5, t: 2, c: LPC.roof });
+  for (const side of ['front', 'back', 'left', 'right']) {
+    // (u: the world x on the front and back, the world z on the left, minus it on the right: see lpOn)
+    const plane = side === 'front' ? tz1 : side === 'back' ? tz0 : side === 'right' ? tx1 : tx0, zc = (tz0 + tz1) / 2, u = side === 'front' || side === 'back' ? tm : side === 'left' ? zc : -zc;
+    lpOn(m, lpWindow(10, 14, { arch: 1, frame: LPC.stone, dark: 1 }), side, u, 84, plane);
+    lpOn(m, lpWindow(3.5, 7, { arch: 1, frame: LPC.stone }), side, u, 56, plane);
+  }
+  m.lathe(tm, (tz0 + tz1) / 2, [[1.4, 85.5], [5.5, 86.5], [6, 89], [4.2, 94], [1.6, 96]], 10, LPC.gold, { top: LPC.gold });
+  m.box(tm - .8, 121, (tz0 + tz1) / 2 - .8, tm + .8, 132, (tz0 + tz1) / 2 + .8, LPC.iron).box(tm - 3.5, 127, (tz0 + tz1) / 2 - .8, tm + 3.5, 128.6, (tz0 + tz1) / 2 + .8, LPC.iron);
+  lpOn(m, lpDoor(7, 12, { arch: 1, frame: LPC.stone }), 'front', tm, 2, tz1);
+  // a low chapel on the left, a lean-to behind the tower on the right
+  m.box(-50, 0, 17, nx0, 35, 41, S); m.roof({ x0: -50, x1: nx0, z0: 17, z1: 41, yE: 35, yR: 41, ridge: 'z', over: 1.5, t: 1.5, c: LPC.roofOld, hip: 0, ends: 1 });
+  lpOn(m, lpWindow(4, 10, { arch: 1, frame: LPC.stone }), 'left', 29, 14, -50);
+  m.box(tx1, 0, -43, 49, 21, -10, S); m.roof({ x0: tx1, x1: 49, z0: -43, z1: -10, yE: 21, yR: 27, ridge: 'z', over: 1.5, t: 1.5, c: LPC.roofOld });
+  return m;
+};
+
+LP_MODELS.windmill = () => {
+  const m = new LPM(), cx = -1, cz = 0, n = 16, W = LPC.cream;
+  // the tower: whitewashed stone, tapering, a band of darker stone at its foot and under the cap
+  m.lathe(cx, cz, [[29, 0], [28.6, 6], [27, 30], [25, 56], [23.5, 73]], n, W, { top: false, col: (b, k) => (b === 0 ? LPC.stone : (k + b) % 5 === 0 ? lpShade(W, .95) : W) });
+  m.frustum(cx, cz, 25, 24.5, 70, 74, n, LPC.stone, { top: false });
+  // the cap: a cone of shingles in courses, a little finial
+  const rings = [[32, 72.5], [28, 79], [23.5, 86], [18, 93], [12.5, 100], [7, 106], [2.5, 111], [0, 113]];
+  for (let b = 0; b + 1 < rings.length; b++) m.frustum(cx, cz, rings[b][0], rings[b + 1][0], rings[b][1], rings[b + 1][1], n, b % 2 ? 0xa4583a : 0xb7683e, { top: false, rot: b % 2 ? Math.PI / n : 0 });
+  m.frustum(cx, cz, 32, 32, 71, 72.5, n, 0x7a432c, { top: false });
+  m.box(cx - .8, 112, cz - .8, cx + .8, 118, cz + .8, LPC.iron);
+  // the door and windows on the round wall (set on the tangent plane)
+  m.add(lpDoor(11, 19, { arch: 1, frame: LPC.stone }), { x: cx, y: 1, z: cz + 28.4 });
+  for (const [a, y] of [[0, 44], [Math.PI * .75, 30], [-Math.PI * .7, 52], [Math.PI, 40]]) m.add(lpWindow(5, 7, { arch: 1, frame: LPC.stone }), { x: cx + Math.sin(a) * (26.6 - (y - 30) * .06), y, z: cz + Math.cos(a) * (26.6 - (y - 30) * .06), ry: a });
+  // the sails: four lattice arms on a hub, cloth on one side of each, standing out on the front
+  const hub = [cx, 82], zS = 33;
+  m.prism(Array.from({ length: 8 }, (_, k) => [hub[0] + Math.cos(k / 8 * Math.PI * 2) * 3, hub[1] + Math.sin(k / 8 * Math.PI * 2) * 3]), 'z', 26, zS + 2, LPC.woodDk);
+  for (let k = 0; k < 4; k++) {
+    const a = Math.PI / 4 + k * Math.PI / 2, ca = Math.cos(a), sa = Math.sin(a), L = 46, R2 = (u, v) => [hub[0] + ca * u - sa * v, hub[1] + sa * u + ca * v];
+    const quad = (u0, u1, v0, v1, z, c, th) => { const p = [R2(u0, v0), R2(u1, v0), R2(u1, v1), R2(u0, v1)]; m.face(p.map(([x, y]) => [x, y, z + th]), c, { from: [hub[0], hub[1], z - 5], jit: .02 }); m.face(p.map(([x, y]) => [x, y, z]), lpShade(c, .85), { from: [hub[0], hub[1], z + 9] }); };
+    quad(2, L, -1, 1, zS, LPC.woodDk, 1.4);                     // the spar
+    quad(10, L - 1, 1, 11, zS - .6, LPC.awnCream, .4);          // the cloth
+    for (let u = 12; u < L; u += 7) quad(u, u + .9, 1, 11.5, zS + .2, LPC.wood, .8);   // its battens
+    quad(10, L - 1, 10.4, 11.6, zS + .2, LPC.wood, .8);
+  }
+  return m;
+};
+
+// ---- content/lowpoly/03-props.js
+/* ---------- lowpoly.html: props and plants ---------- */
+// Foliage is lit by its own height: lighter on top, darker underneath, as a canopy reads in late light.
+const lpLeaf = (lo, hi, a, b, c) => (p) => { const t = (p[1] - lo) / Math.max(1, hi - lo); return t > .66 ? a : t > .33 ? b : c; };
+
+LP_MODELS.oak = () => {
+  const m = new LPM(), L = lpLeaf(30, 99, LPC.leafLt, LPC.leaf, LPC.leafDk);
+  m.lathe(0, 0, [[6, 0], [4.6, 6], [3.6, 30], [3, 44]], 7, LPC.trunk, { top: false });
+  for (const [x, y, z, r, s] of [[0, 72, 0, 26, 1], [-22, 60, 4, 18, 2], [22, 62, -2, 19, 3], [-8, 86, -4, 16, 4], [12, 82, 6, 15, 5], [0, 58, 12, 15, 6]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 13, sy: .82, jit: .16, col: L, flat: y - r * .6 });
+  return m;
+};
+LP_MODELS.olive = () => {
+  const m = new LPM(), L = lpLeaf(24, 70, 0xa9b874, LPC.olive, 0x6e8448);
+  m.lathe(0, 0, [[5, 0], [3.4, 10], [3.8, 22], [2.4, 34]], 6, 0x7d6a54, { top: false });
+  for (const [x, y, z, r, s] of [[0, 50, 0, 20, 1], [-16, 44, 3, 13, 2], [15, 46, -3, 14, 3], [3, 62, 2, 12, 4]]) m.blob(x, y, z, r, LPC.olive, { seed: s * 7, sy: .75, jit: .2, col: L, flat: y - r * .5 });
+  return m;
+};
+LP_MODELS.cypress = () => {
+  const m = new LPM(), n = 7;
+  m.lathe(0, 0, [[2.6, 0], [2, 8]], 6, LPC.trunk, { top: false });
+  const prof = [[4, 5], [8.5, 18], [10.5, 34], [10, 52], [8.4, 70], [6, 88], [3.4, 102], [0, 114]];
+  for (let b = 0; b + 1 < prof.length; b++) m.frustum(0, 0, prof[b][0], prof[b + 1][0], prof[b][1], prof[b + 1][1], n, LPC.cypress, { top: false, rot: b * .45, col: (k) => ((k + b) % 3 === 0 ? LPC.cypressDk : (k + b) % 3 === 1 ? LPC.cypress : lpShade(LPC.cypress, 1.12)) });
+  m.face(Array.from({ length: n }, (_, k) => { const t = k / n * Math.PI * 2; return [Math.sin(t) * 4, 5, Math.cos(t) * 4]; }), LPC.cypressDk, { from: [0, 20, 0] });
+  return m;
+};
+LP_MODELS.bush = () => {
+  const m = new LPM(), L = lpLeaf(0, 36, LPC.leafLt, LPC.leaf, LPC.leafDk);
+  for (const [x, y, z, r, s] of [[-12, 13, 2, 14, 1], [11, 12, -2, 15, 2], [0, 20, 0, 15, 3], [-2, 11, 9, 11, 4]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 17, sy: .85, jit: .16, col: L, flat: 0 });
+  for (const [x, y, z, c] of [[-14, 22, 10, 0xf4efe6], [6, 26, 8, 0xe9a3b6], [14, 18, 9, 0xf4efe6], [-4, 29, 3, 0xe9a3b6]]) m.blob(x, y, z, 1.4, c, { seed: x + 40, jit: .1 });
+  return m;
+};
+LP_MODELS.vine_row = () => {
+  const m = new LPM(), L = lpLeaf(10, 50, LPC.leafLt, LPC.leaf, LPC.leafDk);
+  for (const x of [-62, 0, 62]) m.box(x - 1.3, 0, -1.3, x + 1.3, 46, 1.3, LPC.woodDk);
+  for (const y of [24, 40]) m.box(-62, y - .4, -.4, 62, y + .4, .4, LPC.iron);
+  for (let i = 0; i < 8; i++) { const x = -54 + i * 15.5; m.box(x - 1, 0, -1, x + 1, 26, 1, LPC.trunk); m.blob(x, 34, 0, 11, LPC.leaf, { seed: i * 11 + 2, sy: .8, jit: .18, col: L, flat: 18 }); for (let g = 0; g < 2; g++) m.blob(x - 4 + g * 7, 23, 7 - g * 2, 2.6, LPC.grape, { seed: i * 3 + g, sy: 1.3, jit: .12 }); }
+  return m;
+};
+LP_MODELS.fence = () => {
+  const m = new LPM(), W = LPC.woodLt;
+  for (const x of [-19, 0, 19]) { m.box(x - 1.4, 0, -1.4, x + 1.4, 17, 1.4, W, { top: lpShade(W, .85) }); m.prism([[x - 1.4, 17], [x + 1.4, 17], [x, 19.5]], 'z', -1.4, 1.4, W); }
+  for (const y of [6, 13]) m.box(-20.5, y - 1.2, -.6, 20.5, y + 1.2, 1.4, lpShade(W, .9));
+  return m;
+};
+LP_MODELS.well = () => {
+  const m = new LPM();
+  m.lathe(0, 0, [[12.5, 0], [12.5, 13], [11, 14.5]], 12, LPC.stone, { top: false, col: (b, k) => (k % 2 ? LPC.stone : LPC.stoneLt) });
+  m.frustum(0, 0, 9.5, 9.5, 10, 14.5, 12, LPC.stoneDk, { top: false });
+  m.frustum(0, 0, 9.5, 9.5, 9.6, 10, 12, 0x2c5a78, { top: 0x356f92 });   // the water
+  for (const x of [-11, 11]) m.box(x - 1.4, 13, -1.4, x + 1.4, 34, 1.4, LPC.woodDk);
+  m.roof({ x0: -12, x1: 12, z0: -8, z1: 8, yE: 34, yR: 43, ridge: 'x', over: 2.5, t: 1.6, c: LPC.roof, ends: 1 });
+  m.box(-11, 27, -.6, 11, 28.2, .6, LPC.wood);   // the axle, the rope, the bucket, the crank
+  m.box(-.3, 17, -.3, .3, 27, .3, 0xc8b48a);
+  m.lathe(0, 0, [[2.2, 14], [2.8, 18]], 8, LPC.wood, { top: 0x4a3020 });
+  m.box(11, 26, -.5, 15, 27, .5, LPC.iron).box(14.4, 22, -.5, 15.4, 27, .5, LPC.iron);
+  return m;
+};
+LP_MODELS.lamp_post = () => {
+  const m = new LPM(), I = LPC.iron;
+  m.lathe(0, 0, [[3.2, 0], [3.2, 2], [2, 3], [1.2, 5], [1, 32], [1.6, 33.5]], 8, I, { top: I });
+  m.box(-2.6, 33.5, -2.6, 2.6, 34.5, 2.6, I);
+  m.frustum(0, 0, 2.6, 3.4, 34.5, 40.5, 6, LPC.glass, { top: false, glow: 1 });
+  for (let k = 0; k < 6; k++) { const t = k / 6 * Math.PI * 2; m.box(Math.sin(t) * 3.1 - .35, 34.5, Math.cos(t) * 3.1 - .35, Math.sin(t) * 3.1 + .35, 40.5, Math.cos(t) * 3.1 + .35, I); }
+  m.frustum(0, 0, 4.4, 0, 40.5, 44, 6, I);
+  return m;
+};
+LP_MODELS.bench = () => {
+  const m = new LPM(), S = LPC.stoneLt;
+  m.box(-17, 8, -6, 17, 10.5, 5, S, { top: lpShade(S, 1.06) });
+  for (const x of [-13, 13]) m.box(x - 2.5, 0, -4.5, x + 2.5, 8, 3.5, LPC.stone);
+  m.box(-17, 10.5, -7, 17, 18, -5, LPC.wood, { top: LPC.woodLt });
+  return m;
+};
+LP_MODELS.market_stall = () => {
+  const m = new LPM();
+  for (const [x, z] of [[-18, -9], [18, -9], [-18, 9], [18, 9]]) m.box(x - 1, 0, z - 1, x + 1, z < 0 ? 34 : 28, z + 1, LPC.woodDk);
+  m.box(-19, 12, -10, 19, 14, 10, LPC.wood, { top: LPC.woodLt });
+  m.box(-19.2, 6, 9.6, 19.2, 14, 10.4, LPC.awnRed);   // the cloth hanging from the table's front
+  for (let i = 0; i < 7; i++) m.face([[-19 + i * 38 / 7, 6, 10.4], [-19 + (i + 1) * 38 / 7, 6, 10.4], [-19 + (i + .5) * 38 / 7, 4.5, 10.4]], LPC.awnRed, { from: [0, 8, 0] });
+  const fruit = [0xe0503a, 0xf2a83a, 0x8cc35e, 0xe0503a, 0xd99a4c, 0x6a3f7a];
+  for (let i = 0; i < 12; i++) m.blob(-15 + (i % 6) * 6, 16.6, -4 + Math.floor(i / 6) * 7, 2.2, fruit[i % 6], { seed: i + 3, jit: .12, sy: .9 });
+  m.box(-17, 14, -8, -9, 17, -3, LPC.hay).box(9, 14, 3, 17, 16.5, 8, LPC.woodLt);
+  // a striped canopy, sloping to the front
+  const n = 8, w = 44, out = 0;
+  for (let i = 0; i < n; i++) { const xa = -w / 2 + i * w / n, xb = xa + w / n, c = i % 2 ? LPC.awnCream : LPC.awnRed; m.face([[xa, 28, 13], [xb, 28, 13], [xb, 35, -12], [xa, 35, -12]], c, { from: [0, 20, 0], jit: .02 }); m.face([[xa, 28, 13], [xb, 28, 13], [(xa + xb) / 2, 25.5, 13]], c, { from: [0, 30, 0] }); }
+  m.face([[-w / 2, 28, 13], [-w / 2, 35, -12], [-w / 2, 28, -12]], lpShade(LPC.awnRed, .85), { from: [0, 30, 0] }).face([[w / 2, 28, 13], [w / 2, 35, -12], [w / 2, 28, -12]], lpShade(LPC.awnRed, .85), { from: [0, 30, 0] });
+  return m;
+};
+LP_MODELS.reading_desk = () => {
+  const m = new LPM(), W = LPC.wood, a = .62, ca = Math.cos(a), sa = Math.sin(a);
+  m.box(-6, 0, -5, 6, 2.5, 5, LPC.woodDk).box(-2.2, 2.5, -2.2, 2.2, 15, 2.2, W);
+  // the board in its own frame (x across, y out of the board, z down its slope toward the reader), then tilted
+  const b = new LPM();
+  b.box(-11, -1.6, -7, 11, 0, 7, LPC.woodLt, { skip: [] }).box(-11, 0, 5.6, 11, 1.6, 7, W);
+  b.box(-9.6, 0, -5.6, -.3, 1, 5, 0xf6efdc, { f: { glow: 1 } }).box(.3, 0, -5.6, 9.6, 1, 5, 0xefe5cc, { f: { glow: 1 } }).box(-.5, 0, -5.8, .5, 1.3, 5.2, LPC.red);
+  for (let k = 0; k < 4; k++) b.box(-8, 1, -3.6 + k * 2.2, -2, 1.1, -3.1 + k * 2.2, 0x9a8c74).box(2, 1, -3.6 + k * 2.2, 8, 1.1, -3.1 + k * 2.2, 0x9a8c74);
+  for (const f of b.f) m.f.push(Object.assign({}, f, { p: f.p.map(([x, y, z]) => [x, 16.5 + y * ca - z * sa, y * sa + z * ca]) }));
+  return m;
+};
+LP_MODELS.statue = () => {
+  const m = new LPM(), S = 0xcfc6b3, D = LPC.stone;
+  m.box(-10, 0, -9, 10, 4, 9, D, { top: lpShade(D, 1.08) }).box(-8, 4, -7, 8, 14, 7, S).box(-9, 14, -8, 9, 16, 8, D, { top: lpShade(D, 1.08) });
+  // a scholar cat in stone, sitting, a book under its paw
+  m.blob(0, 22, -1, 6.5, S, { seed: 31, sy: 1.15, jit: .06 });
+  m.blob(0, 32, 0, 5.2, S, { seed: 32, jit: .06 });
+  for (const s of [-1, 1]) m.face([[s * 4.5, 35, -.5], [s * 1.5, 36.5, -.5], [s * 3.6, 41, -1]], S, { from: [s * 3, 37, -4] }).face([[s * 4.5, 35, -.5], [s * 1.5, 36.5, -.5], [s * 3.6, 41, -1]], lpShade(S, .9), { from: [s * 3, 37, 4] });
+  m.lathe(5, -6, [[2, 16], [1.6, 21], [1.2, 26]], 6, S, { top: false });
+  m.box(-6, 16, 3, 2, 18, 9, LPC.stone, { top: S });
+  return m;
+};
+LP_MODELS.barrel = () => {
+  const m = new LPM();
+  m.lathe(0, 0, [[7.6, 0], [8.8, 6], [9.2, 12.5], [8.8, 19], [7.6, 25]], 12, LPC.wood, { top: 0x6a4428, col: (b, k) => (k % 2 ? LPC.wood : LPC.woodLt) });
+  for (const y of [3.5, 21]) m.frustum(0, 0, 8.4, 8.4, y, y + 1.2, 12, LPC.iron, { top: false });
+  m.frustum(0, 0, 9.4, 9.4, 11.8, 13.2, 12, LPC.iron, { top: false });
+  return m;
+};
+LP_MODELS.crate = () => {
+  const m = new LPM(), W = LPC.woodLt, D = LPC.wood;
+  m.box(-9, 0, -6.5, 9, 15, 6.5, W, { top: lpShade(W, 1.05) });
+  for (const [x0, x1] of [[-9.4, -7], [7, 9.4]]) m.box(x0, 0, -6.9, x1, 15.4, 6.9, D);
+  m.box(-9.4, 0, -6.9, 9.4, 2, 6.9, D).box(-9.4, 13.4, -6.9, 9.4, 15.4, 6.9, D);
+  m.face([[-7, 2, 6.8], [-4.6, 2, 6.8], [7, 13.4, 6.8], [4.6, 13.4, 6.8]], D, { from: [0, 8, 0] });
+  return m;
+};
+LP_MODELS.signpost = () => {
+  const m = new LPM(), W = LPC.woodLt;
+  m.box(-1.6, 0, -1.6, 1.6, 31, 1.6, LPC.woodDk);
+  m.frustum(0, 0, 2.6, 0, 31, 34, 4, LPC.iron, { rot: Math.PI / 4 });
+  const arrow = (y, dir, len) => m.prism([[0, y], [dir * len, y], [dir * (len + 4), y + 2.8], [dir * len, y + 5.6], [0, y + 5.6]].map(([u, v]) => [u * 1, v]), 'z', 1.6, 3.2, W, { cap: W });
+  arrow(22, 1, 9); arrow(14, -1, 8);
+  return m;
+};
+LP_MODELS.lever = () => {
+  const m = new LPM();
+  m.box(-7, 0, -7, 7, 5, 7, LPC.stone, { top: LPC.stoneLt }).box(-3, 5, -2, 3, 9, 2, LPC.iron);
+  const arm = (x, y, z) => [x, 7 + y * .82 - z * .57, z * .82 + y * .57];
+  m.face([arm(-1, 0, -1), arm(1, 0, -1), arm(1, 20, -1), arm(-1, 20, -1)], LPC.wood, { from: arm(0, 10, 3) }).face([arm(-1, 0, 1), arm(1, 0, 1), arm(1, 20, 1), arm(-1, 20, 1)], LPC.wood, { from: arm(0, 10, -3) });
+  m.face([arm(-1, 0, -1), arm(-1, 0, 1), arm(-1, 20, 1), arm(-1, 20, -1)], LPC.woodDk, { from: arm(3, 10, 0) }).face([arm(1, 0, -1), arm(1, 0, 1), arm(1, 20, 1), arm(1, 20, -1)], LPC.woodDk, { from: arm(-3, 10, 0) });
+  m.blob(...arm(0, 21.5, 0), 2.6, LPC.red, { seed: 5, jit: .05 });
+  return m;
+};
+// the chest, its lid opened `lid` radians about the hinge at the back of its top (the game swings it)
+LP_CHEST = (lid) => {
+  const m = new LPM(), W = 0x9a6334, I = 0x6d6157, G = LPC.gold, hy = 11, hz = -7;
+  m.box(-11, 0, -7, 11, hy, 7, W, { top: 0x3a2618 });
+  for (const x of [-8, 8]) m.box(x - 1.2, 0, -7.3, x + 1.2, hy, 7.3, I);
+  m.box(-11.3, 0, -7.3, 11.3, 1.4, 7.3, I);
+  const lidM = new LPM(), arc = Array.from({ length: 6 }, (_, k) => { const a = k / 5 * Math.PI; return [Math.cos(a) * 7, hy + Math.sin(a) * 5.5]; }).map(([z, y]) => [z, y]);
+  lidM.prism(arc.map(([z, y]) => [z, y]), 'x', -11, 11, W, { cap: lpShade(W, .9) });
+  for (const x of [-8, 8]) lidM.prism(arc.map(([z, y]) => [z * 1.04, hy + (y - hy) * 1.04]), 'x', x - 1.2, x + 1.2, I);
+  lidM.box(-2, hy - 3.5, 7, 2, hy + 1.5, 8, G);
+  const c = Math.cos(lid), s = Math.sin(lid);
+  for (const f of lidM.f) m.f.push(Object.assign({}, f, { p: f.p.map(([x, y, z]) => [x, hy + (y - hy) * c - (z - hz) * s, hz + (y - hy) * s + (z - hz) * c]) }));
+  if (lid) m.box(-9.5, hy - 3, -5.5, 9.5, hy - .2, 5.5, 0x2a1a12, { top: 0x2a1a12 });   // open: the dark inside
+  return m;
+};
+
+// ---- content/lowpoly/04-figures.js
+/* ---------- lowpoly.html: the cat and the people of the village, as parts that move ---------- */
+// Figure space is art px: feet at the origin, facing +z. Poses are computed from the game's own state (moving and step,
+// the current anim and its time), so nothing in the game logic changes; the same names as the sheet animations.
+const lpSin = (t) => Math.sin(t), ease = (t) => t * t * (3 - 2 * t), clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+/* ---- the scholar cat: an orange tabby on two legs, round glasses, a quill for a sword ---- */
+{
+  const O = 0xe8963c, OD = 0xc46f28, CR = 0xf6e2c2, PK = 0xe79aa6, DK = 0x2e211c, GL = 0x3b2f2a;
+  const legs = (s) => new LPM().box(s * 3 - 1.6, 0, -1.6, s * 3 + 1.6, 4.5, 1.6, O).box(s * 3 - 1.8, 0, -1.4, s * 3 + 1.8, 1.6, 3, CR);
+  const body = new LPM().blob(0, 8.8, 0, 4.8, O, { seed: 2, sy: 1.12, sz: .9, jit: .05 }).blob(0, 8.3, 2.4, 3.1, CR, { seed: 3, sy: 1.15, sz: .6, jit: .04 });
+  for (const y of [6.5, 9, 11.5]) body.box(-4.4, y, -3.6, 4.4, y + .9, -2.6, OD);   // tabby stripes down the back
+  const head = new LPM().blob(0, 17.2, .3, 6, O, { seed: 4, sx: 1.12, sy: .92, jit: .04 })
+    .blob(0, 15.4, 4.6, 2.7, CR, { seed: 5, sx: 1.2, sy: .72, sz: .7, jit: .03 })
+    .blob(0, 16.3, 6.4, .7, PK, { seed: 6, jit: 0 });
+  for (const s of [-1, 1]) {
+    head.face([[s * 6, 20, -.5], [s * 2, 21.6, -.5], [s * 4.8, 26, -1.2]], O, { from: [s * 4, 22, -4] }).face([[s * 6, 20, -.5], [s * 2, 21.6, -.5], [s * 4.8, 26, -1.2]], O, { from: [s * 4, 22, 4] });
+    head.face([[s * 5.2, 20.6, -.3], [s * 2.8, 21.6, -.3], [s * 4.6, 24.6, -.6]], PK, { from: [s * 4, 22, -4] });
+    head.box(s * 2.4 - .6, 17.4, 5.2, s * 2.4 + .6, 18.8, 5.9, DK);   // the eyes, and the round glasses over them
+    for (let k = 0; k < 8; k++) { const a0 = k / 8 * Math.PI * 2, a1 = (k + 1) / 8 * Math.PI * 2, r = 2, cx = s * 2.4, cy = 18.1; head.face([[cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 6.1], [cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 6.1], [cx + Math.cos(a1) * (r + .7), cy + Math.sin(a1) * (r + .7), 6.1], [cx + Math.cos(a0) * (r + .7), cy + Math.sin(a0) * (r + .7), 6.1]], GL, { from: [cx, cy, 0], jit: 0 }); }
+    head.box(s * 4.6, 18, 3.8, s * 6.4, 18.5, 6, GL);
+  }
+  head.box(-.4, 18, 6, .4, 18.5, 6.2, GL);
+  for (const s of [-1, 1]) for (let k = 0; k < 2; k++) head.box(s * 4.2 + s * k * .4, 15.2 + k * 1.1, 4.4, s * 7.6, 15.5 + k * 1.1, 4.6, 0xf6efe6);   // whiskers
+  const tail = new LPM();
+  { const pts = [[0, 6, -3.6], [0, 7.4, -7], [0, 10.8, -9.4], [.4, 14.6, -9.8], [.8, 17.2, -8.4]]; for (let i = 0; i + 1 < pts.length; i++) { const [a, b] = [pts[i], pts[i + 1]], r0 = 1.6 - i * .2, r1 = 1.4 - i * .2, n = 6, ring = (p, r, k) => { const t = k / n * Math.PI * 2; return [p[0] + Math.cos(t) * r, p[1] + Math.sin(t) * r * .7, p[2] + Math.sin(t) * r * .5]; }; for (let k = 0; k < n; k++) tail.face([ring(a, r0, k), ring(a, r0, k + 1), ring(b, r1, k + 1), ring(b, r1, k)], i === 3 ? OD : O, { from: [(a[0] + b[0]) / 2 + 9, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2] }); } tail.blob(.8, 17.6, -8, 1.3, CR, { seed: 7, jit: 0 }); }
+  const arm = (s) => new LPM().box(s * 4.2 - 1.1, 7, -1, s * 4.2 + 1.1, 12, 1, O).blob(s * 4.2, 7, .3, 1.3, CR, { seed: 8 + s, jit: 0 });
+  // the quill, held in the right paw: a white feather with a dark nib
+  const quill = new LPM().box(-.3, 3.5, 1.2, .3, 7.5, 1.8, 0x6a5a48);
+  for (let k = 0; k < 5; k++) { const y0 = 7 + k * 2.2, w = 1.4 + Math.sin((k + .5) / 5 * Math.PI) * 1.4; quill.face([[-w, y0, 1.5], [w, y0, 1.5], [w * .8, y0 + 2.4, 1.5 + (k + 1) * .5], [-w * .8, y0 + 2.4, 1.5 + (k + 1) * .5]], k % 2 ? 0xf2ede4 : 0xfaf7f0, { from: [0, y0 + 1, -4], jit: 0 }).face([[-w, y0, 1.4], [w, y0, 1.4], [w * .8, y0 + 2.4, 1.4 + (k + 1) * .5], [-w * .8, y0 + 2.4, 1.4 + (k + 1) * .5]], 0xe2dccf, { from: [0, y0 + 1, 6] }); }
+  LP_FIGURES.cat = {
+    parts: {
+      legL: { m: legs(-1), pivot: [-3, 4.5, 0] }, legR: { m: legs(1), pivot: [3, 4.5, 0] },
+      body: { m: body, pivot: [0, 4.5, 0] }, head: { m: head, pivot: [0, 12.5, 0], parent: 'body' }, tail: { m: tail, pivot: [0, 6, -3.6], parent: 'body' },
+      armL: { m: arm(-1), pivot: [-4.2, 12, 0], parent: 'body' }, armR: { m: arm(1), pivot: [4.2, 12, 0], parent: 'body' },
+      quill: { m: quill, pivot: [4.2, 7, 0], parent: 'armR' },
+    },
+    pose(a, t) {
+      const P0 = {}, walk = a.moving ? a.step * Math.PI / 5 : 0, sw = a.moving ? lpSin(walk) : 0, br = lpSin(t * 2.2);
+      P0.legL = { rx: sw * .7 }; P0.legR = { rx: -sw * .7 }; P0.armL = { rx: -sw * .5 }; P0.armR = { rx: sw * .5 - .25 };
+      P0.body = { rx: a.moving ? .08 : 0, y: a.moving ? Math.abs(sw) * .7 : br * .15 }; P0.head = { rx: a.moving ? -.06 : br * .03, rz: a.moving ? 0 : lpSin(t * .7) * .05 };
+      P0.tail = { rz: lpSin(t * (a.moving ? 6 : 1.8)) * .28, rx: a.moving ? .2 : 0 };
+      P0.quill = { rx: .2 };
+      const an = a.anim, at = a.at || 0;
+      if (an && an.startsWith('attack')) {   // three swipes of the quill: right to left, left to right, overhead
+        const p = ease(clamp01(at * (a.fps || 10) / 3)), k = +an.slice(6);
+        if (k === 1) { P0.armR = { rx: -1.4, ry: 1.2 - p * 2.6 }; P0.body = { ry: .45 - p * .9 }; }
+        else if (k === 2) { P0.armR = { rx: -1.4, ry: -1.3 + p * 2.6 }; P0.body = { ry: -.45 + p * .9 }; }
+        else { P0.armR = { rx: -2.8 + p * 2.6 }; P0.body = { rx: -.15 + p * .4 }; P0.root = { y: Math.sin(p * Math.PI) * 2 }; }
+        P0.armL = { rx: .3, rz: -.4 }; P0.quill = { rx: .5 };
+      } else if (an === 'dodge') { const p = clamp01(at / .32); P0.root = { rx: Math.sin(p * Math.PI) * .5, sy: 1 - Math.sin(p * Math.PI) * .25 }; P0.legL = { rx: -.9 }; P0.legR = { rx: .6 }; P0.tail = { rx: .8 }; }
+      else if (an === 'hurt') { const p = clamp01(at / .3); P0.root = { rx: -Math.sin(p * Math.PI) * .35, y: Math.sin(p * Math.PI) * 1.5 }; P0.head = { rx: -.3 }; P0.armL = { rz: -.9 }; P0.armR = { rz: .9 }; }
+      else if (an === 'defeat' || an === 'over') { const p = clamp01(at / .6); P0.root = { rz: ease(p) * 1.45, y: p * 1.5 }; }
+      return P0;
+    },
+  };
+}
+
+/* ---- the people: one builder, dressed differently ---- */
+function lpPerson(o) {
+  const H = o.h || 1, sk = o.skin || 0xe9c09c, top = o.top, dress = o.dress, legC = o.legs || 0x4a3a30, shoe = o.shoes || 0x3a2a20;
+  const S = (v) => v * H;
+  const legs = (s) => new LPM().box(s * 1.8 - 1.1, 0, -1.2, s * 1.8 + 1.1, S(9), 1.2, legC).box(s * 1.8 - 1.3, 0, -1.3, s * 1.8 + 1.3, 1.6, 2.4, shoe);
+  const body = new LPM();
+  if (dress) body.lathe(0, 0, [[o.wide ? 6.2 : 5.2, S(1.5)], [o.wide ? 5.4 : 4.4, S(8)], [3.6, S(13)], [3.4, S(19)]], 9, dress, { top: dress });
+  else body.lathe(0, 0, [[3.4, S(8.4)], [o.wide ? 5.2 : 3.8, S(12)], [o.wide ? 4.8 : 3.6, S(16)], [3.3, S(19)]], 9, top, { top });
+  if (o.apron) body.face([[-3.6, S(dress ? 3 : 8.6), o.wide ? 5.6 : 4.4], [3.6, S(dress ? 3 : 8.6), o.wide ? 5.6 : 4.4], [3, S(16.5), 3.9], [-3, S(16.5), 3.9]], o.apron, { from: [0, S(12), 0], jit: .02 });
+  if (o.belt) body.frustum(0, 0, o.wide ? 5 : 3.9, o.wide ? 5 : 3.9, S(11.6), S(12.8), 9, o.belt, { top: false });
+  if (o.emblem) body.box(-1.6, S(13.5), 3.5, 1.6, S(16.5), 4.1, o.emblem);
+  const head = new LPM().blob(0, S(19) + 4.6, 0, 4.2, sk, { seed: 11, sy: 1.05, jit: .04 }).blob(0, S(19) + 1, 0, 1.6, sk, { seed: 12, jit: 0 });
+  for (const s of [-1, 1]) head.box(s * 1.6 - .45, S(19) + 4.6, 3.9, s * 1.6 + .45, S(19) + 5.8, 4.3, 0x2a1e18);
+  head.box(-.5, S(19) + 3.6, 4, .5, S(19) + 4.3, 4.4, lpShade(sk, .85));
+  const hy = S(19) + 4.6;
+  if (o.hair) { head.blob(0, hy + 1.2, -1, 4.6, o.hair, { seed: 13, sy: .9, sz: .95, jit: .08, flat: hy - 1 }); if (o.bun) head.blob(0, hy + 2.6, -4.2, 2.2, o.hair, { seed: 14 }); if (o.long) head.box(-4, hy - 5, -4.2, 4, hy + 1, -1, o.hair); }
+  if (o.hat === 'chef') head.frustum(0, 0, 4.2, 5, hy + 2.4, hy + 7.5, 9, 0xf7f3ec, { top: false }).blob(0, hy + 8, 0, 5, 0xf7f3ec, { seed: 15, sy: .65, jit: .1 });
+  if (o.hat === 'helmet') head.blob(0, hy + 1.6, 0, 4.9, 0x9aa0a8, { seed: 16, sy: .78, jit: .02, flat: hy - .2 }).frustum(0, 0, 5.6, 5.6, hy - .4, hy + .2, 10, 0x7c828a, { top: false }).box(-.5, hy + 3, -5.2, .5, hy + 6.3, 4.6, 0x7c828a);
+  if (o.glasses) for (const s of [-1, 1]) head.box(s * 1.6 - 1.1, hy - .3, 4.3, s * 1.6 + 1.1, hy + .1, 4.5, 0x5a4a3a);
+  const arm = (s) => new LPM().box(s * 4.3 - 1, S(11.5), -1, s * 4.3 + 1, S(18.6), 1, o.sleeves || dress || top).blob(s * 4.3, S(11.2), .2, 1.3, sk, { seed: 17, jit: 0 });
+  const item = new LPM();
+  if (o.item === 'spear') item.box(-.5, -6, 1.6, .5, 30, 2.6, LPC.wood).frustum(0, 2.1, 1.4, 0, 30, 35, 4, 0xc8ccd2);
+  if (o.item === 'sword') item.box(-.5, S(9), 1.6, .5, S(17.5), 2.4, LPC.woodLt).box(-2, S(10.6), 1.6, 2, S(11.4), 2.4, LPC.wood);
+  if (o.item === 'book') item.box(-3.2, S(12.5), 2.8, 3.2, S(16.5), 4.4, LPC.red).box(-3, S(12.7), 4.4, 3, S(16.3), 4.6, 0xf2e8d0);
+  if (o.item === 'basket') item.lathe(0, 3, [[2.6, S(9)], [3.4, S(12)]], 8, LPC.hay, { top: LPC.bread });
+  const partsMap = {
+    legL: { m: legs(-1), pivot: [-1.8, S(9), 0] }, legR: { m: legs(1), pivot: [1.8, S(9), 0] },
+    body: { m: body, pivot: [0, S(9), 0] }, head: { m: head, pivot: [0, S(19), 0], parent: 'body' },
+    armL: { m: arm(-1), pivot: [-4.3, S(18), 0], parent: 'body' }, armR: { m: arm(1), pivot: [4.3, S(18), 0], parent: 'body' },
+    item: { m: item, pivot: [o.item === 'book' ? 0 : 4.3, S(11.5), 0], parent: o.item === 'book' ? 'body' : 'armR' },
+  };
+  return {
+    parts: partsMap,
+    pose(a, t) {
+      const walk = a.moving ? a.step * Math.PI / 2 : 0, sw = a.moving ? lpSin(walk) : 0, br = lpSin(t * 1.9 + (o.phase || 0));
+      const P0 = { legL: { rx: sw * .55 }, legR: { rx: -sw * .55 }, armL: { rx: -sw * .45, rz: -.08 }, armR: { rx: sw * .45, rz: .08 }, body: { y: a.moving ? Math.abs(sw) * .5 : br * .12 }, head: { rx: br * .03, ry: lpSin(t * .5 + (o.phase || 0)) * .12 } };
+      if (o.item === 'book') { P0.armL = { rx: -.9, rz: .35 }; P0.armR = { rx: -.9, rz: -.35 }; }
+      if (o.item === 'spear') P0.armR = { rx: -.15 };
+      return P0;
+    },
+  };
+}
+LP_FIGURES.baker = lpPerson({ h: 1, top: 0xf2ebe0, wide: 1, apron: 0xfbf7f0, sleeves: 0xf2ebe0, hair: 0x6a4a34, hat: 'chef', legs: 0x8a4a34, belt: 0xc04a3a, phase: 1 });
+LP_FIGURES.child = lpPerson({ h: .78, top: 0x8a5a36, hair: 0xc8482e, legs: 0x5a4030, item: 'sword', phase: 2 });
+LP_FIGURES.guard = lpPerson({ h: 1.08, top: LPC.blue, sleeves: LPC.blueDk, emblem: LPC.gold, belt: 0x5a3a24, hat: 'helmet', legs: 0x4a4038, item: 'spear', phase: 3 });
+LP_FIGURES.librarian = lpPerson({ h: .95, dress: 0x4e7a48, sleeves: 0x456c40, hair: 0xb8b4ac, bun: 1, glasses: 1, item: 'book', phase: 4 });
+LP_FIGURES.shopkeeper = lpPerson({ h: .98, dress: 0xb2532e, apron: 0xefe2c2, hair: 0x6a4026, long: 1, item: 'basket', phase: 5 });
+
 // ---- engine/90-boot.js
 /* ---------- boot: art, atlas, materials, title screen; play starts from New game, Continue or a save code ---------- */
 const START = { area: 'library_in', at: null };
@@ -3490,6 +4269,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
 (async function boot() {
   applyLang(); syncStyle();
   $('styleBtn').onclick = () => setStyle(!settings.flat);
+  if (LP) { settings.flat = false; $('styleBtn').hidden = true; for (const e of [$('optStyle'), $('optStyle').previousElementSibling]) e.hidden = true; }   // lowpoly.html: no 2D style
   if (!renderer) { $('fallback').hidden = false; return; }
   inputSetup(); optionsSetup();
   try { await loadArt(); } catch (e) { $('fallback').textContent = e.message; $('fallback').hidden = false; return; }
@@ -3552,6 +4332,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     wire: (on) => { settings.wire = !!on; applyWire(); },
     aa: (on) => setAA(on),
     flat: (on) => { settings.flat = !!on; restyle(); syncStyle(); },
+    fingerprints: () => qaFingerprints(),
     cards: () => {
       let shadows = 0; scene.traverse((o) => { if (o.isMesh && o.material === shadowOnly && o.visible) shadows++; });
       return { pics: [...cardPics].map(([k, c]) => { const [key, rot] = k.split('|'), s = sp[key]; return [k, !!c, c ? c[0].p[2][1] : 0, modelRows(s, +rot), (s.pic && s.pic.sourceSheet) || s.sheet || '', !!(s.pic && s.pic.roofs)]; }), shelf: Object.assign({}, cardShelf), size: [CARD_W, CARD_H], shadows };
