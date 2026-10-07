@@ -1107,6 +1107,27 @@ function eraseFrom(src, rects) {
 // LP_MODELS[key]: () => LPM, built once. LP_FIGURES[key]: a figure with parts and a pose function (lpFigure).
 const LP_MODELS = {}, LP_FIGURES = {}, lpCache = {};
 let LP_CHEST = null, LP_TILES = null, LP_WALL = null;   // LP_WALL(colour, along, y): a wall's colour at a pixel, by the legend's wall colour   // the chest with its lid at an angle (radians); the ground tiles painted in code
+// lowpoly.html: the figures' and effects' sheets enlarged 2x by Scale2x (EPX, Eric Johnston 1992; Andrea Mazzoleni's
+// Scale2x): each pixel becomes four, a corner taking a neighbour's colour where two neighbours agree, so diagonals and
+// curves get twice the steps and nothing blurs. Same size in the world, twice the pixels. window.__px2 = false: off
+const lpPx2 = {};
+function lpSheetCanvas(sheet) {
+  const SH = SHEETS[sheet]; if (!LP || window.__px2 === false) return SH.canvas;
+  if (lpPx2[sheet]) return lpPx2[sheet];
+  const W = SH.w, H = SH.h, s = SH.px, c = document.createElement('canvas'); c.width = W * 2; c.height = H * 2;
+  const x = c.getContext('2d'), im = x.createImageData(W * 2, H * 2), d = im.data;
+  const at = (i, j) => { i = i < 0 ? 0 : i >= W ? W - 1 : i; j = j < 0 ? 0 : j >= H ? H - 1 : j; return (j * W + i) * 4; };
+  const same = (a, b) => s[a] === s[b] && s[a + 1] === s[b + 1] && s[a + 2] === s[b + 2] && (s[a + 3] > 127) === (s[b + 3] > 127);
+  const put = (o, k) => { d[o] = s[k]; d[o + 1] = s[k + 1]; d[o + 2] = s[k + 2]; d[o + 3] = s[k + 3]; };
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const P0 = at(i, j), A2 = at(i, j - 1), B2 = at(i + 1, j), C2 = at(i - 1, j), D2 = at(i, j + 1), o = ((j * 2) * W * 2 + i * 2) * 4, row = W * 2 * 4;
+    let e0 = P0, e1 = P0, e2 = P0, e3 = P0;
+    if (!same(A2, D2) && !same(C2, B2)) { if (same(C2, A2)) e0 = C2; if (same(A2, B2)) e1 = B2; if (same(C2, D2)) e2 = C2; if (same(D2, B2)) e3 = B2; }
+    put(o, e0); put(o + 4, e1); put(o + row, e2); put(o + row + 4, e3);
+  }
+  x.putImageData(im, 0, 0);
+  return (lpPx2[sheet] = c);
+}
 const lpRGB = (c) => [c >> 16 & 255, c >> 8 & 255, c & 255];
 const lpShade = (c, k) => { const [r, g, b] = lpRGB(c); const f = (v) => Math.max(0, Math.min(255, Math.round(v * k))); return f(r) << 16 | f(g) << 8 | f(b); };
 const lpMix = (a, b, t) => { const A2 = lpRGB(a), B2 = lpRGB(b); return A2.map((v, i) => Math.round(v + (B2[i] - v) * t)).reduce((s, v) => s << 8 | v, 0); };
@@ -1942,7 +1963,7 @@ function sheetActor(sheet, views, anims, o) {
   if (!first) throw new Error(`actor: frame "${views.down}.${idle0}" missing in ${sheet}`);
   const cw = first.w, ch = first.h, [L, U] = first.anchor || [Math.floor(cw / 2), ch];
   const a = Object.assign({ x: 0, z: 0, fx: 0, fz: 1, step: 0, moving: false, anim: null, at: 0, fps: 10, lift: 0, blink: false, size: 1, probe: new THREE.Vector3(), lampL: { value: 0 } }, o || {});
-  a.tex = nearest(new THREE.CanvasTexture(SH.canvas)); a.tex.encoding = THREE.sRGBEncoding;
+  a.tex = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet))); a.tex.encoding = THREE.sRGBEncoding;
   const g = new THREE.PlaneGeometry(cw * P, ch * P); g.translate((cw / 2 - L) * P, (U - ch / 2) * P, 0);   // the anchor (feet) at the origin
   const gl = g.clone(), n = gl.attributes.normal; for (let i = 0; i < n.count; i++) n.setXYZ(i, 0, 1, 0);   // normal up: light does not change when the view turns
   a.mesh = new THREE.Mesh(gl, voxelMaterial('sprite', { map: a.tex, probe: a.probe, lampL: a.lampL, row: new THREE.Vector2(SPR_Y * P, P) }));
@@ -1976,7 +1997,7 @@ function sheetActor(sheet, views, anims, o) {
 const flats = [], flatTex = {};
 const flatMat = (sheet) => {
   if (flatTex[sheet]) return flatTex[sheet];
-  const t = nearest(new THREE.CanvasTexture(SHEETS[sheet].canvas)); t.encoding = THREE.sRGBEncoding;
+  const t = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet))); t.encoding = THREE.sRGBEncoding;
   return (flatTex[sheet] = new THREE.MeshBasicMaterial({ map: t, alphaTest: .5, side: THREE.DoubleSide }));
 };
 
