@@ -21,7 +21,7 @@ const shade = (c, k) => (Math.min(255, Math.round((c >> 16 & 255) * k)) << 16) |
 
 // settings are preferences only (never game content): language, frame-rate cap, shadows, shake, music and sound volume (0–3)
 const SETTINGS_KEY = 'mdv-rpg-cat-settings';   // mdv-allow-storage: preferences
-const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, flat: false, shake: true, music: 2, sound: 2 },
+const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, flat: false, fig3d: false, shake: true, music: 2, sound: 2 },
   (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; } })());
 if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 2 : 0;   // the first builds stored on/off
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode: keep in memory */ } };
@@ -1106,7 +1106,7 @@ function eraseFrom(src, rects) {
 // so surfaces read as made by hand rather than as plastic. Faces that glow at night (windows) carry glow.
 // LP_MODELS[key]: () => LPM, built once. LP_FIGURES[key]: a figure with parts and a pose function (lpFigure).
 const LP_MODELS = {}, LP_FIGURES = {}, lpCache = {};
-let LP_CHEST = null, LP_TILES = null;   // the chest with its lid at an angle (radians); the ground tiles painted in code
+let LP_CHEST = null, LP_TILES = null, LP_WALL = null;   // LP_WALL(colour, along, y): a wall's colour at a pixel, by the legend's wall colour   // the chest with its lid at an angle (radians); the ground tiles painted in code
 const lpRGB = (c) => [c >> 16 & 255, c >> 8 & 255, c & 255];
 const lpShade = (c, k) => { const [r, g, b] = lpRGB(c); const f = (v) => Math.max(0, Math.min(255, Math.round(v * k))); return f(r) << 16 | f(g) << 8 | f(b); };
 const lpMix = (a, b, t) => { const A2 = lpRGB(a), B2 = lpRGB(b); return A2.map((v, i) => Math.round(v + (B2[i] - v) * t)).reduce((s, v) => s << 8 | v, 0); };
@@ -1745,7 +1745,7 @@ function openArea(def) {
 
   /* one chunk: ground texture and mesh, walls, the things standing in it, baked light, halos */
   const [ccw, cch] = def.chunk || [cols, rows], CW = ccw * cellPx, CH = cch * cellPx, NI = Math.ceil(cols / ccw), NJ = Math.ceil(rows / cch);
-  const wallCol = (t, a, y) => { const g = GT[t]; if (g.cliff) return edgeCol(t, a, y, g.h); const c = g.wall !== undefined ? g.wall : shade(avg(g), .62); if (LP) return Math.floor(y / 6) % 2 ? c : shade(c, .94); return (Math.floor(y / 4) + Math.floor(a / 8)) % 2 ? c : shade(c, .9); };
+  const wallCol = (t, a, y) => { const g = GT[t]; if (g.cliff) return edgeCol(t, a, y, g.h); const c = g.wall !== undefined ? g.wall : shade(avg(g), .62); if (LP) return LP_WALL ? LP_WALL(c, a, y) : Math.floor(y / 6) % 2 ? c : shade(c, .94); return (Math.floor(y / 4) + Math.floor(a / 8)) % 2 ? c : shade(c, .9); };
   const STRATA = [0x6b4a32, 0x5e4230, 0x6f5238, 0x52392a];
   const LP_STRATA = [0x8a6a4a, 0x7a5c40, 0x93745a, 0x6e5240];   // lowpoly.html: level strata, wide, a grass lip
   const edgeCol = (t, k, y, top) => LP ? (top - y <= 3 ? shade(avg(GT[t]), .78) : LP_STRATA[Math.floor((top - y + 6) / 11) % LP_STRATA.length]) : top - y <= 2 ? shade(avg(GT[t]), .8) : STRATA[Math.floor((top - y + (k % 7)) / 7) % STRATA.length];
@@ -1936,7 +1936,7 @@ const actors = [];
 const casterMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide });
 
 function sheetActor(sheet, views, anims, o) {
-  if (LP) { const k = views.down === 'cat_down' ? 'cat' : views.down; if (LP_FIGURES[k]) return lpFigure(k, o); }   // lowpoly.html: modelled
+  if (LP && settings.fig3d) { const k = views.down === 'cat_down' ? 'cat' : views.down; if (LP_FIGURES[k]) return lpFigure(k, o); }   // lowpoly.html: the figures modelled, when chosen (default: the sheet's pixel art)
   const SH = SHEETS[sheet]; if (!SH) throw new Error('actor: sheet "' + sheet + '" is not in the art');
   const idle0 = Array.isArray(anims.idle) ? anims.idle[0] : anims.idle.down[0], first = SH.meta.sprites[idle0.includes('.') ? idle0 : views.down + '.' + idle0];
   if (!first) throw new Error(`actor: frame "${views.down}.${idle0}" missing in ${sheet}`);
@@ -2820,6 +2820,7 @@ function optionsSetup() {
   seg('optLang', () => settings.lang, (v) => { settings.lang = v; applyLang(); syncStyle(); hintState = null; hudKey = ''; if (A) $('areaName').textContent = t(A.name); if (ui.screen === 'menu') renderTab(); });
   seg('optFps', () => settings.fps, (v) => { settings.fps = +v; });
   seg('optStyle', () => settings.flat ? 'flat' : 'diorama', (v) => { settings.flat = v === 'flat'; restyle(); syncStyle(); });
+  seg('optFig', () => settings.fig3d ? '3d' : 'pixel', (v) => setFigures(v === '3d'));
   seg('optWire', () => settings.wire ? 'on' : 'off', (v) => { settings.wire = v === 'on'; applyWire(); });
   seg('optShadows', () => settings.shadows ? 'on' : 'off', (v) => { settings.shadows = v === 'on'; sun.castShadow = settings.shadows; shadowHold = 3; });
   seg('optShake', () => settings.shake ? 'on' : 'off', (v) => { settings.shake = v === 'on'; });
@@ -2877,6 +2878,14 @@ function restyle() {
   if (A.def.keep) { A.dispose(); A = null; }
   if (settings.flat) yaw = yawT = 0;
   enterArea(name, at, face);
+}
+// lowpoly.html: the cat, the people and the monsters as the sheet's pixel art or modelled; the cat is made again where
+// it stands, the area's people and monsters with the area
+function setFigures(on) {
+  settings.fig3d = !!on; saveSettings(); if (!player || !A) return;
+  const keep = { x: player.x, z: player.z, fx: player.fx, fz: player.fz };
+  player.dispose(); player = sheetActor('cat', { down: 'cat_down', up: 'cat_up', side: 'cat_side' }, CAT_ANIMS); Object.assign(player, keep);
+  restyle();
 }
 // the style from the button by the menu (it names the style in use; a click swaps it) or from the options
 function setStyle(flat) { settings.flat = !!flat; saveSettings(); restyle(); syncStyle(); }
@@ -3732,6 +3741,22 @@ function lpTileSet() {
 }
 LP_TILES = lpTileSet;
 
+// the walls of the rooms, by the legend's wall colour: in the crypt cold stone in courses of blocks, each a shade of its
+// own, mortar between; indoors warm plaster over a wainscot of dark planks
+LP_WALL = (c, a, y) => {
+  if (c === 0x4a4250) {
+    const course = Math.floor(y / 8), u = a + (course % 2) * 7, block = Math.floor(u / 14);
+    if (y % 8 === 0 || u % 14 === 0) return 0x2e2a34;
+    return [0x5a5464, 0x524c5c, 0x625c6c, 0x4e4858][Math.floor(hash2(block * 3 + 1, course * 7 + 2) * 4)];
+  }
+  if (c === 0x6e5a48) {
+    if (y < 16) return y === 15 ? 0x4a3020 : a % 6 === 0 ? 0x5a3a24 : 0x7a5032;   // the wainscot and its rail
+    if (y === 16 || y === 17) return 0x8a6040;
+    return y % 12 === 0 ? 0xd2bc98 : 0xdcc8a4;
+  }
+  return Math.floor(y / 6) % 2 ? c : lpShade(c, .94);
+};
+
 // ---- content/lowpoly/01-parts.js
 /* ---------- lowpoly.html: the pieces buildings are made of ---------- */
 // Each returns a small model facing +z with its back at z = 0, the plane of the wall it sits on, so a building puts
@@ -4262,6 +4287,73 @@ LP_FIGURES.guard = lpPerson({ h: 1.08, top: LPC.blue, sleeves: LPC.blueDk, emble
 LP_FIGURES.librarian = lpPerson({ h: .95, dress: 0x4e7a48, sleeves: 0x456c40, hair: 0xb8b4ac, bun: 1, glasses: 1, item: 'book', phase: 4 });
 LP_FIGURES.shopkeeper = lpPerson({ h: .98, dress: 0xb2532e, apron: 0xefe2c2, hair: 0x6a4026, long: 1, item: 'basket', phase: 5 });
 
+// ---- content/lowpoly/05-crypt.js
+/* ---------- lowpoly.html: the crypt's stone ---------- */
+const CRY = { st: 0x66607a, stLt: 0x7a748e, stDk: 0x4c4760, moss: 0x5a6a4a };
+
+LP_MODELS.crypt_arch = () => {
+  const m = new LPM(), z0 = -12, z1 = 12, S = CRY.st;
+  // two piers with bases and capitals, a round arch of voussoirs, a keystone, a cornice over it
+  for (const s of [-1, 1]) {
+    const x0 = s < 0 ? -44 : 25, x1 = s < 0 ? -25 : 44;
+    m.box(x0 - 1.5, 0, z0 - 1.5, x1 + 1.5, 6, z1 + 1.5, CRY.stDk, { top: CRY.st });
+    m.box(x0, 6, z0, x1, 44, z1, S, { top: CRY.stLt });
+    for (let y = 14; y < 44; y += 10) m.box(x0 - .3, y, z0 - .3, x1 + .3, y + 1, z1 + .3, CRY.stDk);
+    m.box(x0 - 1.5, 44, z0 - 1.5, x1 + 1.5, 48, z1 + 1.5, CRY.stLt, { top: CRY.stLt });
+  }
+  const n = 9, rIn = 25, rOut = 40, cy = 48;
+  for (let k = 0; k < n; k++) {
+    const a0 = Math.PI - k / n * Math.PI, a1 = Math.PI - (k + 1) / n * Math.PI, P2 = (a, r) => [Math.cos(a) * r, cy + Math.sin(a) * r];
+    const c = k === 4 ? CRY.stLt : k % 2 ? S : lpShade(S, 1.06), out = k === 4 ? 3 : 0;
+    const [ax, ay] = P2(a0, rIn), [bx, by] = P2(a1, rIn), [cx, ccy] = P2(a1, rOut + out), [dx, dy] = P2(a0, rOut + out), from = [0, cy, 0];
+    for (const z of [z0, z1]) m.face([[ax, ay, z], [bx, by, z], [cx, ccy, z], [dx, dy, z]], c, { from: [(ax + cx) / 2, (ay + ccy) / 2, 0] });
+    m.face([[ax, ay, z0], [bx, by, z0], [bx, by, z1], [ax, ay, z1]], lpShade(c, .8), { from });
+    m.face([[dx, dy, z0], [cx, ccy, z0], [cx, ccy, z1], [dx, dy, z1]], c, { from });
+    if (k === 0 || k === n - 1) { const [ex, ey] = k === 0 ? [ax, ay] : [bx, by], [fx, fy] = k === 0 ? [dx, dy] : [cx, ccy]; m.face([[ex, ey, z0], [fx, fy, z0], [fx, fy, z1], [ex, ey, z1]], c, { from }); }
+  }
+  // the spandrels up to a flat top, and a cornice
+  for (const s of [-1, 1]) m.prism([[s * 25, 48], [s * 44, 48], [s * 44, 84], [s * 40 * Math.cos(Math.PI / 4), 48 + 40 * Math.sin(Math.PI / 4)]], 'z', z0 + 1, z1 - 1, S);
+  m.box(-46, 84, z0 - 2, 46, 88, z1 + 2, CRY.stLt, { top: CRY.st });
+  // the dark beyond the arch
+  m.face([[-25, 0, z0 + 2], [25, 0, z0 + 2], [25, 48, z0 + 2], [-25, 48, z0 + 2]], 0x15121c, { jit: 0 });
+  return m;
+};
+
+LP_MODELS.sarcophagus = () => {
+  const m = new LPM(), S = CRY.st;
+  for (const [x, z] of [[-40, -18], [40, -18], [-40, 18], [40, 18]]) m.box(x - 5, 0, z - 4, x + 5, 4, z + 4, CRY.stDk);
+  m.box(-45, 4, -22, 45, 9, 22, CRY.stDk, { top: S });
+  m.box(-42, 9, -20, 42, 36, 20, S, { top: S });
+  m.box(-44, 34, -22, 44, 37, 22, CRY.stLt);
+  // the lid: a low gable with a carved quill along it
+  m.prism([[-22, 37], [22, 37], [16, 44], [-16, 44]], 'x', -44, 44, CRY.stLt, { cap: S });
+  m.box(-30, 44, -1.5, 30, 45.2, 1.5, CRY.stDk);
+  // carvings on the front: a quill and two sprigs, in shallow relief
+  const quill = [[-12, 17], [14, 27], [16, 29], [-10, 19]];
+  m.face(quill.map(([x, y]) => [x, y, 20.4]), CRY.stLt, { from: [0, 22, 0] });
+  for (const s of [-1, 1]) { m.box(s * 30 - .6, 14, 20, s * 30 + .6, 28, 20.6, CRY.stDk); for (let k = 0; k < 3; k++) m.box(s * 30 - 3, 17 + k * 4, 20, s * 30 + 3, 18 + k * 4, 20.5, CRY.stDk); }
+  m.blob(-38, 8, 21, 3, CRY.moss, { seed: 4, sy: .5, facet: 1 });
+  return m;
+};
+
+LP_MODELS.crypt_wall = () => {
+  const m = new LPM(), z0 = -11, z1 = 11;
+  // a wall of blocks between two piers, a niche with a lit candle
+  m.box(-50, 0, z0, 50, 58, z1, CRY.stDk, { top: CRY.st });
+  for (let c = 0; c < 7; c++) for (let b = 0; b < 7; b++) {
+    const y0 = c * 8 + .5, x0 = -50 + b * 15 - (c % 2) * 7.5 + .5, x1 = Math.min(50, x0 + 14), xa = Math.max(-50, x0);
+    if (x1 - xa < 2 || (xa < 9 && x1 > -9 && y0 > 20 && y0 < 46)) continue;
+    const sh = [CRY.st, lpShade(CRY.st, 1.06), lpShade(CRY.st, .94), CRY.stLt][Math.floor(hash2(b, c) * 4)];
+    for (const z of [z0 - .6, z1]) m.box(xa, y0, z, x1, y0 + 7, z + .6, sh, { skip: ['bottom', z < 0 ? 'front' : 'back'] });
+  }
+  for (const s of [-1, 1]) m.box(s * 52 - 5, 0, z0 - 2, s * 52 + 5, 64, z1 + 2, CRY.st, { top: CRY.stLt });
+  m.box(-9, 22, z1 - 6, 9, 46, z1 + .5, 0x1c1824, { skip: ['bottom', 'front'] });
+  m.box(-10, 21, z1 - 6, 10, 23, z1 + 2, CRY.stLt);
+  m.lathe(0, z1 - 2, [[1.8, 23], [1.6, 30], [1.4, 30.5]], 8, 0xf2e8cc, { top: 0xf2e8cc });
+  const n0 = m.f.length; m.blob(0, 32.5, z1 - 2, 1.3, 0xffd27a, { seed: 3, sy: 1.6, facet: 1 }); for (let i = n0; i < m.f.length; i++) m.f[i].g = 1;   // the flame glows
+  return m;
+};
+
 // ---- engine/90-boot.js
 /* ---------- boot: art, atlas, materials, title screen; play starts from New game, Continue or a save code ---------- */
 const START = { area: 'library_in', at: null };
@@ -4291,6 +4383,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
 (async function boot() {
   applyLang(); syncStyle();
   $('styleBtn').onclick = () => setStyle(!settings.flat);
+  if (!LP) for (const e of document.querySelectorAll('.lpOnly')) e.hidden = true;   // the figures option: lowpoly.html only
   if (LP) { settings.flat = false; $('styleBtn').hidden = true; for (const e of [$('optStyle'), $('optStyle').previousElementSibling]) e.hidden = true; }   // lowpoly.html: no 2D style
   if (!renderer) { $('fallback').hidden = false; return; }
   inputSetup(); optionsSetup();
