@@ -1259,7 +1259,7 @@ class LPM {
     return this;
   }
 }
-const lpModel = (key) => lpCache[key] || (lpCache[key] = LP_MODELS[key] ? LP_MODELS[key]() : null);
+const lpModel = (key) => lpCache[key] || (lpCache[key] = LP_MODELS[key] ? lpSettle(LP_MODELS[key]()) : null);   // (settled: lpSettle, below)
 // each face's corner normals: its own normal, or, in a smoothing group, the mean of the group's faces meeting there
 function lpVN(m) {
   if (m.vn && m.vn.length === m.f.length) return m.vn;
@@ -1329,6 +1329,38 @@ function lpFigure(key, o) {
   a.dispose = () => { scene.remove(mesh); g.dispose(); actors.splice(actors.indexOf(a), 1); };
   actors.push(a);
   return a;
+}
+
+// for the checks (tools/lp-check.mjs): pairs of faces of a model on one plane (same facing, within 0.05 px), different in
+// colour, overlapping by more than a quarter of a square art px: they fight for the same pixels and flicker as the
+// view moves. Returns [{ a, b, area, at }] with each face's colour and the overlap's middle
+function lpCoplanar(m) {
+  const F = m.f.map((f, i) => { const n = lpNormal(f.p), d = n[0] * f.p[0][0] + n[1] * f.p[0][1] + n[2] * f.p[0][2]; return { i, f, n, d }; });
+  const ax = (n) => { const a = n.map(Math.abs); return a[0] >= a[1] && a[0] >= a[2] ? [1, 2] : a[1] >= a[2] ? [0, 2] : [0, 1]; };
+  const buckets = new Map(); for (const q of F) { const k = q.n.map((v) => Math.round(v * 50)).join(',') + '|' + Math.round(q.d * 4); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(q); }
+  // the area of the overlap of two convex polygons in 2D (Sutherland-Hodgman)
+  const clip = (P, Q) => { let out = P; for (let i = 0; i < Q.length && out.length; i++) { const a = Q[i], b = Q[(i + 1) % Q.length], inside = (p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) >= -1e-9, inp = out; out = []; for (let j = 0; j < inp.length; j++) { const p = inp[j], q = inp[(j + 1) % inp.length], pi = inside(p), qi = inside(q); if (pi) out.push(p); if (pi !== qi) { const x1 = p[0], y1 = p[1], x2 = q[0], y2 = q[1], x3 = a[0], y3 = a[1], x4 = b[0], y4 = b[1], den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4); if (Math.abs(den) > 1e-12) { const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den; out.push([x1 + t * (x2 - x1), y1 + t * (y2 - y1)]); } } } } return out; };
+  const area = (P) => { let s = 0; for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; s += a[0] * b[1] - b[0] * a[1]; } return s / 2; };
+  const ccw = (P) => (area(P) < 0 ? P.slice().reverse() : P);
+  const out = [];
+  for (const list of buckets.values()) for (let x = 0; x < list.length; x++) for (let y = x + 1; y < list.length; y++) {
+    const A2 = list[x], B2 = list[y]; if (A2.f.c === B2.f.c || Math.abs(A2.d - B2.d) > .05 || A2.n[0] * B2.n[0] + A2.n[1] * B2.n[1] + A2.n[2] * B2.n[2] < .999) continue;
+    const [u, v] = ax(A2.n), P = ccw(A2.f.p.map((p) => [p[u], p[v]])), Q = ccw(B2.f.p.map((p) => [p[u], p[v]])), I = clip(P, Q), s = Math.abs(area(I));
+    if (s > .25) { const mid = I.reduce((m2, p) => [m2[0] + p[0] / I.length, m2[1] + p[1] / I.length], [0, 0]); out.push({ later: Math.max(A2.i, B2.i), n: B2.n, a: A2.f.c, b: B2.f.c, area: +s.toFixed(1), at: [u, v].map((k, i) => ['x', 'y', 'z'][k] + ' ' + mid[i].toFixed(1)).join(', ') + ', plane ' + A2.d.toFixed(1) }); }
+  }
+  return out;
+}
+
+// a model settled: of two faces fighting on one plane, the one added later (a door on a wall, a band on a body, a rail
+// on a post) stands 0.2 art px out along its normal, and wins; again until none fight (three layers: twice)
+function lpSettle(m) {
+  for (let pass = 0; pass < 4; pass++) {
+    const fights = lpCoplanar(m); if (!fights.length) break;
+    const moved = new Set();
+    for (const o of fights) { if (moved.has(o.later)) continue; moved.add(o.later); const f = m.f[o.later], n = lpNormal(f.p); f.p = f.p.map((q) => [q[0] + n[0] * .2, q[1] + n[1] * .2, q[2] + n[2] * .2]); }
+    m.vn = null;
+  }
+  return m;
 }
 
 // ---- engine/30-render.js
@@ -2608,7 +2640,7 @@ function chestProp(id, key, x, z, o) {
 function chestsBuild() {
   if (settings.wire) setTimeout(applyWire);   // after the mesh below exists
   if (chestMesh) chestMesh.dispose(); chestMesh = null; if (!chests.size) return;
-  chestMesh = propMesh([...chests.values()].map((c) => LP && LP_CHEST ? [LP_CHEST(c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }] : settings.flat ? [cardFor(sp[c.key], c.o.rot, c.lid) || [], c.x, c.z, { flip: c.o.flip }] : [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
+  chestMesh = propMesh([...chests.values()].map((c) => LP && LP_CHEST ? [lpSettle(LP_CHEST(c.lid)), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }] : settings.flat ? [cardFor(sp[c.key], c.o.rot, c.lid) || [], c.x, c.z, { flip: c.o.flip }] : [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
 }
 function openChestProp(id) {
   const c = chests.get(id); if (!c) return;
@@ -4480,6 +4512,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     aa: (on) => setAA(on),
     flat: (on) => { settings.flat = !!on; restyle(); syncStyle(); },
     fingerprints: () => qaFingerprints(),
+    lpCoplanar: () => Object.fromEntries(Object.keys(LP_MODELS).map((k) => [k, lpCoplanar(lpModel(k))]).concat([['chest(open)', LP_CHEST ? lpCoplanar(lpSettle(LP_CHEST(CHEST.open))) : []]])),
     cards: () => {
       let shadows = 0; scene.traverse((o) => { if (o.isMesh && o.material === shadowOnly && o.visible) shadows++; });
       return { pics: [...cardPics].map(([k, c]) => { const [key, rot] = k.split('|'), s = sp[key]; return [k, !!c, c ? c[0].p[2][1] : 0, modelRows(s, +rot), (s.pic && s.pic.sourceSheet) || s.sheet || '', !!(s.pic && s.pic.roofs)]; }), shelf: Object.assign({}, cardShelf), size: [CARD_W, CARD_H], shadows };
