@@ -368,11 +368,11 @@ class Builder {
     const v = this.v, i = this.idx.n; ia[i] = v; ia[i + 1] = v + 1; ia[i + 2] = v + 2; ia[i + 3] = v; ia[i + 4] = v + 2; ia[i + 5] = v + 3; this.idx.n += 6; this.v += 4;
   }
   // a face with its own colour at each corner (the low-poly kit bakes a contact shade into the colours); cols: 12 bytes
-  quadC(p, nx, ny, nz, cols, gl) {
+  quadC(p, nx, ny, nz, cols, gl, nrms) {   // nrms: 12 numbers, a normal per corner (smooth shading), else the face's
     const order = flipped(p, nx, ny, nz) ? [0, 3, 2, 1] : [0, 1, 2, 3];
     this.pos.need(12); this.nrm.need(12); this.col.need(16); this.idx.need(6);
     const pa = this.pos.a, na = this.nrm.a, ca = this.col.a, ia = this.idx.a; let pn = this.pos.n, nn = this.nrm.n, cn = this.col.n;
-    for (let k = 0; k < 4; k++) { const o = order[k]; pa[pn++] = p[o * 3]; pa[pn++] = p[o * 3 + 1]; pa[pn++] = p[o * 3 + 2]; na[nn++] = nx * 127; na[nn++] = ny * 127; na[nn++] = nz * 127; ca[cn++] = cols[o * 3]; ca[cn++] = cols[o * 3 + 1]; ca[cn++] = cols[o * 3 + 2]; ca[cn++] = gl ? 255 : 0; }
+    for (let k = 0; k < 4; k++) { const o = order[k]; pa[pn++] = p[o * 3]; pa[pn++] = p[o * 3 + 1]; pa[pn++] = p[o * 3 + 2]; if (nrms) { na[nn++] = nrms[o * 3] * 127; na[nn++] = nrms[o * 3 + 1] * 127; na[nn++] = nrms[o * 3 + 2] * 127; } else { na[nn++] = nx * 127; na[nn++] = ny * 127; na[nn++] = nz * 127; } ca[cn++] = cols[o * 3]; ca[cn++] = cols[o * 3 + 1]; ca[cn++] = cols[o * 3 + 2]; ca[cn++] = gl ? 255 : 0; }
     this.pos.n = pn; this.nrm.n = nn; this.col.n = cn;
     const v = this.v, i = this.idx.n; ia[i] = v; ia[i + 1] = v + 1; ia[i + 2] = v + 2; ia[i + 3] = v; ia[i + 4] = v + 2; ia[i + 5] = v + 3; this.idx.n += 6; this.v += 4;
   }
@@ -1119,19 +1119,21 @@ function lpNormal(p) {
 const lpMid = (p) => p.reduce((m, q) => [m[0] + q[0] / p.length, m[1] + q[1] / p.length, m[2] + q[2] / p.length], [0, 0, 0]);
 
 class LPM {
-  constructor() { this.f = []; }
+  constructor() { this.f = []; this.sg = 0; }   // sg: the last smoothing group handed out (see lpVN)
   // a flat face of 3 or 4 corners; o.from: a point inside the solid, the face is turned to look away from it
   face(pts, c, o = {}) {
     let p = pts.map((q) => q.slice());
     if (o.from) { const n = lpNormal(p), m = lpMid(p); if ((m[0] - o.from[0]) * n[0] + (m[1] - o.from[1]) * n[1] + (m[2] - o.from[2]) * n[2] < 0) p = p.reverse(); }
-    const F = (q) => this.f.push({ p: q, c, g: o.glow ? 1 : 0, j: o.jit === undefined ? .035 : o.jit, ao: o.ao === undefined ? 1 : o.ao });
+    const F = (q) => this.f.push({ p: q, c, g: o.glow ? 1 : 0, j: o.jit === undefined ? .035 : o.jit, ao: o.ao === undefined ? 1 : o.ao, s: o.s || 0 });
     if (p.length <= 4) F(p); else for (let i = 1; i + 1 < p.length; i++) F([p[0], p[i], p[i + 1]]);   // a convex polygon: a fan of triangles
     return this;
   }
   // another model's faces, moved: { x, y, z } and turned ry radians about the vertical
   add(m, t = {}) {
     const cy = Math.cos(t.ry || 0), sy = Math.sin(t.ry || 0), s = t.s || 1;
-    for (const f of m.f) this.f.push(Object.assign({}, f, { p: f.p.map(([x, y, z]) => [(x * cy + z * sy) * s + (t.x || 0), y * s + (t.y || 0), (-x * sy + z * cy) * s + (t.z || 0)]) }));
+    const base = this.sg; let top = base;   // the added model's smoothing groups, renumbered after this one's
+    for (const f of m.f) { if (f.s) top = Math.max(top, base + f.s); this.f.push(Object.assign({}, f, { s: f.s ? base + f.s : 0, p: f.p.map(([x, y, z]) => [(x * cy + z * sy) * s + (t.x || 0), y * s + (t.y || 0), (-x * sy + z * cy) * s + (t.z || 0)]) })); }
+    this.sg = top;
     return this;
   }
   // a box; o: colours per face (top, front, back, left, right), skip: faces left out (bottom is left out by default)
@@ -1153,13 +1155,16 @@ class LPM {
     return this;
   }
   // a frustum (a cone when r1 is 0) of n sides around (cx, cz), from y0 to y1; o.top: its lid's colour or false;
-  // o.col(k): side k's colour; o.rot: the first side's angle
+  // o.col(k): side k's colour; o.rot: the first side's angle. Round unless o.smooth is false: its sides share normals
+  // (smooth shading) and, from 7 sides up, there are enough of them for its size (no side longer than 3 art px)
   frustum(cx, cz, r0, r1, y0, y1, n, c, o = {}) {
+    const smooth = o.smooth !== false, sg = smooth ? (o.sg || ++this.sg) : 0;
+    if (smooth && n >= 7) n = Math.max(n, Math.min(40, Math.ceil(Math.PI * 2 * Math.max(r0, r1) / 3)));
     const at = (k, r, y) => { const t = (o.rot || 0) + k / n * Math.PI * 2; return [cx + Math.sin(t) * r, y, cz + Math.cos(t) * r]; }, from = [cx, (y0 + y1) / 2, cz];
     for (let k = 0; k < n; k++) {
       const col = o.col ? o.col(k) : c;
-      if (r1 > 0) this.face([at(k, r0, y0), at(k + 1, r0, y0), at(k + 1, r1, y1), at(k, r1, y1)], col, { from, glow: o.glow });
-      else this.face([at(k, r0, y0), at(k + 1, r0, y0), [cx, y1, cz]], col, { from });
+      if (r1 > 0) this.face([at(k, r0, y0), at(k + 1, r0, y0), at(k + 1, r1, y1), at(k, r1, y1)], col, { from, glow: o.glow, s: sg });
+      else this.face([at(k, r0, y0), at(k + 1, r0, y0), [cx, y1, cz]], col, { from, s: sg });
     }
     if (o.top !== false && r1 > 0) this.face(Array.from({ length: n }, (_, k) => at(k, r1, y1)), o.top === undefined ? c : o.top, { from: [cx, y0, cz] });
     if (o.bottom) this.face(Array.from({ length: n }, (_, k) => at(k, r0, y0)), o.bottom, { from: [cx, y1, cz] });
@@ -1167,25 +1172,29 @@ class LPM {
   }
   // a turned shape: rings [[r, y], ...] from the bottom up, n sides; o.col(band, side) or c; o.top: lid colour or false
   lathe(cx, cz, rings, n, c, o = {}) {
+    let sg = 0;
+    if (o.smooth !== false && n >= 7) n = Math.max(n, Math.min(40, Math.ceil(Math.PI * 2 * Math.max(...rings.map((q) => q[0])) / 3)));
     for (let b = 0; b + 1 < rings.length; b++) {
       const [ra, ya] = rings[b], [rb, yb] = rings[b + 1];
-      this.frustum(cx, cz, ra, rb, ya, yb, n, c, { top: false, rot: o.rot, col: o.col ? (k) => o.col(b, k) : undefined });
+      this.frustum(cx, cz, ra, rb, ya, yb, n, c, { top: false, rot: o.rot, col: o.col ? (k) => o.col(b, k) : undefined, smooth: o.smooth, sg: o.smooth === false ? 0 : (sg || (sg = ++this.sg)) });
     }
     const [rt, yt] = rings[rings.length - 1];
-    if (o.top !== false && rt > 0) this.frustum(cx, cz, rt, rt, yt, yt, n, o.top === undefined ? c : o.top, { top: o.top === undefined ? c : o.top, rot: o.rot });
+    if (o.top !== false && rt > 0) this.face(Array.from({ length: n }, (_, k) => { const a = (o.rot || 0) + k / n * Math.PI * 2; return [cx + Math.sin(a) * rt, yt, cz + Math.cos(a) * rt]; }), o.top === undefined ? c : o.top, { from: [cx, yt - 1, cz] });
     return this;
   }
-  // a rounded blob: an icosahedron split once (80 faces), its corners nudged by a seeded amount; o.sx, o.sy, o.sz stretch it
+  // a rounded blob: an icosahedron split once (80 faces), twice from 8 px across (320), its corners nudged by a seeded
+  // amount, smooth unless o.facet (foliage keeps its facets); o.sx, o.sy, o.sz stretch it
   // vertically, o.col(face centre) colours it, o.flat cuts it flat below y (a canopy's underside)
   blob(cx, cy, cz, r, c, o = {}) {
     const t = (1 + Math.sqrt(5)) / 2, V = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((v) => { const l = Math.hypot(...v); return v.map((q) => q / l); });
     const F0 = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
     const mid = new Map(), verts = V.slice(), M = (a, b) => { const k = a < b ? a + '_' + b : b + '_' + a; if (!mid.has(k)) { const v = verts[a].map((q, i) => (q + verts[b][i]) / 2), l = Math.hypot(...v); verts.push(v.map((q) => q / l)); mid.set(k, verts.length - 1); } return mid.get(k); };
-    const F = []; for (const [a, b, d] of F0) { const ab = M(a, b), bd = M(b, d), da = M(d, a); F.push([a, ab, da], [b, bd, ab], [d, da, bd], [ab, bd, da]); }
+    let F = F0; for (let lv = 0, nl = o.sub || (r * Math.max(o.sx || 1, o.sy || 1, o.sz || 1) >= 8 ? 2 : 1); lv < nl; lv++) { const G = []; for (const [a, b, d] of F) { const ab = M(a, b), bd = M(b, d), da = M(d, a); G.push([a, ab, da], [b, bd, ab], [d, da, bd], [ab, bd, da]); } F = G; }
+    const sg = o.facet ? 0 : ++this.sg;
     const rnd = rng(o.seed || 7), j = o.jit === undefined ? .14 : o.jit, sy = o.sy || 1;
     const sx = o.sx || 1, sz = o.sz || 1, P3 = verts.map((v) => { const k = 1 + (rnd() * 2 - 1) * j; return [cx + v[0] * r * k * sx, cy + v[1] * r * k * sy, cz + v[2] * r * k * sz]; });
     if (o.flat !== undefined) for (const p of P3) p[1] = Math.max(p[1], o.flat);
-    for (const tri of F) { const p = tri.map((i) => P3[i]); if (p.every((q) => o.flat !== undefined && q[1] <= o.flat + 1e-6)) continue; this.face(p, o.col ? o.col(lpMid(p)) : c, { from: [cx, cy, cz], jit: o.facej === undefined ? .06 : o.facej }); }
+    for (const tri of F) { const p = tri.map((i) => P3[i]); if (p.every((q) => o.flat !== undefined && q[1] <= o.flat + 1e-6)) continue; this.face(p, o.col ? o.col(lpMid(p)) : c, { from: [cx, cy, cz], jit: o.facej === undefined ? (sg ? 0 : .06) : o.facej, s: sg }); }
     return this;
   }
   // a roof over the rectangle x0-x1 by z0-z1 (back to front), eaves at yE, ridge at yR, along x or z; hip 0 a gable,
@@ -1219,12 +1228,21 @@ class LPM {
   }
 }
 const lpModel = (key) => lpCache[key] || (lpCache[key] = LP_MODELS[key] ? LP_MODELS[key]() : null);
+// each face's corner normals: its own normal, or, in a smoothing group, the mean of the group's faces meeting there
+function lpVN(m) {
+  if (m.vn && m.vn.length === m.f.length) return m.vn;
+  const acc = new Map(), key = (s, q) => s + '|' + Math.round(q[0] * 64) + ',' + Math.round(q[1] * 64) + ',' + Math.round(q[2] * 64);
+  const fn = m.f.map((f) => lpNormal(f.p));
+  m.f.forEach((f, i) => { if (!f.s) return; const n = fn[i]; for (const q of f.p) { const k = key(f.s, q), a = acc.get(k); if (a) { a[0] += n[0]; a[1] += n[1]; a[2] += n[2]; } else acc.set(k, n.slice()); } });
+  m.vn = m.f.map((f, i) => f.p.map((q) => { if (!f.s) return fn[i]; const a = acc.get(key(f.s, q)), l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }));
+  return m.vn;
+}
 
 // a model set down in a builder (the chunk's B): at (x, z) on the ground o.y, turned o.rot quarter turns, o.flip
 function lpPut(Bd, m, x, z, o = {}) {
   const rot = (((o.rot || 0) % 4) + 4) % 4, fl = o.flip ? -1 : 1, oy = o.y || 0, ox = Math.round(x * PPU) / PPU, oz = Math.round(z * PPU) / PPU;
   const tf = (X, Z) => { let a = X * fl, c = Z; for (let r = 0; r < rot; r++) { const t = a; a = c; c = -t; } return [a, c]; };
-  const pts = new Array(12), cols = new Array(12);
+  const pts = new Array(12), cols = new Array(12), nrms = new Array(12), VN = lpVN(m);
   m.f.forEach((f, fi) => {
     const p = f.p.length === 3 ? [f.p[0], f.p[1], f.p[2], f.p[2]] : f.p, wp = p.map(([X, Y, Z]) => { const [a, c] = tf(X, Z); return [ox + a * P, oy + Y * P, oz + c * P]; });
     const n = lpNormal(f.p.map(([X, Y, Z]) => { const [a, c] = tf(X, Z); return [a, Y, c]; })), j = 1 + (hash2(fi * 7 + 3, m.f.length) * 2 - 1) * f.j, base = lpRGB(f.c);
@@ -1232,7 +1250,9 @@ function lpPut(Bd, m, x, z, o = {}) {
       const y = p[k][1], ao = f.ao ? .72 + .28 * Math.min(1, Math.max(0, y) / 14) : 1;   // contact shade: darker where it meets the ground
       for (let i = 0; i < 3; i++) { pts[k * 3 + i] = wp[k][i]; cols[k * 3 + i] = Math.max(0, Math.min(255, Math.round(base[i] * j * ao))); }
     }
-    Bd.quadC(pts, n[0], n[1], n[2], cols, f.g);
+    const vn = f.p.length === 3 ? [VN[fi][0], VN[fi][1], VN[fi][2], VN[fi][2]] : VN[fi];
+    for (let k = 0; k < 4; k++) { const [a, c] = tf(vn[k][0], vn[k][2]); nrms[k * 3] = a; nrms[k * 3 + 1] = vn[k][1]; nrms[k * 3 + 2] = c; }
+    Bd.quadC(pts, n[0], n[1], n[2], cols, f.g, nrms);
   });
 }
 
@@ -1245,10 +1265,10 @@ function lpFigure(key, o) {
   let nv = 0; for (const k of names) { const m = def.parts[k].m; let n = 0; for (const f of m.f) n += f.p.length === 4 ? 6 : 3; segs.push({ k, from: nv, n }); nv += n; }
   const base = new Float32Array(nv * 3), bn = new Float32Array(nv * 3), col = new Uint8Array(nv * 4);
   let v = 0;
-  for (const k of names) for (const [fi, f] of def.parts[k].m.f.entries()) {
+  for (const k of names) { const VN = lpVN(def.parts[k].m); for (const [fi, f] of def.parts[k].m.f.entries()) {
     const tris = f.p.length === 4 ? [[0, 1, 2], [0, 2, 3]] : [[0, 1, 2]], n = lpNormal(f.p), j = 1 + (hash2(fi * 5 + 1, k.length) * 2 - 1) * f.j, c = lpRGB(f.c);
-    for (const t of tris) for (const i of t) { base.set(f.p[i], v * 3); bn.set(n, v * 3); col.set([...c.map((q) => Math.min(255, Math.round(q * j))), f.g ? 255 : 0], v * 4); v++; }
-  }
+    for (const t of tris) for (const i of t) { base.set(f.p[i], v * 3); bn.set(VN[fi][i] || n, v * 3); col.set([...c.map((q) => Math.min(255, Math.round(q * j))), f.g ? 255 : 0], v * 4); v++; }
+  } }
   const g = new THREE.BufferGeometry(), pos = new Float32Array(nv * 3), nrm = new Float32Array(nv * 3), lamp = new Uint8Array(nv);
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
   g.setAttribute('aCol', new THREE.BufferAttribute(col, 4, true)); g.setAttribute('aLamp', new THREE.BufferAttribute(lamp, 1, true));
@@ -1287,10 +1307,11 @@ try { renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: fals
 const scene = new THREE.Scene();
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, .6); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 1); sun.castShadow = settings.shadows;
-const SHADOW_MAP = window.__shadowMap || 1024;   // a texel about one art pixel: 2048 looked the same at 4 times the cost
+const SHADOW_MAP = window.__shadowMap || (LP ? 2048 : 1024);   // lowpoly.html: finer, its picture is finer than an art pixel
+//   // a texel about one art pixel: 2048 looked the same at 4 times the cost
 sun.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP); sun.shadow.autoUpdate = false; sun.shadow.bias = -0.0004;
 scene.add(sun); scene.add(sun.target);
-if (renderer) { renderer.setPixelRatio(1); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.BasicShadowMap; renderer.info.autoReset = false; }
+if (renderer) { renderer.setPixelRatio(1); renderer.shadowMap.enabled = true; renderer.shadowMap.type = LP ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap; renderer.info.autoReset = false; }
 
 const nearest = (t) => { t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; };
 let groundTex = null, heightTex = null, atlasTex = null, auxTex = null;   // ground: per area; atlas: once at boot
@@ -1497,8 +1518,9 @@ function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2) * quality; bw = Math.max(2, Math.round(r.width * dpr)); bh = Math.max(2, Math.round(r.height * dpr));
   // the scene is drawn at the screen's resolution divided by a whole number (1, or 2 on a 2x screen) and enlarged by
   // exactly that number: at 1.25 or 0.75 the pixel pattern crawled while the camera moved, even by whole pixels
-  // (lowpoly.html: about 240 rows, one art pixel each at the usual view, every row a block of whole screen pixels)
-  const ss = window.__ss || (LP ? 1 / Math.max(1, Math.round(bh / 240)) : 1 / Math.max(1, Math.floor(dpr + .01))); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
+  // (lowpoly.html: about 600 rows, two or three picture pixels to an art pixel at the usual view, every one a block of
+  // whole screen pixels)
+  const ss = window.__ss || (LP ? 1 / Math.max(1, Math.round(bh / 600)) : 1 / Math.max(1, Math.floor(dpr + .01))); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
   aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = LP ? 0 : Math.max(ss, .75); postU.uK.value = LP ? Math.round(1 / ss) : 0;
 }
 
@@ -3984,26 +4006,26 @@ const lpLeaf = (lo, hi, a, b, c) => (p) => { const t = (p[1] - lo) / Math.max(1,
 LP_MODELS.oak = () => {
   const m = new LPM(), L = lpLeaf(30, 99, LPC.leafLt, LPC.leaf, LPC.leafDk);
   m.lathe(0, 0, [[6, 0], [4.6, 6], [3.6, 30], [3, 44]], 7, LPC.trunk, { top: false });
-  for (const [x, y, z, r, s] of [[0, 72, 0, 26, 1], [-22, 60, 4, 18, 2], [22, 62, -2, 19, 3], [-8, 86, -4, 16, 4], [12, 82, 6, 15, 5], [0, 58, 12, 15, 6]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 13, sy: .82, jit: .16, col: L, flat: y - r * .6 });
+  for (const [x, y, z, r, s] of [[0, 72, 0, 26, 1], [-22, 60, 4, 18, 2], [22, 62, -2, 19, 3], [-8, 86, -4, 16, 4], [12, 82, 6, 15, 5], [0, 58, 12, 15, 6]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 13, sy: .82, jit: .16, col: L, flat: y - r * .6, facet: 1 });
   return m;
 };
 LP_MODELS.olive = () => {
   const m = new LPM(), L = lpLeaf(24, 70, 0xa9b874, LPC.olive, 0x6e8448);
   m.lathe(0, 0, [[5, 0], [3.4, 10], [3.8, 22], [2.4, 34]], 6, 0x7d6a54, { top: false });
-  for (const [x, y, z, r, s] of [[0, 50, 0, 20, 1], [-16, 44, 3, 13, 2], [15, 46, -3, 14, 3], [3, 62, 2, 12, 4]]) m.blob(x, y, z, r, LPC.olive, { seed: s * 7, sy: .75, jit: .2, col: L, flat: y - r * .5 });
+  for (const [x, y, z, r, s] of [[0, 50, 0, 20, 1], [-16, 44, 3, 13, 2], [15, 46, -3, 14, 3], [3, 62, 2, 12, 4]]) m.blob(x, y, z, r, LPC.olive, { seed: s * 7, sy: .75, jit: .2, col: L, flat: y - r * .5, facet: 1 });
   return m;
 };
 LP_MODELS.cypress = () => {
   const m = new LPM(), n = 7;
   m.lathe(0, 0, [[2.6, 0], [2, 8]], 6, LPC.trunk, { top: false });
   const prof = [[4, 5], [8.5, 18], [10.5, 34], [10, 52], [8.4, 70], [6, 88], [3.4, 102], [0, 114]];
-  for (let b = 0; b + 1 < prof.length; b++) m.frustum(0, 0, prof[b][0], prof[b + 1][0], prof[b][1], prof[b + 1][1], n, LPC.cypress, { top: false, rot: b * .45, col: (k) => ((k + b) % 3 === 0 ? LPC.cypressDk : (k + b) % 3 === 1 ? LPC.cypress : lpShade(LPC.cypress, 1.12)) });
+  for (let b = 0; b + 1 < prof.length; b++) m.frustum(0, 0, prof[b][0], prof[b + 1][0], prof[b][1], prof[b + 1][1], n, LPC.cypress, { top: false, smooth: false, rot: b * .45, col: (k) => ((k + b) % 3 === 0 ? LPC.cypressDk : (k + b) % 3 === 1 ? LPC.cypress : lpShade(LPC.cypress, 1.12)) });
   m.face(Array.from({ length: n }, (_, k) => { const t = k / n * Math.PI * 2; return [Math.sin(t) * 4, 5, Math.cos(t) * 4]; }), LPC.cypressDk, { from: [0, 20, 0] });
   return m;
 };
 LP_MODELS.bush = () => {
   const m = new LPM(), L = lpLeaf(0, 36, LPC.leafLt, LPC.leaf, LPC.leafDk);
-  for (const [x, y, z, r, s] of [[-12, 13, 2, 14, 1], [11, 12, -2, 15, 2], [0, 20, 0, 15, 3], [-2, 11, 9, 11, 4]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 17, sy: .85, jit: .16, col: L, flat: 0 });
+  for (const [x, y, z, r, s] of [[-12, 13, 2, 14, 1], [11, 12, -2, 15, 2], [0, 20, 0, 15, 3], [-2, 11, 9, 11, 4]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 17, sy: .85, jit: .16, col: L, flat: 0, facet: 1 });
   for (const [x, y, z, c] of [[-14, 22, 10, 0xf4efe6], [6, 26, 8, 0xe9a3b6], [14, 18, 9, 0xf4efe6], [-4, 29, 3, 0xe9a3b6]]) m.blob(x, y, z, 1.4, c, { seed: x + 40, jit: .1 });
   return m;
 };
@@ -4011,7 +4033,7 @@ LP_MODELS.vine_row = () => {
   const m = new LPM(), L = lpLeaf(10, 50, LPC.leafLt, LPC.leaf, LPC.leafDk);
   for (const x of [-62, 0, 62]) m.box(x - 1.3, 0, -1.3, x + 1.3, 46, 1.3, LPC.woodDk);
   for (const y of [24, 40]) m.box(-62, y - .4, -.4, 62, y + .4, .4, LPC.iron);
-  for (let i = 0; i < 8; i++) { const x = -54 + i * 15.5; m.box(x - 1, 0, -1, x + 1, 26, 1, LPC.trunk); m.blob(x, 34, 0, 11, LPC.leaf, { seed: i * 11 + 2, sy: .8, jit: .18, col: L, flat: 18 }); for (let g = 0; g < 2; g++) m.blob(x - 4 + g * 7, 23, 7 - g * 2, 2.6, LPC.grape, { seed: i * 3 + g, sy: 1.3, jit: .12 }); }
+  for (let i = 0; i < 8; i++) { const x = -54 + i * 15.5; m.box(x - 1, 0, -1, x + 1, 26, 1, LPC.trunk); m.blob(x, 34, 0, 11, LPC.leaf, { seed: i * 11 + 2, sy: .8, jit: .18, col: L, flat: 18, facet: 1 }); for (let g = 0; g < 2; g++) m.blob(x - 4 + g * 7, 23, 7 - g * 2, 2.6, LPC.grape, { seed: i * 3 + g, sy: 1.3, jit: .12 }); }
   return m;
 };
 LP_MODELS.fence = () => {
@@ -4037,9 +4059,9 @@ LP_MODELS.lamp_post = () => {
   const m = new LPM(), I = LPC.iron;
   m.lathe(0, 0, [[3.2, 0], [3.2, 2], [2, 3], [1.2, 5], [1, 32], [1.6, 33.5]], 8, I, { top: I });
   m.box(-2.6, 33.5, -2.6, 2.6, 34.5, 2.6, I);
-  m.frustum(0, 0, 2.6, 3.4, 34.5, 40.5, 6, LPC.glass, { top: false, glow: 1 });
+  m.frustum(0, 0, 2.6, 3.4, 34.5, 40.5, 6, LPC.glass, { top: false, glow: 1, smooth: false });
   for (let k = 0; k < 6; k++) { const t = k / 6 * Math.PI * 2; m.box(Math.sin(t) * 3.1 - .35, 34.5, Math.cos(t) * 3.1 - .35, Math.sin(t) * 3.1 + .35, 40.5, Math.cos(t) * 3.1 + .35, I); }
-  m.frustum(0, 0, 4.4, 0, 40.5, 44, 6, I);
+  m.frustum(0, 0, 4.4, 0, 40.5, 44, 6, I, { smooth: false });
   return m;
 };
 LP_MODELS.bench = () => {
@@ -4104,7 +4126,7 @@ LP_MODELS.crate = () => {
 LP_MODELS.signpost = () => {
   const m = new LPM(), W = LPC.woodLt;
   m.box(-1.6, 0, -1.6, 1.6, 31, 1.6, LPC.woodDk);
-  m.frustum(0, 0, 2.6, 0, 31, 34, 4, LPC.iron, { rot: Math.PI / 4 });
+  m.frustum(0, 0, 2.6, 0, 31, 34, 4, LPC.iron, { rot: Math.PI / 4, smooth: false });
   const arrow = (y, dir, len) => m.prism([[0, y], [dir * len, y], [dir * (len + 4), y + 2.8], [dir * len, y + 5.6], [0, y + 5.6]].map(([u, v]) => [u * 1, v]), 'z', 1.6, 3.2, W, { cap: W });
   arrow(22, 1, 9); arrow(14, -1, 8);
   return m;
@@ -4143,8 +4165,8 @@ const lpSin = (t) => Math.sin(t), ease = (t) => t * t * (3 - 2 * t), clamp01 = (
 /* ---- the scholar cat: an orange tabby on two legs, round glasses, a quill for a sword ---- */
 {
   const O = 0xe8963c, OD = 0xc46f28, CR = 0xf6e2c2, PK = 0xe79aa6, DK = 0x2e211c, GL = 0x3b2f2a;
-  const legs = (s) => new LPM().box(s * 3 - 1.6, 0, -1.6, s * 3 + 1.6, 4.5, 1.6, O).box(s * 3 - 1.8, 0, -1.4, s * 3 + 1.8, 1.6, 3, CR);
-  const body = new LPM().blob(0, 8.8, 0, 4.8, O, { seed: 2, sy: 1.12, sz: .9, jit: .05 }).blob(0, 8.3, 2.4, 3.1, CR, { seed: 3, sy: 1.15, sz: .6, jit: .04 });
+  const legs = (s) => new LPM().lathe(s * 3, 0, [[1.5, .6], [1.9, 1.6], [1.8, 3.4], [1.4, 4.8]], 10, O, { top: false }).blob(s * 3, 1, 1.2, 1.7, CR, { seed: 20 + s, sx: 1.05, sy: .62, sz: 1.35, jit: .02 });
+  const body = new LPM().blob(0, 8.8, 0, 4.8, O, { seed: 2, sy: 1.12, sz: .9, jit: .03 }).blob(0, 8.3, 2.4, 3.1, CR, { seed: 3, sy: 1.15, sz: .6, jit: .03 }).blob(0, 11.4, 2.6, 2.4, CR, { seed: 19, sx: 1.3, sy: .8, sz: .7, jit: .03 });
   for (const y of [6.5, 9, 11.5]) body.box(-4.4, y, -3.6, 4.4, y + .9, -2.6, OD);   // tabby stripes down the back
   const head = new LPM().blob(0, 17.2, .3, 6, O, { seed: 4, sx: 1.12, sy: .92, jit: .04 })
     .blob(0, 15.4, 4.6, 2.7, CR, { seed: 5, sx: 1.2, sy: .72, sz: .7, jit: .03 })
@@ -4159,8 +4181,8 @@ const lpSin = (t) => Math.sin(t), ease = (t) => t * t * (3 - 2 * t), clamp01 = (
   head.box(-.4, 18, 6, .4, 18.5, 6.2, GL);
   for (const s of [-1, 1]) for (let k = 0; k < 2; k++) head.box(s * 4.2 + s * k * .4, 15.2 + k * 1.1, 4.4, s * 7.6, 15.5 + k * 1.1, 4.6, 0xf6efe6);   // whiskers
   const tail = new LPM();
-  { const pts = [[0, 6, -3.6], [0, 7.4, -7], [0, 10.8, -9.4], [.4, 14.6, -9.8], [.8, 17.2, -8.4]]; for (let i = 0; i + 1 < pts.length; i++) { const [a, b] = [pts[i], pts[i + 1]], r0 = 1.6 - i * .2, r1 = 1.4 - i * .2, n = 6, ring = (p, r, k) => { const t = k / n * Math.PI * 2; return [p[0] + Math.cos(t) * r, p[1] + Math.sin(t) * r * .7, p[2] + Math.sin(t) * r * .5]; }; for (let k = 0; k < n; k++) tail.face([ring(a, r0, k), ring(a, r0, k + 1), ring(b, r1, k + 1), ring(b, r1, k)], i === 3 ? OD : O, { from: [(a[0] + b[0]) / 2 + 9, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2] }); } tail.blob(.8, 17.6, -8, 1.3, CR, { seed: 7, jit: 0 }); }
-  const arm = (s) => new LPM().box(s * 4.2 - 1.1, 7, -1, s * 4.2 + 1.1, 12, 1, O).blob(s * 4.2, 7, .3, 1.3, CR, { seed: 8 + s, jit: 0 });
+  { tail.sg = 1; const pts = [[0, 6, -3.6], [0, 7.4, -7], [0, 10.8, -9.4], [.4, 14.6, -9.8], [.8, 17.2, -8.4]]; for (let i = 0; i + 1 < pts.length; i++) { const [a, b] = [pts[i], pts[i + 1]], r0 = 1.6 - i * .2, r1 = 1.4 - i * .2, n = 10, ring = (p, r, k) => { const t = k / n * Math.PI * 2; return [p[0] + Math.cos(t) * r, p[1] + Math.sin(t) * r * .7, p[2] + Math.sin(t) * r * .5]; }; for (let k = 0; k < n; k++) tail.face([ring(a, r0, k), ring(a, r0, k + 1), ring(b, r1, k + 1), ring(b, r1, k)], i === 3 ? OD : O, { from: [(a[0] + b[0]) / 2 + 9, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], s: 1, jit: 0 }); } tail.blob(.8, 17.6, -8, 1.3, CR, { seed: 7, jit: 0 }); }
+  const arm = (s) => new LPM().lathe(s * 4.2, 0, [[1, 7.4], [1.25, 8.6], [1.3, 11], [1.05, 12.4]], 10, O, { top: false }).blob(s * 4.2, 7.2, .3, 1.45, CR, { seed: 8 + s, jit: 0 });
   // the quill, held in the right paw: a white feather with a dark nib
   const quill = new LPM().box(-.3, 3.5, 1.2, .3, 7.5, 1.8, 0x6a5a48);
   for (let k = 0; k < 5; k++) { const y0 = 7 + k * 2.2, w = 1.4 + Math.sin((k + .5) / 5 * Math.PI) * 1.4; quill.face([[-w, y0, 1.5], [w, y0, 1.5], [w * .8, y0 + 2.4, 1.5 + (k + 1) * .5], [-w * .8, y0 + 2.4, 1.5 + (k + 1) * .5]], k % 2 ? 0xf2ede4 : 0xfaf7f0, { from: [0, y0 + 1, -4], jit: 0 }).face([[-w, y0, 1.4], [w, y0, 1.4], [w * .8, y0 + 2.4, 1.4 + (k + 1) * .5], [-w * .8, y0 + 2.4, 1.4 + (k + 1) * .5]], 0xe2dccf, { from: [0, y0 + 1, 6] }); }
@@ -4196,7 +4218,7 @@ const lpSin = (t) => Math.sin(t), ease = (t) => t * t * (3 - 2 * t), clamp01 = (
 function lpPerson(o) {
   const H = o.h || 1, sk = o.skin || 0xe9c09c, top = o.top, dress = o.dress, legC = o.legs || 0x4a3a30, shoe = o.shoes || 0x3a2a20;
   const S = (v) => v * H;
-  const legs = (s) => new LPM().box(s * 1.8 - 1.1, 0, -1.2, s * 1.8 + 1.1, S(9), 1.2, legC).box(s * 1.8 - 1.3, 0, -1.3, s * 1.8 + 1.3, 1.6, 2.4, shoe);
+  const legs = (s) => new LPM().lathe(s * 1.8, 0, [[1.05, 1.2], [1.25, S(3)], [1.35, S(6.5)], [1.4, S(9.2)]], 10, legC, { top: false }).blob(s * 1.8, .9, .7, 1.5, shoe, { seed: 30 + s, sx: .95, sy: .6, sz: 1.5, jit: .02 });
   const body = new LPM();
   if (dress) body.lathe(0, 0, [[o.wide ? 6.2 : 5.2, S(1.5)], [o.wide ? 5.4 : 4.4, S(8)], [3.6, S(13)], [3.4, S(19)]], 9, dress, { top: dress });
   else body.lathe(0, 0, [[3.4, S(8.4)], [o.wide ? 5.2 : 3.8, S(12)], [o.wide ? 4.8 : 3.6, S(16)], [3.3, S(19)]], 9, top, { top });
@@ -4211,7 +4233,7 @@ function lpPerson(o) {
   if (o.hat === 'chef') head.frustum(0, 0, 4.2, 5, hy + 2.4, hy + 7.5, 9, 0xf7f3ec, { top: false }).blob(0, hy + 8, 0, 5, 0xf7f3ec, { seed: 15, sy: .65, jit: .1 });
   if (o.hat === 'helmet') head.blob(0, hy + 1.6, 0, 4.9, 0x9aa0a8, { seed: 16, sy: .78, jit: .02, flat: hy - .2 }).frustum(0, 0, 5.6, 5.6, hy - .4, hy + .2, 10, 0x7c828a, { top: false }).box(-.5, hy + 3, -5.2, .5, hy + 6.3, 4.6, 0x7c828a);
   if (o.glasses) for (const s of [-1, 1]) head.box(s * 1.6 - 1.1, hy - .3, 4.3, s * 1.6 + 1.1, hy + .1, 4.5, 0x5a4a3a);
-  const arm = (s) => new LPM().box(s * 4.3 - 1, S(11.5), -1, s * 4.3 + 1, S(18.6), 1, o.sleeves || dress || top).blob(s * 4.3, S(11.2), .2, 1.3, sk, { seed: 17, jit: 0 });
+  const arm = (s) => new LPM().lathe(s * 4.3, 0, [[.95, S(11.8)], [1.15, S(13.5)], [1.25, S(16.5)], [1.3, S(18.6)]], 10, o.sleeves || dress || top, { top: false }).blob(s * 4.3, S(18.6), 0, 1.35, o.sleeves || dress || top, { seed: 18, jit: 0 }).blob(s * 4.3, S(11.2), .2, 1.3, sk, { seed: 17, jit: 0 });
   const item = new LPM();
   if (o.item === 'spear') item.box(-.5, -6, 1.6, .5, 30, 2.6, LPC.wood).frustum(0, 2.1, 1.4, 0, 30, 35, 4, 0xc8ccd2);
   if (o.item === 'sword') item.box(-.5, S(9), 1.6, .5, S(17.5), 2.4, LPC.woodLt).box(-2, S(10.6), 1.6, 2, S(11.4), 2.4, LPC.wood);
