@@ -53,7 +53,10 @@ function loadArt() {
       const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
       const x = c.getContext('2d'); x.drawImage(img, 0, 0);
       SHEETS[name] = { meta: window.ART[name].meta, canvas: c, px: x.getImageData(0, 0, img.width, img.height).data, w: img.width, h: img.height };
-      ok();
+      // the frames at twice the resolution, when the sheet has them (only lowpoly.html draws with them)
+      if (!LP || !window.ART[name].hi) { ok(); return; }
+      const hi = new Image(); hi.onload = () => { const c2 = document.createElement('canvas'); c2.width = hi.width; c2.height = hi.height; c2.getContext('2d').drawImage(hi, 0, 0); SHEETS[name].hi = c2; ok(); };
+      hi.onerror = () => ok(); hi.src = window.ART[name].hi;
     };
     img.onerror = () => fail(new Error('art sheet not decodable: ' + name));
     img.src = window.ART[name].png;
@@ -1107,13 +1110,21 @@ function eraseFrom(src, rects) {
 // LP_MODELS[key]: () => LPM, built once. LP_FIGURES[key]: a figure with parts and a pose function (lpFigure).
 const LP_MODELS = {}, LP_FIGURES = {}, lpCache = {};
 let LP_CHEST = null, LP_TILES = null, LP_WALL = null;   // LP_WALL(colour, along, y): a wall's colour at a pixel, by the legend's wall colour   // the chest with its lid at an angle (radians); the ground tiles painted in code
-// lowpoly.html: the figures' and effects' sheets enlarged 2x by Scale2x (EPX, Eric Johnston 1992; Andrea Mazzoleni's
+// lowpoly.html: the figures' and effects' sheets at 2x: resampled from the original drawing when the sheet has its @2x
+// frames, else enlarged by Scale2x (EPX, Eric Johnston 1992; Andrea Mazzoleni's
 // Scale2x): each pixel becomes four, a corner taking a neighbour's colour where two neighbours agree, so diagonals and
 // curves get twice the steps and nothing blurs. Same size in the world, twice the pixels. window.__px2 = false: off
 const lpPx2 = {};
 function lpSheetCanvas(sheet) {
   const SH = SHEETS[sheet]; if (!LP || window.__px2 === false) return SH.canvas;
   if (lpPx2[sheet]) return lpPx2[sheet];
+  // frames resampled at 2x from the original drawing (tools/art.mjs): each put at twice its 1x place, so the frames'
+  // rectangles, divided by the sheet's size, still find them
+  if (SH.hi) {
+    const c = document.createElement('canvas'); c.width = SH.w * 2; c.height = SH.h * 2; const x = c.getContext('2d');
+    for (const r of Object.values(SH.meta.sprites)) if (r.hi) x.drawImage(SH.hi, r.hi.x, r.hi.y, r.hi.w, r.hi.h, r.x * 2, r.y * 2, r.w * 2, r.h * 2);
+    return (lpPx2[sheet] = c);
+  }
   const W = SH.w, H = SH.h, s = SH.px, c = document.createElement('canvas'); c.width = W * 2; c.height = H * 2;
   const x = c.getContext('2d'), im = x.createImageData(W * 2, H * 2), d = im.data;
   const at = (i, j) => { i = i < 0 ? 0 : i >= W ? W - 1 : i; j = j < 0 ? 0 : j >= H ? H - 1 : j; return (j * W + i) * 4; };
