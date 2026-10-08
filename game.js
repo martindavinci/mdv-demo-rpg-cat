@@ -3187,6 +3187,17 @@ function skyPass(stride = 1) {
   }
   return { sky: Math.round(n * k), inside: Math.round(inside * k), box: n ? [x0, y0, x1, y1].map((v) => +v.toFixed(2)) : null, w, h };
 }
+// figurePass: the scene drawn with only one figure in it (everything else hidden for that one draw), and the picture's
+//   pixels in a box around its feet read back (picture pixels, top row first): to see what the figure alone looks like
+//   on screen, frame after frame (tools/sprite-check.mjs)
+function figurePass(a, half) {
+  const hidden = []; scene.traverse((o) => { if ((o.isMesh || o.isSprite) && o.visible && o !== a.mesh) { hidden.push(o); o.visible = false; } });
+  draw(0); for (const o of hidden) o.visible = true;
+  const v = a.mesh.position.clone().project(cam), cx = Math.round((v.x + 1) / 2 * rt.width), cy = Math.round((v.y + 1) / 2 * rt.height);
+  const w = half * 2, x0 = Math.max(0, cx - half), y0 = Math.max(0, cy - half / 2), px = new Uint8Array(w * w * 4); renderer.readRenderTargetPixels(rt, x0, y0, w, w, px);
+  const out = []; for (let y = w - 1; y >= 0; y--) { let row = ''; for (let x = 0; x < w; x++) { const o = (y * w + x) * 4; row += px[o + 3] > 127 ? (px[o] >> 4).toString(16) + (px[o + 1] >> 4).toString(16) + (px[o + 2] >> 4).toString(16) : '...'; } out.push(row); }
+  return { rows: out, cx, cy, rt: [rt.width, rt.height] };
+}
 
 /* ---------- fingerprints: what a thing is, as data, for the approvals (tools/approve-check.mjs, the viewer) ---------- */
 // Four hashes per thing, computed on the CPU from data only (the same on any machine and GPU): its drawing (colours,
@@ -4451,7 +4462,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     internals: () => ({ enemies, pickups, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART, scene, matSlab, cam }),
     // view and zoom put the camera on its mark at once, as entering a place does (else it eases there over ~2 s)
     view: (y) => { yaw = yawT = y; intro = 1; camOnMark(); },
-    idPass: () => idPass(), holePass: () => holePass(), skyPass: (s) => skyPass(s), qaImage: () => qaImage(),
+    idPass: () => idPass(), holePass: () => holePass(), skyPass: (s) => skyPass(s), figurePass: (half) => figurePass(player, half || 40), qaImage: () => qaImage(),
     rescale: (k) => { window.__ss = k; resize(); },
     camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: viewV(Math.max(Vz, minV())), rt: [rt.width, rt.height], k: Math.max(1, Math.round(bh / Math.max(1, rt.height))), shift: [postU.uShift.value.x * rt.width, postU.uShift.value.y * rt.height] }),
     shadowAt: (x, z) => { A.shadowPin = x === undefined ? null : { x, z }; },
