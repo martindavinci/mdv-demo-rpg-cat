@@ -1514,7 +1514,13 @@ function applyTod(k) {
 const CD = 60, cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 140), camT = new THREE.Vector3();
 let yaw = 0, yawT = 0, Vz = 15, VT = 15, aspect = 1;
 const minV = () => 13 / aspect;   // a phone held upright still sees 13 units across
+// the view's height as drawn. lowpoly.html rounds it so one art pixel is a whole number of pixels of the picture (a
+// texel's edge then falls on the same pixel wherever the camera stands, and the ground does not crawl as the cat walks):
+// up to half again the asked height when zoomed out. The follow, the map-edge clamp and the streaming use this one,
+// or the view showed the sky past the map's edge and through chunks never built
+const viewV = (v) => (LP && rt.height > 2 ? rt.height / (PPU * Math.max(1, Math.round(rt.height / (PPU * v)))) : v);
 function camGoal(vv) {
+  vv = viewV(vv);
   if (A.W > 48 || A.D > 40) {   // the open world: follow the cat, but never show past the map's edge
     const k = aspect < .8 ? vv * .12 : 0;   // upright phones: the cat sits above the thumbs
     const x = player.x + Math.sin(yaw) * k, z = player.z - (A.camNorth || 1.5) + Math.cos(yaw) * k;
@@ -1524,9 +1530,12 @@ function camGoal(vv) {
   const W = A.W, D = A.D, f = clamp(1.45 - vv / 26, .4, .9); return [W / 2 + (player.x - W / 2) * f, D / 2 - (A.camNorth || 1.5) + (player.z - D / 2) * f * .6]; }
 // the ground the view covers, as a box in world x/z: [x0, z0, x1, z1]. In view terms it grows by side units left and
 // right, far units away from the camera and near units toward it (a tall tree standing below the view's bottom edge
-// still reaches into it: a 7-unit tree up to 10 units out).
+// still reaches into it: a 7-unit tree up to 10 units out). The box is taken at the height the camera aims at (the cat's
+// ground, halved); ground lower than that, down to 0, shows farther away at the view's top edge: far grows by the drop
+// over the pitch's tangent, or a chunk just past the top edge stayed unbuilt and the sky showed through
 function viewFoot(side, far, near) {
-  const vv = Math.max(Vz, VT, minV()), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2;
+  far += Math.max(0, camT.y) / Math.tan(PITCH);
+  const vv = viewV(Math.max(Vz, VT, minV())), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2;
   const rx = Math.cos(yaw), rz = -Math.sin(yaw), tx = Math.sin(yaw), tz = Math.cos(yaw);   // screen right; toward the camera
   let x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9;
   for (const a of [-(hx + side), hx + side]) for (const b of [-(hz + far), hz + near]) {
@@ -1538,7 +1547,8 @@ function viewFoot(side, far, near) {
 // Measured in view terms (across the screen, toward the camera): on a diagonal view the box around the footprint
 // takes in a third more ground than the view shows
 function inView(box, side, far, near) {
-  const vv = Math.max(Vz, VT, minV()), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2;
+  far += Math.max(0, camT.y) / Math.tan(PITCH);   // lower ground shows farther away, as in viewFoot
+  const vv = viewV(Math.max(Vz, VT, minV())), hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2;
   const rx = Math.cos(yaw), rz = -Math.sin(yaw), tx = Math.sin(yaw), tz = Math.cos(yaw);
   let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
   for (const x of [box[0], box[2]]) for (const z of [box[1], box[3]]) { const dx = x - camT.x, dz = z - camT.z, a = dx * rx + dz * rz, b = dx * tx + dz * tz; a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
@@ -1557,9 +1567,7 @@ function applyWire() {
 const _camS = new THREE.Vector3();
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH);
-  // (lowpoly.html: the view's height is rounded so one art pixel is a whole number of pixels of the picture: a texel's
-  // edge then falls on the same pixel wherever the camera stands, and the ground does not crawl as the cat walks)
-  let v = Math.max(Vz, minV()); if (LP && rt.height > 2) v = rt.height / (PPU * Math.max(1, Math.round(rt.height / (PPU * v))));
+  const v = viewV(Math.max(Vz, minV()));
   // the camera moves by whole pixels of the render target: moving by a fraction of a pixel, thin lines (shadow edges,
   // window bars) fell on one pixel in a frame and on its neighbour in the next, and shimmered while walking
   const px = v / Math.max(1, rt.height), sy = Math.sin(yaw), cy = Math.cos(yaw);
@@ -3137,6 +3145,15 @@ function holePass() {
   black.dispose(); qaLast = px;
   return { magenta: n, at: n ? [Math.round(sx / n), Math.round(sy / n)] : null, spots: [...cells].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, m]) => [...c.split(',').map(Number), m]) };
 }
+// skyPass: every mesh white on black: what stays black is the sky, seen past the map's edge or through a chunk not built.
+//   Returns the sky's pixels (of 640x360) and their box on screen, in fractions of the width and height from the top left
+function skyPass() {
+  const white = qaFlat(0xffffff), px = qaRender(() => white);
+  let n = 0, x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+  for (let k = 0; k < px.length; k += 4) if (!(px[k] | px[k + 1] | px[k + 2])) { n++; const x = ((k / 4) % 640) / 640, y = 1 - (Math.floor(k / 4 / 640) + 1) / 360; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  white.dispose(); qaLast = px;
+  return { sky: n, box: n ? [x0, y0, x1, y1].map((v) => +v.toFixed(2)) : null };
+}
 
 /* ---------- fingerprints: what a thing is, as data, for the approvals (tools/approve-check.mjs, the viewer) ---------- */
 // Four hashes per thing, computed on the CPU from data only (the same on any machine and GPU): its drawing (colours,
@@ -4502,9 +4519,9 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     clearEnemies: () => clearEnemies(),
     internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART, scene, matSlab, cam }),
     view: (y) => { yaw = yawT = y; intro = 1; },
-    idPass: () => idPass(), holePass: () => holePass(), qaImage: () => qaImage(),
+    idPass: () => idPass(), holePass: () => holePass(), skyPass: () => skyPass(), qaImage: () => qaImage(),
     rescale: (k) => { window.__ss = k; resize(); },
-    camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: Math.max(Vz, minV()), rt: [rt.width, rt.height] }),
+    camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: viewV(Math.max(Vz, minV())), rt: [rt.width, rt.height] }),
     shadowAt: (x, z) => { A.shadowPin = x === undefined ? null : { x, z }; },
     // the triangle edges of every thing drawn over it (for the review): every triangle, also those whose pixels the
     // material discards, since they cost the same
