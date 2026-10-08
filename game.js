@@ -42,7 +42,8 @@ function applyLang() {
 
 // ---- engine/10-art.js
 /* ---------- art: the pipeline's atlases (window.ART, built by build.mjs) turned into pixels ---------- */
-// ART = { <sheet>: { meta: { kind, sprites: { name: { x, y, w, h, depth?, anchor? } } }, png: 'data:image/png;base64,…' } }
+// ART = { <sheet>: { meta: { kind, sprites: { name: { x, y, w, h, depth?, anchor?, hi4? } }, w?, h? }, png?: 'data:image/png;base64,…', hi4? } }
+// (a frames sheet carries hi4 and its 1x size, every other sheet its 1x png)
 const SHEETS = {};     // sheet name → { meta, canvas, px (RGBA of the whole atlas), w, h }
 const DEFS = [];       // depth sprites for the extruder: { key, name, pic: { w, h, c, f, b, fl } }
 const TILES = {};      // tile name → { w, h, px }
@@ -50,19 +51,19 @@ const TILES = {};      // tile name → { w, h, px }
 function loadArt() {
   const names = Object.keys(window.ART || {});
   return Promise.all(names.map((name) => new Promise((ok, fail) => {
-    const img = new Image();
+    const A = window.ART[name], img = new Image();
+    const toCanvas = (im) => { const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; c.getContext('2d').drawImage(im, 0, 0); return c; };
     img.onload = () => {
-      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
-      const x = c.getContext('2d'); x.drawImage(img, 0, 0);
-      SHEETS[name] = { meta: window.ART[name].meta, canvas: c, px: x.getImageData(0, 0, img.width, img.height).data, w: img.width, h: img.height };
-      // the frames at a higher resolution, when the sheet has them: the low-poly page (index.html) draws with the 2x (its
-      // picture is about 600 rows), diorama.html with the 4x (drawn at the screen's resolution)
-      const key = LP ? 'hi' : 'hi4'; if (!window.ART[name][key]) { ok(); return; }
-      const hi = new Image(); hi.onload = () => { const c2 = document.createElement('canvas'); c2.width = hi.width; c2.height = hi.height; c2.getContext('2d').drawImage(hi, 0, 0); SHEETS[name][key] = c2; ok(); };
-      hi.onerror = () => ok(); hi.src = window.ART[name][key];
+      // a frames sheet comes as its @4x frames only (build.mjs): its 1x size is in its meta, its 1x pixels are not needed
+      if (!A.png) { SHEETS[name] = { meta: A.meta, canvas: null, px: null, w: A.meta.w, h: A.meta.h, hi4: toCanvas(img) }; ok(); return; }
+      const c = toCanvas(img);
+      SHEETS[name] = { meta: A.meta, canvas: c, px: c.getContext('2d').getImageData(0, 0, img.width, img.height).data, w: img.width, h: img.height };
+      if (!A.hi4) { ok(); return; }
+      const hi = new Image(); hi.onload = () => { SHEETS[name].hi4 = toCanvas(hi); ok(); };
+      hi.onerror = () => ok(); hi.src = A.hi4;
     };
     img.onerror = () => fail(new Error('art sheet not decodable: ' + name));
-    img.src = window.ART[name].png;
+    img.src = A.png || A.hi4;
   }))).then(() => {
     for (const [sheet, S] of Object.entries(SHEETS)) {
       for (const [key, r] of Object.entries(S.meta.sprites)) {
@@ -1113,41 +1114,15 @@ function eraseFrom(src, rects) {
 // LP_MODELS[key]: () => LPM, built once.
 const LP_MODELS = {}, lpCache = {};
 let LP_CHEST = null, LP_TILES = null, LP_WALL = null;   // LP_WALL(colour, along, y): a wall's colour at a pixel, by the legend's wall colour   // the chest with its lid at an angle (radians); the ground tiles painted in code
-// the low-poly page: the figures' and effects' sheets at 2x: resampled from the original drawing when the sheet has its @2x
-// frames, else enlarged by Scale2x (EPX, Eric Johnston 1992; Andrea Mazzoleni's
-// Scale2x): each pixel becomes four, a corner taking a neighbour's colour where two neighbours agree, so diagonals and
-// curves get twice the steps and nothing blurs. Same size in the world, twice the pixels. window.__px2 = false: off
-const lpPx2 = {};
+// the figures' and effects' sheets (the frames sheets) at 4x on both pages: the game carries only their @4x frames
+// (tools/art.mjs resamples them from the original drawing), each put at four times its 1x place, so the frames'
+// rectangles, divided by the sheet's 1x size, still find them. A sheet without them (icons, tiles) is drawn as it is
+const lpPx4 = {};
 function lpSheetCanvas(sheet) {
-  const SH = SHEETS[sheet]; if (window.__px2 === false) return SH.canvas;
-  // diorama.html: the figures at 4x when the sheet has them, each frame at four times its 1x place
-  if (!LP) {
-    if (!SH.hi4) return SH.canvas; if (lpPx2[sheet]) return lpPx2[sheet];
-    const c = document.createElement('canvas'); c.width = SH.w * 4; c.height = SH.h * 4; const x = c.getContext('2d');
-    for (const r of Object.values(SH.meta.sprites)) if (r.hi4) x.drawImage(SH.hi4, r.hi4.x, r.hi4.y, r.hi4.w, r.hi4.h, r.x * 4, r.y * 4, r.w * 4, r.h * 4);
-    return (lpPx2[sheet] = c);
-  }
-  if (lpPx2[sheet]) return lpPx2[sheet];
-  // frames resampled at 2x from the original drawing (tools/art.mjs): each put at twice its 1x place, so the frames'
-  // rectangles, divided by the sheet's size, still find them
-  if (SH.hi) {
-    const c = document.createElement('canvas'); c.width = SH.w * 2; c.height = SH.h * 2; const x = c.getContext('2d');
-    for (const r of Object.values(SH.meta.sprites)) if (r.hi) x.drawImage(SH.hi, r.hi.x, r.hi.y, r.hi.w, r.hi.h, r.x * 2, r.y * 2, r.w * 2, r.h * 2);
-    return (lpPx2[sheet] = c);
-  }
-  const W = SH.w, H = SH.h, s = SH.px, c = document.createElement('canvas'); c.width = W * 2; c.height = H * 2;
-  const x = c.getContext('2d'), im = x.createImageData(W * 2, H * 2), d = im.data;
-  const at = (i, j) => { i = i < 0 ? 0 : i >= W ? W - 1 : i; j = j < 0 ? 0 : j >= H ? H - 1 : j; return (j * W + i) * 4; };
-  const same = (a, b) => s[a] === s[b] && s[a + 1] === s[b + 1] && s[a + 2] === s[b + 2] && (s[a + 3] > 127) === (s[b + 3] > 127);
-  const put = (o, k) => { d[o] = s[k]; d[o + 1] = s[k + 1]; d[o + 2] = s[k + 2]; d[o + 3] = s[k + 3]; };
-  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-    const P0 = at(i, j), A2 = at(i, j - 1), B2 = at(i + 1, j), C2 = at(i - 1, j), D2 = at(i, j + 1), o = ((j * 2) * W * 2 + i * 2) * 4, row = W * 2 * 4;
-    let e0 = P0, e1 = P0, e2 = P0, e3 = P0;
-    if (!same(A2, D2) && !same(C2, B2)) { if (same(C2, A2)) e0 = C2; if (same(A2, B2)) e1 = B2; if (same(C2, D2)) e2 = C2; if (same(D2, B2)) e3 = B2; }
-    put(o, e0); put(o + 4, e1); put(o + row, e2); put(o + row + 4, e3);
-  }
-  x.putImageData(im, 0, 0);
-  return (lpPx2[sheet] = c);
+  const SH = SHEETS[sheet]; if (!SH.hi4) return SH.canvas; if (lpPx4[sheet]) return lpPx4[sheet];
+  const c = document.createElement('canvas'); c.width = SH.w * 4; c.height = SH.h * 4; const x = c.getContext('2d');
+  for (const r of Object.values(SH.meta.sprites)) if (r.hi4) x.drawImage(SH.hi4, r.hi4.x, r.hi4.y, r.hi4.w, r.hi4.h, r.x * 4, r.y * 4, r.w * 4, r.h * 4);
+  return (lpPx4[sheet] = c);
 }
 const lpRGB = (c) => [c >> 16 & 255, c >> 8 & 255, c & 255];
 const lpShade = (c, k) => { const [r, g, b] = lpRGB(c); const f = (v) => Math.max(0, Math.min(255, Math.round(v * k))); return f(r) << 16 | f(g) << 8 | f(b); };
