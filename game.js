@@ -3228,12 +3228,13 @@ function holePass() {
 //   it is 0 (so real materials, sprites cut out by their alpha, shadow casters unseen, exactly as the player sees it).
 //   Returns the sky's pixels (counted as in a 640x360 picture), their box on screen (fractions of the width and height
 //   from the top left), and how many of them look down on the map itself (their line of sight meets the ground plane
-//   inside it): a hole, where the rest is the view reaching past the board's edge
-function skyPass() {
+//   inside it): a hole, where the rest is the view reaching past the board's edge. stride: every stride-th pixel each way
+//   only (a missing chunk is thousands of pixels; the checks that look every frame of a turn use 4)
+function skyPass(stride = 1) {
   const w = rt.width, h = rt.height, px = new Uint8Array(w * h * 4); renderer.readRenderTargetPixels(rt, 0, 0, w, h, px);
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), k = (640 * 360) / (w * h);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), k = (640 * 360) / (w * h) * stride * stride;
   let n = 0, inside = 0, x0 = 1, y0 = 1, x1 = 0, y1 = 0;
-  for (let i = 0; i < w * h; i++) if (px[i * 4 + 3] < 3) {
+  for (let yy = 0; yy < h; yy += stride) for (let xx = 0; xx < w; xx += stride) { const i = yy * w + xx; if (px[i * 4 + 3] >= 3) continue;
     n++; const x = (i % w) / w, y = 1 - (Math.floor(i / w) + 1) / h; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
     a.set(x * 2 - 1, 1 - y * 2, -1).unproject(cam); b.set(x * 2 - 1, 1 - y * 2, 1).unproject(cam);
     const t = a.y / (a.y - b.y), gx = a.x + (b.x - a.x) * t, gz = a.z + (b.z - a.z) * t; if (A && gx > .5 && gz > .5 && gx < A.W - .5 && gz < A.D - .5) inside++;
@@ -4590,6 +4591,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   refreshTitle(); ui.screen = 'title'; showScreen('title');
   requestAnimationFrame(frame);
   // hooks for the headless checks
+  const camOnMark = () => { if (!A || !player) return; const [tx, tz] = camGoal(Math.max(Vz, minV())); camT.set(tx, A.groundY(player.x, player.z) * .5, tz); };
   window.__game = {
     state: () => ({ screen: ui.screen, area: A && A.def.id, x: player && player.x, z: player && player.z, fps, tris: A && A.tris, buildMs: A && A.buildMs, sprites: SPRITES.length,
       calls, chunkMs: A && Math.round(A.chunkMs), hp: G && G.hp, ink: G && Math.floor(G.ink), xp: G && G.xp, level: G && G.level, coins: G && G.coins, enemies: enemies.map((e) => [e.type, e.state, e.hp, +e.x.toFixed(1), +e.z.toFixed(1)]), dlg: !!dlg, near: nearAct && nearAct.label, quests: G && G.quests }),
@@ -4608,8 +4610,9 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     sim: (secs, bot) => { const n = Math.round(secs / SIM); for (let i = 0; i < n; i++) { if (bot && bot(i * SIM) === false) return i * SIM; step(SIM); flatsDraw(SIM); } return secs; },
     clearEnemies: () => clearEnemies(),
     internals: () => ({ enemies, pickups, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART, scene, matSlab, cam }),
-    view: (y) => { yaw = yawT = y; intro = 1; },
-    idPass: () => idPass(), holePass: () => holePass(), skyPass: () => skyPass(), qaImage: () => qaImage(),
+    // view and zoom put the camera on its mark at once, as entering a place does (else it eases there over ~2 s)
+    view: (y) => { yaw = yawT = y; intro = 1; camOnMark(); },
+    idPass: () => idPass(), holePass: () => holePass(), skyPass: (s) => skyPass(s), qaImage: () => qaImage(),
     rescale: (k) => { window.__ss = k; resize(); },
     camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: viewV(Math.max(Vz, minV())), rt: [rt.width, rt.height], k: Math.max(1, Math.round(bh / Math.max(1, rt.height))), shift: [postU.uShift.value.x * rt.width, postU.uShift.value.y * rt.height] }),
     shadowAt: (x, z) => { A.shadowPin = x === undefined ? null : { x, z }; },
@@ -4628,10 +4631,17 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     parts: (k) => { const s = sp[k]; return s.pixel ? { front: 2 * s.layF.length, back: 2 * s.layB.length, sides: 2 * s.strips.length, roof: 2 * s.low.length } : { faces: 2 * s.low.length }; },
     low: (k) => sp[k].low.map((q) => ({ n: q.n.map((v) => +v.toFixed(2)), y: q.p.map((p) => p[1]), layer: q.layer })),
     atlas: () => ({ AW2, AH, sprites: AP.sprites, px: (x, y) => [...atlasPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)], aux: (x, y) => [...auxPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)] }),
-    zoom: (v) => { VT = Vz = v; },
+    zoom: (v) => { VT = Vz = v; camOnMark(); },
     draw: () => draw(1 / 60),
+
     mem: () => ({ geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, materials: allMats.length, programs: renderer.info.programs.length }),
-    clock: () => time, shadowDraws: () => shadowDraws, talk: () => openDialogue({ name: 'who.cat', lines: [['cat', 'i.2']] }),
+    // run: game time by hand as the frame loop runs it (the simulation at 120 Hz, a frame drawn every 1/60 s), as fast as
+    // the machine goes: the checks play minutes of game in seconds, the same on any machine
+    run: (secs) => { let d = 0; for (let t = 0; t < secs - 1e-9; t += SIM) { step(SIM); d += SIM; if (d >= 1 / 60 - 1e-9) { d -= 1 / 60; draw(1 / 60); } } },
+    // introNow: the opening at once: its dialogue (else 2.2 s later) and the camera's zoom in (else 2.8 s)
+    introNow: () => { intro = 1; clearTimeout(introT); if (!G.flags.intro && CHAPTER.intro) CHAPTER.intro(() => { G.flags.intro = true; }); },
+    // (busy: a fade between places, timed by the page in real time)
+    clock: () => time, busy: () => transitioning, shadowDraws: () => shadowDraws, talk: () => openDialogue({ name: 'who.cat', lines: [['cat', 'i.2']] }),
     save: () => saveGame(), saved: () => loadSave(), resume: () => continueGame(), checkSave: (o) => checkSave(o), importCode: (c) => { $('codeIn').value = c; submitCode(); },
   };
 })();
