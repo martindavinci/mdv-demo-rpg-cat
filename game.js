@@ -1309,9 +1309,10 @@ function lpFigure(key, o) {
   a.mesh = mesh;
   const M = {}, tmp = new THREE.Matrix4(), rot = new THREE.Matrix4(), e = new THREE.Euler(), V3 = new THREE.Vector3(), N3 = new THREE.Vector3(), root = new THREE.Matrix4(), nm = new THREE.Matrix3();
   a.pose = () => {
+    if (a.far) { mesh.visible = false; return; }   // far away (enemiesStep): not posed, not drawn
     const want = Math.atan2(a.fx, a.fz); let d = want - a.face; d = Math.atan2(Math.sin(d), Math.cos(d)); a.face += d * (a.anim ? 1 : .35);   // turn toward where it goes
     // (window.__still: the checks hold the idle motion, breathing and glancing, to compare frames)
-    const t = window.__still ? 0 : typeof simTime !== 'undefined' ? simTime : performance.now() / 1000, P0 = def.pose(a, t) || {}, R = P0.root || {}, y = A.groundY(a.x, a.z) + a.lift;
+    const t = window.__still ? 0 : typeof simTime !== 'undefined' ? simTime : performance.now() / 1000, P0 = def.pose(a, t) || {}, R = P0.root || {}, y = A.groundY(a.x, a.z) + a.lift; a.poseT = t;   // (poseT: its shadow follows the pose, castersSig)
     root.makeTranslation(a.x, y + (R.y || 0) * P, a.z).multiply(tmp.makeRotationY(a.face)).multiply(rot.makeRotationFromEuler(e.set(R.rx || 0, 0, R.rz || 0))).multiply(tmp.makeScale(P * a.size, P * a.size * (R.sy || 1), P * a.size));
     for (const k of names) {
       const part = def.parts[k], q = P0[k] || {}, pv = part.pivot || [0, 0, 0];
@@ -1403,11 +1404,15 @@ const CARD_TEST = 'vec4 vxT = texture2D(map, vUv); if (vxT.a < 0.4) discard; vec
 function voxelMaterial(kind, o) {
   const ground = kind === 'ground', sprite = kind === 'sprite', card = kind === 'card', slab = kind === 'slab' || card;
   const m = new THREE.MeshPhongMaterial({ color: 0xffffff, specular: 0x000000, shininess: 0, map: ground ? groundTex : sprite ? o.map : card ? cardTexture() : slab ? atlasTex : null, alphaTest: sprite ? .5 : 0 });
+  // the chunk's own height-and-lamp texture, taken now: the shader compiles at the first draw, after an area that builds
+  // every chunk at once has built the last one, and all of them drew their ground with its lamps
+  const ownHeight = ground ? heightTex : null;
   m.onBeforeCompile = (sh) => {
+    m.userData.sh = sh;   // its uniforms, for the checks (tools/resource-check.mjs)
     sh.uniforms.uShadowMat = { value: sun.shadow.matrix };
     sh.uniforms.uGlow = uGlow;
     sh.uniforms.uLampCol = uLampCol;
-    if (ground) sh.uniforms.uHeightTex = { value: heightTex };
+    if (ground) sh.uniforms.uHeightTex = { value: ownHeight };
     if (slab) sh.uniforms.uAux = { value: auxTex };
     if (slab || ground) { const im = m.map.image; sh.uniforms.uAtlas = { value: new THREE.Vector2(im.width, im.height) }; }
     if (sprite) { sh.uniforms.uProbe = { value: o.probe }; sh.uniforms.uRow = { value: o.row }; sh.uniforms.uLampL = o.lampL; }
@@ -1432,7 +1437,7 @@ function voxelMaterial(kind, o) {
   };
   if ((slab && !card) || ground) { m.extensions = { derivatives: true }; m.userData.aa = true; }   // fwidth, for AA_MAP (WebGL1: OES_standard_derivatives)
   m.customProgramCacheKey = () => 'vx-' + kind + (diag.flat ? '-flat' : '') + (m.userData.aa && diag.aa ? '-aa' : '');
-  allMats.push(m);
+  allMats.push(m); m.addEventListener('dispose', () => { const i = allMats.indexOf(m); if (i >= 0) allMats.splice(i, 1); });   // the list for the AA switch, not a hold on freed ones
   return m;
 }
 let matStatic = null, matSlab = null, slabDepth = null, matCard = null, cardDepth = null;
@@ -1524,7 +1529,9 @@ function camGoal(vv) {
   if (A.W > 48 || A.D > 40) {   // the open world: follow the cat, but never show past the map's edge
     const k = aspect < .8 ? vv * .12 : 0;   // upright phones: the cat sits above the thumbs
     const x = player.x + Math.sin(yaw) * k, z = player.z - (A.camNorth || 1.5) + Math.cos(yaw) * k;
-    const hz = vv / Math.sin(PITCH) / 2, hx = vv * aspect / 2, c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw)), ex = hx * c + hz * sn, ez = hz * c + hx * sn;
+    // (one pixel of the picture to spare: the camera's snap moves it up to half a pixel, and the last column past the
+    // edge showed the sky)
+    const m = vv / Math.max(1, rt.height), hz = vv / Math.sin(PITCH) / 2 + m * 2, hx = vv * aspect / 2 + m, c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw)), ex = hx * c + hz * sn, ez = hz * c + hx * sn;
     return [clamp(x, Math.min(ex, A.W / 2), Math.max(A.W - ex, A.W / 2)), clamp(z, Math.min(ez, A.D / 2), Math.max(A.D - ez, A.D / 2))];
   }
   const W = A.W, D = A.D, f = clamp(1.45 - vv / 26, .4, .9); return [W / 2 + (player.x - W / 2) * f, D / 2 - (A.camNorth || 1.5) + (player.z - D / 2) * f * .6]; }
@@ -1567,7 +1574,7 @@ function applyWire() {
 const _camS = new THREE.Vector3();
 // the view's axes across the screen and up it, in the world, and the step of the figures' grid along them (setCamera)
 const camView = { X: [1, 0, 0], U: [0, 1, 0], step: 0 };
-const viewOf = (x, y, z) => [x * camView.X[0] + z * camView.X[2], x * camView.U[0] + y * camView.U[1] + z * camView.U[2]];
+const _vo = [0, 0], viewOf = (x, y, z) => { _vo[0] = x * camView.X[0] + z * camView.X[2]; _vo[1] = x * camView.U[0] + y * camView.U[1] + z * camView.U[2]; return _vo; };   // (one kept pair: read it at once)
 const snapView = (q) => (camView.step ? Math.round(q / camView.step) * camView.step : q);
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH);
@@ -1575,14 +1582,14 @@ function setCamera() {
   // the camera moves by whole pixels of the render target: moving by a fraction of a pixel, thin lines (shadow edges,
   // window bars) fell on one pixel in a frame and on its neighbour in the next, and shimmered while walking
   const px = v / Math.max(1, rt.height), sy = Math.sin(yaw), cy = Math.cos(yaw);
-  const X = [cy, 0, -sy], U = [-spn * sy, cp, -spn * cy];                   // the camera's right and up, in the world
+  const X = camView.X, U = camView.U; X[0] = cy; X[1] = 0; X[2] = -sy; U[0] = -spn * sy; U[1] = cp; U[2] = -spn * cy;   // the camera's right and up, in the world (kept arrays: no garbage a frame)
   const a = camT.x * X[0] + camT.z * X[2], b = camT.x * U[0] + camT.y * U[1] + camT.z * U[2];
   // drawn at half the screen (a 2x screen), a whole pixel of the scene is two of the screen: the post pass moves the
   // picture by a whole number of screen pixels (k to a picture pixel), so the view walks in steps of one screen pixel
   const k = Math.max(1, Math.round(bh / Math.max(1, rt.height))), sub = px / k;
   // figures stand on the picture's pixel grid (snapView). (On their own texels' grid instead, K / 2 or K pixels in
   // lowpoly.html, the view followed the cat in steps of up to three pixels of the picture, six of a 2x screen: it lurched)
-  camView.X = X; camView.U = U; camView.step = px;
+  camView.step = px;
   // where the view stands in effect (the camera's snap and the post pass's shift together): the cat's place on the
   // figures' grid, less the cat's distance from the camera's aim rounded to the shift's steps. The follow lags the cat
   // by a steady distance while it walks, so the cat keeps its place on screen; rounding the camera and the cat each on
@@ -1938,9 +1945,11 @@ function openArea(def) {
     const tris = B.tris + S.tris + idx.length / 3;
     S = prevS; B = prevB;
     return {
-      ci, cj, group, halos, tris, meshes: [staticMesh, slabMesh, gm],
-      water(tick) { if (!water.length) return; for (const i of water) put1(i, waterColor(i, tick)); gCtx.putImageData(gImg, 0, 0); gTex.needsUpdate = true; },
-      dispose() { scene.remove(group); group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material !== matStatic && o.material !== matSlab) o.material.dispose(); }); gTex.dispose(); hTex.dispose(); matGround.dispose(); },
+      ci, cj, group, halos, tris, meshes: [staticMesh, slabMesh, gm], wet: water.length > 0,
+      // (only in view: every water chunk's whole texture, 768 KiB, went up every 0.4 s, seen or not)
+      water(tick) { if (!water.length) return; if (!group.visible) { area.waterSkipped = (area.waterSkipped || 0) + 1; return; } area.waterUp = (area.waterUp || 0) + 1; for (const i of water) put1(i, waterColor(i, tick)); gCtx.putImageData(gImg, 0, 0); gTex.needsUpdate = true; },
+      // its geometry, textures and own materials (the ground's, the halos'); the shared ones (things, cards, shadow casters) stay
+      dispose() { scene.remove(group); group.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); for (const s of halos) s.material.dispose(); gTex.dispose(); hTex.dispose(); matGround.dispose(); },
     };
   }
 
@@ -1956,7 +1965,19 @@ function openArea(def) {
   };
   const sync = () => { lamps = [...chunks.values()].flatMap((c) => c.halos); area.allTris = [...chunks.values()].reduce((a, c) => a + c.tris, 0); };
   area.stream = (x, z, all) => {
-    if (def.keep) { if (chunks.size < NI * NJ) { for (let j = 0; j < NJ; j++) for (let i = 0; i < NI; i++) if (!chunks.has(ckey(i, j))) chunks.set(ckey(i, j), buildChunk(i, j)); sync(); } return; }
+    // a kept area (built whole and kept): the chunks the view shows at once, however many (a hitch is better than a
+    // hole), the others one a frame (all sixteen at once cost some 400 ms on the way in)
+    if (def.keep) {
+      if (chunks.size >= NI * NJ) return;
+      let spare = all ? 0 : 1, n = 0;
+      for (let j = 0; j < NJ; j++) for (let i = 0; i < NI; i++) {
+        if (chunks.has(ckey(i, j))) continue;
+        const now = inView([i * cwu, j * chu, (i + 1) * cwu, (j + 1) * chu], 3, 1, 9); if (!now && !spare) continue; if (!now) spare--;
+        const t0 = performance.now(); chunks.set(ckey(i, j), buildChunk(i, j)); area.chunkMs = Math.max(area.chunkMs, performance.now() - t0); n++;
+      }
+      if (n) { sync(); if (settings.wire) applyWire(); }
+      return;
+    }
     let built = 0;
     for (const [i, j] of want(x, z)) { const k = ckey(i, j); if (chunks.has(k)) continue; const t0 = performance.now(); chunks.set(k, buildChunk(i, j)); area.chunkMs = Math.max(area.chunkMs, performance.now() - t0); built++; if (!all) break; }
     const [i0, j0, i1, j1] = span(viewFoot(20, 20, 26));
@@ -2025,6 +2046,17 @@ const haloTex = (() => { const c = document.createElement('canvas'); c.width = c
 const actors = [];
 const casterMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide });
 
+// one texture per sheet for all its figures (each figure once uploaded its own copy of the whole sheet)
+const sheetTexs = {};
+function sheetTex(sheet) {
+  if (!sheetTexs[sheet]) { const t = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet))); t.encoding = THREE.sRGBEncoding; sheetTexs[sheet] = t; }
+  return sheetTexs[sheet];
+}
+// a frame of the sheet on a figure's plane (PlaneGeometry's corners: top left, top right, bottom left, bottom right)
+function setFrame(geo, r, SH) {
+  const u0 = r.x / SH.w, u1 = (r.x + r.w) / SH.w, v0 = 1 - (r.y + r.h) / SH.h, v1 = 1 - r.y / SH.h, uv = geo.attributes.uv;
+  uv.setXY(0, u0, v1); uv.setXY(1, u1, v1); uv.setXY(2, u0, v0); uv.setXY(3, u1, v0); uv.needsUpdate = true;
+}
 function sheetActor(sheet, views, anims, o) {
   if (LP && settings.fig3d) { const k = views.down === 'cat_down' ? 'cat' : views.down; if (LP_FIGURES[k]) return lpFigure(k, o); }   // lowpoly.html: the figures modelled, when chosen (default: the sheet's pixel art)
   const SH = SHEETS[sheet]; if (!SH) throw new Error('actor: sheet "' + sheet + '" is not in the art');
@@ -2032,7 +2064,7 @@ function sheetActor(sheet, views, anims, o) {
   if (!first) throw new Error(`actor: frame "${views.down}.${idle0}" missing in ${sheet}`);
   const cw = first.w, ch = first.h, [L, U] = first.anchor || [Math.floor(cw / 2), ch];
   const a = Object.assign({ x: 0, z: 0, fx: 0, fz: 1, step: 0, moving: false, anim: null, at: 0, fps: 10, lift: 0, blink: false, size: 1, probe: new THREE.Vector3(), lampL: { value: 0 } }, o || {});
-  a.tex = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet))); a.tex.encoding = THREE.sRGBEncoding;
+  a.tex = sheetTex(sheet);   // shared by every figure of the sheet: the frame is chosen in the plane's UVs (setFrame)
   const g = new THREE.PlaneGeometry(cw * P, ch * P); g.translate((cw / 2 - L) * P, (U - ch / 2) * P, 0);   // the anchor (feet) at the origin
   const gl = g.clone(), n = gl.attributes.normal; for (let i = 0; i < n.count; i++) n.setXYZ(i, 0, 1, 0);   // normal up: light does not change when the view turns
   a.mesh = new THREE.Mesh(gl, voxelMaterial('sprite', { map: a.tex, probe: a.probe, lampL: a.lampL, row: new THREE.Vector2(SPR_Y * P, P) }));
@@ -2044,11 +2076,14 @@ function sheetActor(sheet, views, anims, o) {
   const frame = (row, name) => SH.meta.sprites[name.includes('.') ? name : row + '.' + name] || first;
   const listOf = (name, view) => { const L = anims[name]; return !L ? null : Array.isArray(L) ? L : L[view]; };
   a.pose = () => {
+    // far away (enemiesStep: over 40 units): not drawn, not casting, not posed
+    if (a.far) { a.mesh.visible = a.caster.visible = false; return; }
+    a.caster.visible = true;
     const side = a.fx * Math.cos(yaw) - a.fz * Math.sin(yaw), toward = a.fx * Math.sin(yaw) + a.fz * Math.cos(yaw);
     const sideView = Math.abs(side) > Math.abs(toward), view = sideView ? 'side' : toward > 0 ? 'down' : 'up', row = views[view], flip = sideView && side < 0;
     const own = a.anim && listOf(a.anim, view), list = own || listOf(a.moving ? 'walk' : 'idle', view);
     const i = own ? Math.min(list.length - 1, Math.floor(a.at * a.fps)) : Math.floor(a.step) % list.length, r = frame(row, list[i]);
-    a.tex.repeat.set(r.w / SH.w, r.h / SH.h); a.tex.offset.set(r.x / SH.w, 1 - (r.y + r.h) / SH.h);
+    if (a.frame !== r) { a.frame = r; setFrame(gl, r, SH); setFrame(g, r, SH); }
     const y = A.groundY(a.x, a.z), sx = Math.sin(cur.az), sz = Math.cos(cur.az), k = a.size;
     // on the figures' grid in the view (setCamera): placed anywhere, the figure's texels fell on the picture's pixels
     // differently from frame to frame, and its place on screen against the view's stepped back and forth
@@ -2057,7 +2092,7 @@ function sheetActor(sheet, views, anims, o) {
     a.caster.position.set(a.x, y + a.lift, a.z); a.caster.rotation.y = cur.az; a.caster.scale.set((flip ? -1 : 1) * k, k, k);
     a.probe.set(a.x + sx * .2, y, a.z + sz * .2); a.lampL.value = A.lampLight(a.x, y + .6, a.z, 0, 1, 0);
   };
-  a.dispose = () => { scene.remove(a.mesh); scene.remove(a.caster); a.mesh.geometry.dispose(); a.mesh.material.dispose(); a.caster.customDepthMaterial.dispose(); a.tex.dispose(); actors.splice(actors.indexOf(a), 1); };
+  a.dispose = () => { scene.remove(a.mesh); scene.remove(a.caster); a.mesh.geometry.dispose(); a.caster.geometry.dispose(); a.mesh.material.dispose(); a.caster.customDepthMaterial.dispose(); actors.splice(actors.indexOf(a), 1); };
   actors.push(a);
   return a;
 }
@@ -2138,10 +2173,15 @@ function newGame() {
   G = { v: SAVE_V, area: START.area, x: null, z: null, hp: 1, ink: 0, xp: 0, level: 1, coins: 0, inv: {}, eq: { weapon: 'quill_sword', armour: null, charm: null }, quests: {}, flags: {}, opened: {}, seen: {} };
   G.hp = stats().hp; G.ink = stats().ink;
 }
+// the hero's numbers depend on the level and the three slots only: kept until one of them changes (read every frame by
+// the HUD and the combat; the object is shared, read it, never write it)
+let statsKey = '', statsVal = null;
 function stats() {
+  const key = G.level + '|' + G.eq.weapon + '|' + G.eq.armour + '|' + G.eq.charm; if (key === statsKey) return statsVal;
   const L = G.level - 1, eq = Object.values(G.eq).filter(Boolean).map((k) => ITEMS[k] || {});
   const sum = (f) => eq.reduce((a, i) => a + (i[f] || 0), 0);
-  return { hp: 24 + L * 6 + sum('hp'), ink: 30 + sum('ink'), atk: 5 + L * 2 + sum('atk'), def: 1 + L + sum('def') };
+  statsKey = key; statsVal = Object.freeze({ hp: 24 + L * 6 + sum('hp'), ink: 30 + sum('ink'), atk: 5 + L * 2 + sum('atk'), def: 1 + L + sum('def') });
+  return statsVal;
 }
 const xpToNext = () => G.level >= 5 ? 0 : LEVEL_XP[G.level + 1] - G.xp;
 function gainXp(n) {
@@ -2173,8 +2213,14 @@ function loadSave() { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY))
 const hasSave = () => !!loadSave();
 function checkSave(s) {
   if (!s || typeof s !== 'object' || typeof s.v !== 'number' || s.v > SAVE_V || !AREAS[s.area]) return null;
-  const base = { inv: {}, eq: { weapon: 'quill_sword', armour: null, charm: null }, quests: {}, flags: {}, opened: {}, seen: {}, coins: 0, xp: 0, level: 1 };
-  return Object.assign(base, s);   // older saves miss newer fields; the defaults fill them
+  // older saves miss newer fields and a hand-edited or damaged one may hold anything: records that are not records and
+  // numbers that are not numbers take the defaults
+  const rec = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? o : {}), num = (n, d) => (Number.isFinite(n) ? n : d);
+  return Object.assign({}, s, {
+    inv: rec(s.inv), quests: rec(s.quests), flags: rec(s.flags), opened: rec(s.opened), seen: rec(s.seen), eq: Object.assign({ weapon: 'quill_sword', armour: null, charm: null }, rec(s.eq)),
+    coins: Math.max(0, num(s.coins, 0)), xp: Math.max(0, num(s.xp, 0)), level: Math.min(5, Math.max(1, Math.round(num(s.level, 1)))), hp: num(s.hp, 0), ink: num(s.ink, 0),
+    x: Number.isFinite(s.x) ? s.x : null, z: Number.isFinite(s.z) ? s.z : null,
+  });
 }
 
 // code: JSON → UTF-8 → base32 (no look-alike letters) with a CRC-32, in groups of five
@@ -2351,7 +2397,7 @@ function enemiesStep(dt) {
   let engaged = false;
   for (let k = enemies.length - 1; k >= 0; k--) {
     const e = enemies[k], T = e.T, a = e.a, dist = near(e, player), sp = T.speed * (e.slow > 0 ? .45 : 1);
-    if (dist > 40 && e.state !== 'defeat') { a.mesh.visible = false; continue; }
+    a.far = dist > 40 && e.state !== 'defeat'; if (a.far) continue;   // (the pose hides it: setting visible here, the pose undid it)
     e.slow = Math.max(0, e.slow - dt); e.st -= dt; if (a.anim) a.at += dt;
     const move = (vx, vz) => { const nx = e.x + vx * dt, nz = e.z + vz * dt; if (!A.blocked(nx, e.z, e.x, e.z, T.fly)) e.x = nx; else return false; if (!A.blocked(e.x, nz, e.x, e.z, T.fly)) e.z = nz; else return false; return true; };
     const face = (x, z) => { const l = Math.hypot(x - e.x, z - e.z); if (l > 1e-3) { e.fx = (x - e.x) / l; e.fz = (z - e.z) / l; } };
@@ -2679,7 +2725,7 @@ function openChestProp(id) {
 function chestsTick(dt) {
   let moving = false;
   for (const c of chests.values()) if (c.swing !== undefined) { c.swing = Math.min(1, c.swing + dt / CHEST.time); const e = 1 - Math.pow(1 - c.swing, 3); c.lid = CHEST.open * (reduceMotion ? 1 : e); if (c.swing >= 1) delete c.swing; moving = true; }
-  if (moving) chestsBuild();
+  if (moving) { chestsBuild(); shadowHold = Math.max(shadowHold, 1); }   // the lid casts a shadow
 }
 function clearChests() { if (chestMesh) chestMesh.dispose(); chestMesh = null; chests.clear(); }
 function clearNpcs() { for (const n of npcs) n.a.dispose(); npcs.length = 0; }
@@ -2950,7 +2996,7 @@ function openCodeBox() { $('codeIn').value = ''; $('codeErr').textContent = ''; 
 function submitCode() {
   const r = readCode($('codeIn').value);
   if (r.error) { $('codeErr').textContent = t(r.error, { ch: r.ch }); sfx('no'); return; }
-  G = r.save; saveGame(); beginPlay();
+  G = r.save; beginPlay(); saveGame();   // saved once the cat stands where the code says (the save takes its place from the scene)
 }
 
 // ---- engine/80-loop.js
@@ -3073,8 +3119,12 @@ function draw(dt) {
   // from the old box to the new one, and the shadows' edges jumped a pixel while walking
   A.update(dt, player.x, player.z);
   applyTod(1 - Math.exp(-dt * 2.2)); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); chestsTick(dt); floatsDraw(dt); hudDraw(); bossDraw(); toastTick(dt); musicTick();
-  if (player.moving || enemies.length || pickups.length || player.anim || dlg || Math.abs(yaw - yawT) > 1e-3 || Math.abs(cur.az - TODS[tod].az) + Math.abs(cur.el - TODS[tod].el) > 1e-4) shadowHold = 3;
-  if (shadowHold > 0) { shadowHold--; sun.shadow.needsUpdate = true; }
+  // the shadow map is redrawn when what casts a shadow changed: a figure moved or showed another frame (castersSig), the
+  // view turned, the sun moved, a chest's lid swung (chestsTick). It was redrawn every frame while any enemy, pickup or
+  // dialogue existed, still or not
+  const sig = castersSig(); if (sig !== lastCasters) { lastCasters = sig; shadowHold = Math.max(shadowHold, 1); }
+  if (player.moving || player.anim || Math.abs(yaw - yawT) > 1e-3 || Math.abs(cur.az - TODS[tod].az) + Math.abs(cur.el - TODS[tod].el) > 1e-4) shadowHold = 3;
+  if (shadowHold > 0) { shadowHold--; sun.shadow.needsUpdate = true; shadowDraws++; }
   postU.uTime.value = time; postU.uStars.value = cur.stars; postU.uBgTop.value.set(cur.top[0], cur.top[1], cur.top[2]); postU.uBgBot.value.set(cur.bot[0], cur.bot[1], cur.bot[2]);
   renderer.info.reset();
   renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(scene, cam);
@@ -3082,16 +3132,24 @@ function draw(dt) {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 
+let lastDraw = 0, ctxLost = false, shadowDraws = 0, lastCasters = '';
+// what the figures' shadows depend on: where each stands and which frame it shows
+function castersSig() { let s = ''; for (const a of actors) if (!a.far) s += (a.mesh && a.mesh.visible ? 1 : 0) + ',' + a.x.toFixed(3) + ',' + a.z.toFixed(3) + ',' + (a.lift || 0) + ',' + (a.frame ? a.frame.x + ':' + a.frame.y : a.poseT !== undefined ? a.poseT.toFixed(3) + ':' + a.face.toFixed(3) : a.at) + ',' + (a.caster ? a.caster.scale.x : 0) + ';'; return s; }   // (shadowDraws: the shadow map's redraws, for tools/perf-check.mjs)
+// the GPU may drop the context (a driver reset, too many pages): the game waits for it, then draws from a clean slate
+canvas.addEventListener('webglcontextlost', () => { ctxLost = true; });
+canvas.addEventListener('webglcontextrestored', () => { ctxLost = false; last = performance.now(); acc = 0; drawAcc = 0; resize(); shadowHold = 8; });
 function frame(now) {
   requestAnimationFrame(frame);
   const real = Math.min(.25, (now - last) / 1000); last = now;
-  if (document.hidden || frozen) return;   // frozen: a check drives the simulation itself
+  // frozen: a check drives the simulation itself. ctxLost: the GPU dropped the WebGL context; nothing moves unseen
+  if (document.hidden || frozen || ctxLost) { lastDraw = 0; return; }
   pollPad();
   acc += real; let n = 0; while (acc >= SIM && n < 30) { step(SIM); acc -= SIM; n++; } if (n === 30) acc = 0;
   // the cap keeps its phase: on a 144 Hz screen a 60 cap draws 60 times a second, not every third refresh
   drawAcc += real; const budget = 1 / settings.fps; if (drawAcc + .002 < budget) return; drawAcc = Math.max(0, drawAcc - budget); if (drawAcc > budget) drawAcc = 0;
   draw(budget);
-  frames++; fpsT += budget;
+  // the rate reported is the one drawn: the time between draws, not the cap's length (that reported the cap always)
+  frames++; fpsT += lastDraw ? Math.min(.25, (now - lastDraw) / 1000) : budget; lastDraw = now;
   if (fpsT >= .5) { fps = frames / fpsT; frames = 0; fpsT = 0; if (!$('menu').hidden) $('diag').textContent = t('diag', { fps: Math.round(fps), ms: (1000 / Math.max(1, fps)).toFixed(1), tris: Math.round((A ? A.tris : 0) / 1000), verts: Math.round((A ? A.tris : 0) * 2 / 1000),   // every face is a quad of its own: 4 vertices, 2 triangles
  calls: calls + 1, build: A ? A.buildMs : 0 }); }
 }
@@ -3166,20 +3224,21 @@ function holePass() {
   black.dispose(); qaLast = px;
   return { magenta: n, at: n ? [Math.round(sx / n), Math.round(sy / n)] : null, spots: [...cells].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, m]) => [...c.split(',').map(Number), m]) };
 }
-// skyPass: every mesh white on black: what stays black is the sky, seen past the map's edge or through a chunk not built.
-//   Returns the sky's pixels (of 640x360), their box on screen (fractions of the width and height from the top left),
-//   and how many of them look down on the map itself (their line of sight meets the ground plane inside it): a hole,
-//   where the rest is the view reaching past the board's edge
+// skyPass: the sky in the last drawn picture: the render target's alpha, which the post pass turns into the sky where
+//   it is 0 (so real materials, sprites cut out by their alpha, shadow casters unseen, exactly as the player sees it).
+//   Returns the sky's pixels (counted as in a 640x360 picture), their box on screen (fractions of the width and height
+//   from the top left), and how many of them look down on the map itself (their line of sight meets the ground plane
+//   inside it): a hole, where the rest is the view reaching past the board's edge
 function skyPass() {
-  const white = qaFlat(0xffffff), px = qaRender(() => white), a = new THREE.Vector3(), b = new THREE.Vector3();
+  const w = rt.width, h = rt.height, px = new Uint8Array(w * h * 4); renderer.readRenderTargetPixels(rt, 0, 0, w, h, px);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), k = (640 * 360) / (w * h);
   let n = 0, inside = 0, x0 = 1, y0 = 1, x1 = 0, y1 = 0;
-  for (let k = 0; k < px.length; k += 4) if (!(px[k] | px[k + 1] | px[k + 2])) {
-    n++; const x = ((k / 4) % 640) / 640, y = 1 - (Math.floor(k / 4 / 640) + 1) / 360; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  for (let i = 0; i < w * h; i++) if (px[i * 4 + 3] < 3) {
+    n++; const x = (i % w) / w, y = 1 - (Math.floor(i / w) + 1) / h; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
     a.set(x * 2 - 1, 1 - y * 2, -1).unproject(cam); b.set(x * 2 - 1, 1 - y * 2, 1).unproject(cam);
     const t = a.y / (a.y - b.y), gx = a.x + (b.x - a.x) * t, gz = a.z + (b.z - a.z) * t; if (A && gx > .5 && gz > .5 && gx < A.W - .5 && gz < A.D - .5) inside++;
   }
-  white.dispose(); qaLast = px;
-  return { sky: n, inside, box: n ? [x0, y0, x1, y1].map((v) => +v.toFixed(2)) : null };
+  return { sky: Math.round(n * k), inside: Math.round(inside * k), box: n ? [x0, y0, x1, y1].map((v) => +v.toFixed(2)) : null, w, h };
 }
 
 /* ---------- fingerprints: what a thing is, as data, for the approvals (tools/approve-check.mjs, the viewer) ---------- */
@@ -3516,7 +3575,7 @@ ENEMIES.blot_scribe = {
   anims: { idle: ['idle1', 'idle2'], walk: ['idle1', 'idle2'], windup: ['sweep_windup'], attack: ['sweep'], cast: ['blot_scribe_b.rain_cast'], split: ['blot_scribe_b.split'], hurt: ['blot_scribe_b.hurt'], defeat: ['blot_scribe_b.defeat'] },
   onHit(e) { if (!e.phase2 && e.hp < e.T.hp / 2) { e.phase2 = true; e.state = 'split'; e.st = .9; e.a.anim = 'split'; e.a.at = 0; toast(t('toast.boss2')); shake(.3); } },
   ai(e, dt, dist, move, face) {
-    const T = e.T, a = e.a; e.cool = (e.cool || 1.5) - dt; a.at += dt;
+    const T = e.T, a = e.a; e.cool = (e.cool || 1.5) - dt;   // (e.st and a.at run in enemiesStep: counted here too, they ran twice as fast)
     switch (e.state) {
       case 'wander': case 'notice': case 'chase': {
         a.anim = null; face(player.x, player.z);
@@ -3528,27 +3587,24 @@ ENEMIES.blot_scribe = {
         }
         break;
       }
-      case 'windup': e.st -= dt; face(player.x, player.z); if (e.st <= 0) { e.state = 'sweep'; e.st = .4; a.anim = 'attack'; a.at = 0; e.hit = 0; sfx('swing3'); } break;
+      case 'windup': face(player.x, player.z); if (e.st <= 0) { e.state = 'sweep'; e.st = .4; a.anim = 'attack'; a.at = 0; e.hit = 0; sfx('swing3'); } break;
       case 'sweep': {   // a half-circle in front, quill's length
-        e.st -= dt;
-        if (!e.hit) { e.hit = 1; fx('slash', e.x + e.fx * 1.6, e.z + e.fz * 1.6, { size: 2.4, y: A.groundY(e.x, e.z) + .6 }); const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz); if (d < T.reach + .4 && (dx * e.fx + dz * e.fz) / (d || 1) > -.1) hurtHero(T.atk, e.x, e.z); }
+                if (!e.hit) { e.hit = 1; fx('slash', e.x + e.fx * 1.6, e.z + e.fz * 1.6, { size: 2.4, y: A.groundY(e.x, e.z) + .6 }); const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz); if (d < T.reach + .4 && (dx * e.fx + dz * e.fz) / (d || 1) > -.1) hurtHero(T.atk, e.x, e.z); }
         if (e.st <= 0) { e.state = 'chase'; e.cool = e.phase2 ? 1.2 : 1.7; }
         break;
       }
       case 'lines': {   // a line of marks from the Scribe toward the cat
-        e.st -= dt;
-        if (!e.done && e.st < .6) { e.done = true; const l = dist || 1, ux = (player.x - e.x) / l, uz = (player.z - e.z) / l; for (let i = 1; i <= 6; i++) hazard(e.x + ux * i * 1.3, e.z + uz * i * 1.3, .6 + i * .07, .8, T.atk - 2); }
+                if (!e.done && e.st < .6) { e.done = true; const l = dist || 1, ux = (player.x - e.x) / l, uz = (player.z - e.z) / l; for (let i = 1; i <= 6; i++) hazard(e.x + ux * i * 1.3, e.z + uz * i * 1.3, .6 + i * .07, .8, T.atk - 2); }
         if (e.st <= 0) { e.state = 'chase'; e.cool = 1.6; }
         break;
       }
       case 'rain': {   // marks around and under the cat
-        e.st -= dt;
-        if (!e.done && e.st < .6) { e.done = true; hazard(player.x, player.z, .7, .9, T.atk - 2); for (let i = 0; i < 6; i++) { const an = R() * Math.PI * 2, r = 1.5 + R() * 3.5; hazard(player.x + Math.cos(an) * r, player.z + Math.sin(an) * r, .6 + R() * .5, .9, T.atk - 2); } }
+                if (!e.done && e.st < .6) { e.done = true; hazard(player.x, player.z, .7, .9, T.atk - 2); for (let i = 0; i < 6; i++) { const an = R() * Math.PI * 2, r = 1.5 + R() * 3.5; hazard(player.x + Math.cos(an) * r, player.z + Math.sin(an) * r, .6 + R() * .5, .9, T.atk - 2); } }
         if (e.st <= 0) { e.state = 'chase'; e.cool = 1.4; }
         break;
       }
       case 'split': {   // phase 2 and then every so often: two Blots, never more than four
-        e.st -= dt; a.anim = 'split';
+        a.anim = 'split';
         if (e.st <= 0) { if (enemies.filter((o) => o.type === 'blot' && o.hp > 0).length < 4) for (const s of [-1, 1]) { const b = spawnEnemy('blot', e.x + s * 1.6, e.z + 1.2); b.aware = true; b.T = Object.assign({}, b.T, { coins: [0, 0], xp: 1, drops: [] }); } e.state = 'chase'; e.cool = 1.2; e.splitT = 9; }
         break;
       }
@@ -3733,7 +3789,9 @@ Object.assign(QUESTS, {
   },
 });
 
-CHAPTER.intro = () => openDialogue({ name: 'who.cat', lines: [['cat_worried', 'i.1'], ['cat', 'i.2']], after: () => startQuest('main') });
+CHAPTER.intro = (done) => openDialogue({ name: 'who.cat', lines: [['cat_worried', 'i.1'], ['cat', 'i.2']], after: () => { startQuest('main'); done(); } });
+// saves from before the intro's flag waited for its dialogue: the intro seen, the main quest never given; seen again
+CHAPTER.mend = () => { if (G.flags.intro && !G.quests.main) delete G.flags.intro; };
 
 // build the current area again (a gate opened): a short fade, the cat stays where it is
 async function reopen() {
@@ -3782,7 +3840,8 @@ Object.assign(AREA_HOOKS, {
   },
   crypt_in() { leverDone = []; },
   crypt_boss() {
-    if (G.flags.boss_done) return;
+    // the page the Scribe drops lies on the floor until it is taken; saved before that, it lies there again
+    if (G.flags.boss_done) { if (!has('page_3')) drop('page_3', 14, 8); return; }
     const b = spawnEnemy('blot_scribe', 14, 7);
     b.onDefeat = () => { setFlag('boss_done'); drop('page_3', b.x, b.z + 1); toast(t('toast.boss.done')); };
     setTimeout(() => { if (A && A.def.id === 'crypt_boss' && !dlg) openDialogue({ name: 'who.scribe', lines: [['scribe', 'sc.1'], ['cat_worried', 'sc.2'], ['scribe', 'sc.3']] }); }, 700);
@@ -4479,12 +4538,16 @@ function beginPlay() {
   enterArea(G.area, G.x !== null && G.x !== undefined ? [G.x, G.z] : null);
   intro = reduceMotion ? 1 : 0;
   canvas.focus({ preventScroll: true });
-  if (!G.flags.intro && CHAPTER.intro) { G.flags.intro = true; setTimeout(CHAPTER.intro, reduceMotion ? 50 : 2200); }
+  // the opening dialogue gives the main quest: its flag is set once the dialogue is done, not when it is scheduled (a
+  // save in between, the tab closed, skipped the quest for good); a save that lost it that way is mended first
+  if (CHAPTER.mend) CHAPTER.mend();
+  clearTimeout(introT); if (!G.flags.intro && CHAPTER.intro) introT = setTimeout(() => { if (ui.screen === 'game') CHAPTER.intro(() => { G.flags.intro = true; }); }, reduceMotion ? 50 : 2200);
 }
+let introT = 0;
 function startGame() { newGame(); beginPlay(); }
 function continueGame() { const s = loadSave(); if (!s) { refreshTitle(); return; } G = s; beginPlay(); }
 function gameOver() { ui.screen = 'over'; showScreen('over'); }
-function toTitle() { ui.screen = 'title'; clearEnemies(); clearNpcs(); refreshTitle(); showScreen('title'); $('hud').hidden = true; $('touch').hidden = true; }
+function toTitle() { clearTimeout(introT); ui.screen = 'title'; clearEnemies(); clearNpcs(); refreshTitle(); showScreen('title'); $('hud').hidden = true; $('touch').hidden = true; }
 function refreshTitle() { $('bContinue').hidden = !hasSave(); }
 function closeShop() { ui.screen = 'game'; showScreen(null); }
 
@@ -4534,7 +4597,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     place: (x, z) => { player.x = x; player.z = z; },
     walk: (x, y) => { input.stickX = x; input.stickY = y; },
     act: (a) => input.queue.push(a),
-    spawn: (type, x, z) => { spawnEnemy(type, x, z); },
+    spawn: (type, x, z) => spawnEnemy(type, x, z),
     flag: (f) => setFlag(f),
     spriteTris: () => Object.fromEntries(SPRITES.map((s) => [s.key, (s.pixel ? 2 * (s.layF.length + s.layB.length + s.strips.length) : 0) + 2 * s.low.length])),
     G: () => G, code: () => saveCode(), read: (c) => readCode(c), enter: (n, at) => enterArea(n, at),
@@ -4544,7 +4607,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     reseed: (n) => reseed(n),
     sim: (secs, bot) => { const n = Math.round(secs / SIM); for (let i = 0; i < n; i++) { if (bot && bot(i * SIM) === false) return i * SIM; step(SIM); flatsDraw(SIM); } return secs; },
     clearEnemies: () => clearEnemies(),
-    internals: () => ({ enemies, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART, scene, matSlab, cam }),
+    internals: () => ({ enemies, pickups, hazards, hero, player, ENEMIES, AREAS, stats, combatT, settings, input, ui, resetHero, SWINGS, DEFS, CODE_ART, scene, matSlab, cam }),
     view: (y) => { yaw = yawT = y; intro = 1; },
     idPass: () => idPass(), holePass: () => holePass(), skyPass: () => skyPass(), qaImage: () => qaImage(),
     rescale: (k) => { window.__ss = k; resize(); },
@@ -4567,6 +4630,9 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     atlas: () => ({ AW2, AH, sprites: AP.sprites, px: (x, y) => [...atlasPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)], aux: (x, y) => [...auxPx.slice((y * AW2 + x) * 4, (y * AW2 + x) * 4 + 4)] }),
     zoom: (v) => { VT = Vz = v; },
     draw: () => draw(1 / 60),
+    mem: () => ({ geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, materials: allMats.length, programs: renderer.info.programs.length }),
+    clock: () => time, shadowDraws: () => shadowDraws, talk: () => openDialogue({ name: 'who.cat', lines: [['cat', 'i.2']] }),
+    save: () => saveGame(), saved: () => loadSave(), resume: () => continueGame(), checkSave: (o) => checkSave(o), importCode: (c) => { $('codeIn').value = c; submitCode(); },
   };
 })();
 })();
