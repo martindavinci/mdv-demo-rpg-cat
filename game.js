@@ -21,7 +21,7 @@ const shade = (c, k) => (Math.min(255, Math.round((c >> 16 & 255) * k)) << 16) |
 
 // settings are preferences only (never game content): language, frame-rate cap, shadows, shake, music and sound volume (0–3)
 const SETTINGS_KEY = 'mdv-rpg-cat-settings';   // mdv-allow-storage: preferences
-const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, flat: false, fig3d: false, shake: true, music: 2, sound: 2 },
+const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, flat: false, shake: true, music: 2, sound: 2 },
   (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; } })());
 if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 2 : 0;   // the first builds stored on/off
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode: keep in memory */ } };
@@ -1107,8 +1107,8 @@ function eraseFrom(src, rects) {
 // stay where they were. A model (LPM) is a list of flat faces, each with a colour: the light comes from the scene (sun,
 // sky, lamps, shadows); the kit adds a soft darkening near the ground (contact shade) and a slight variation per face,
 // so surfaces read as made by hand rather than as plastic. Faces that glow at night (windows) carry glow.
-// LP_MODELS[key]: () => LPM, built once. LP_FIGURES[key]: a figure with parts and a pose function (lpFigure).
-const LP_MODELS = {}, LP_FIGURES = {}, lpCache = {};
+// LP_MODELS[key]: () => LPM, built once.
+const LP_MODELS = {}, lpCache = {};
 let LP_CHEST = null, LP_TILES = null, LP_WALL = null;   // LP_WALL(colour, along, y): a wall's colour at a pixel, by the legend's wall colour   // the chest with its lid at an angle (radians); the ground tiles painted in code
 // lowpoly.html: the figures' and effects' sheets at 2x: resampled from the original drawing when the sheet has its @2x
 // frames, else enlarged by Scale2x (EPX, Eric Johnston 1992; Andrea Mazzoleni's
@@ -1286,50 +1286,6 @@ function lpPut(Bd, m, x, z, o = {}) {
     for (let k = 0; k < 4; k++) { const [a, c] = tf(vn[k][0], vn[k][2]); nrms[k * 3] = a; nrms[k * 3 + 1] = vn[k][1]; nrms[k * 3 + 2] = c; }
     Bd.quadC(pts, n[0], n[1], n[2], cols, f.g, nrms);
   });
-}
-
-/* ---- figures: the cat and the people as parts that move ---- */
-// LP_FIGURES[key] = { parts: { name: { m: LPM (figure space, art px), pivot: [x, y, z], parent } }, pose(a, t) }
-// pose returns per part { rx, ry, rz, x, y, z } (radians, art px) and may set root: { y, rx, rz, sy } for the whole body.
-// One mesh per figure, its vertices moved on the CPU each frame (a few hundred): one draw call, real shadows.
-function lpFigure(key, o) {
-  const def = LP_FIGURES[key], names = Object.keys(def.parts), segs = [];
-  let nv = 0; for (const k of names) { const m = def.parts[k].m; let n = 0; for (const f of m.f) n += f.p.length === 4 ? 6 : 3; segs.push({ k, from: nv, n }); nv += n; }
-  const base = new Float32Array(nv * 3), bn = new Float32Array(nv * 3), col = new Uint8Array(nv * 4);
-  let v = 0;
-  for (const k of names) { const VN = lpVN(def.parts[k].m); for (const [fi, f] of def.parts[k].m.f.entries()) {
-    const tris = f.p.length === 4 ? [[0, 1, 2], [0, 2, 3]] : [[0, 1, 2]], n = lpNormal(f.p), j = 1 + (hash2(fi * 5 + 1, k.length) * 2 - 1) * f.j, c = lpRGB(f.c);
-    for (const t of tris) for (const i of t) { base.set(f.p[i], v * 3); bn.set(VN[fi][i] || n, v * 3); col.set([...c.map((q) => Math.min(255, Math.round(q * j))), f.g ? 255 : 0], v * 4); v++; }
-  } }
-  const g = new THREE.BufferGeometry(), pos = new Float32Array(nv * 3), nrm = new Float32Array(nv * 3), lamp = new Uint8Array(nv);
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
-  g.setAttribute('aCol', new THREE.BufferAttribute(col, 4, true)); g.setAttribute('aLamp', new THREE.BufferAttribute(lamp, 1, true));
-  const mesh = new THREE.Mesh(g, matStatic); mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false; scene.add(mesh);
-  const a = Object.assign({ x: 0, z: 0, fx: 0, fz: 1, step: 0, moving: false, anim: null, at: 0, fps: 10, lift: 0, blink: false, size: 1, face: 0 }, o || {});
-  a.mesh = mesh;
-  const M = {}, tmp = new THREE.Matrix4(), rot = new THREE.Matrix4(), e = new THREE.Euler(), V3 = new THREE.Vector3(), N3 = new THREE.Vector3(), root = new THREE.Matrix4(), nm = new THREE.Matrix3();
-  a.pose = () => {
-    if (a.far) { mesh.visible = false; return; }   // far away (enemiesStep): not posed, not drawn
-    const want = Math.atan2(a.fx, a.fz); let d = want - a.face; d = Math.atan2(Math.sin(d), Math.cos(d)); a.face += d * (a.anim ? 1 : .35);   // turn toward where it goes
-    // (window.__still: the checks hold the idle motion, breathing and glancing, to compare frames)
-    const t = window.__still ? 0 : typeof simTime !== 'undefined' ? simTime : performance.now() / 1000, P0 = def.pose(a, t) || {}, R = P0.root || {}, y = A.groundY(a.x, a.z) + a.lift; a.poseT = t;   // (poseT: its shadow follows the pose, castersSig)
-    root.makeTranslation(a.x, y + (R.y || 0) * P, a.z).multiply(tmp.makeRotationY(a.face)).multiply(rot.makeRotationFromEuler(e.set(R.rx || 0, 0, R.rz || 0))).multiply(tmp.makeScale(P * a.size, P * a.size * (R.sy || 1), P * a.size));
-    for (const k of names) {
-      const part = def.parts[k], q = P0[k] || {}, pv = part.pivot || [0, 0, 0];
-      const m = M[k] || (M[k] = new THREE.Matrix4());
-      m.copy(part.parent ? M[part.parent] : root).multiply(tmp.makeTranslation(pv[0] + (q.x || 0), pv[1] + (q.y || 0), pv[2] + (q.z || 0))).multiply(rot.makeRotationFromEuler(e.set(q.rx || 0, q.ry || 0, q.rz || 0, 'YXZ'))).multiply(tmp.makeTranslation(-pv[0], -pv[1], -pv[2]));
-    }
-    for (const s of segs) {
-      const m = M[s.k]; nm.getNormalMatrix(m);
-      for (let i = s.from; i < s.from + s.n; i++) { V3.fromArray(base, i * 3).applyMatrix4(m).toArray(pos, i * 3); N3.fromArray(bn, i * 3).applyMatrix3(nm).normalize().toArray(nrm, i * 3); }
-    }
-    lamp.fill(Math.min(255, Math.round(A.lampLight(a.x, y + .6, a.z, 0, 1, 0) * 127.5)));
-    g.attributes.position.needsUpdate = g.attributes.normal.needsUpdate = g.attributes.aLamp.needsUpdate = true;
-    mesh.visible = !a.blink;
-  };
-  a.dispose = () => { scene.remove(mesh); g.dispose(); actors.splice(actors.indexOf(a), 1); };
-  actors.push(a);
-  return a;
 }
 
 // for the checks (tools/lp-check.mjs): pairs of faces of a model on one plane (same facing, within 0.05 px), different in
@@ -2058,7 +2014,6 @@ function setFrame(geo, r, SH) {
   uv.setXY(0, u0, v1); uv.setXY(1, u1, v1); uv.setXY(2, u0, v0); uv.setXY(3, u1, v0); uv.needsUpdate = true;
 }
 function sheetActor(sheet, views, anims, o) {
-  if (LP && settings.fig3d) { const k = views.down === 'cat_down' ? 'cat' : views.down; if (LP_FIGURES[k]) return lpFigure(k, o); }   // lowpoly.html: the figures modelled, when chosen (default: the sheet's pixel art)
   const SH = SHEETS[sheet]; if (!SH) throw new Error('actor: sheet "' + sheet + '" is not in the art');
   const idle0 = Array.isArray(anims.idle) ? anims.idle[0] : anims.idle.down[0], first = SH.meta.sprites[idle0.includes('.') ? idle0 : views.down + '.' + idle0];
   if (!first) throw new Error(`actor: frame "${views.down}.${idle0}" missing in ${sheet}`);
@@ -2959,7 +2914,6 @@ function optionsSetup() {
   seg('optLang', () => settings.lang, (v) => { settings.lang = v; applyLang(); syncStyle(); hintState = null; hudKey = ''; if (A) $('areaName').textContent = t(A.name); if (ui.screen === 'menu') renderTab(); });
   seg('optFps', () => settings.fps, (v) => { settings.fps = +v; });
   seg('optStyle', () => settings.flat ? 'flat' : 'diorama', (v) => { settings.flat = v === 'flat'; restyle(); syncStyle(); });
-  seg('optFig', () => settings.fig3d ? '3d' : 'pixel', (v) => setFigures(v === '3d'));
   seg('optWire', () => settings.wire ? 'on' : 'off', (v) => { settings.wire = v === 'on'; applyWire(); });
   seg('optShadows', () => settings.shadows ? 'on' : 'off', (v) => { settings.shadows = v === 'on'; sun.castShadow = settings.shadows; shadowHold = 3; });
   seg('optShake', () => settings.shake ? 'on' : 'off', (v) => { settings.shake = v === 'on'; });
@@ -3017,14 +2971,6 @@ function restyle() {
   if (A.def.keep) { A.dispose(); A = null; }
   if (settings.flat) yaw = yawT = 0;
   enterArea(name, at, face);
-}
-// lowpoly.html: the cat, the people and the monsters as the sheet's pixel art or modelled; the cat is made again where
-// it stands, the area's people and monsters with the area
-function setFigures(on) {
-  settings.fig3d = !!on; saveSettings(); if (!player || !A) return;
-  const keep = { x: player.x, z: player.z, fx: player.fx, fz: player.fz };
-  player.dispose(); player = sheetActor('cat', { down: 'cat_down', up: 'cat_up', side: 'cat_side' }, CAT_ANIMS); Object.assign(player, keep);
-  restyle();
 }
 // the style from the button by the menu (it names the style in use; a click swaps it) or from the options
 function setStyle(flat) { settings.flat = !!flat; saveSettings(); restyle(); syncStyle(); }
@@ -3134,7 +3080,7 @@ function draw(dt) {
 
 let lastDraw = 0, ctxLost = false, shadowDraws = 0, lastCasters = '';
 // what the figures' shadows depend on: where each stands and which frame it shows
-function castersSig() { let s = ''; for (const a of actors) if (!a.far) s += (a.mesh && a.mesh.visible ? 1 : 0) + ',' + a.x.toFixed(3) + ',' + a.z.toFixed(3) + ',' + (a.lift || 0) + ',' + (a.frame ? a.frame.x + ':' + a.frame.y : a.poseT !== undefined ? a.poseT.toFixed(3) + ':' + a.face.toFixed(3) : a.at) + ',' + (a.caster ? a.caster.scale.x : 0) + ';'; return s; }   // (shadowDraws: the shadow map's redraws, for tools/perf-check.mjs)
+function castersSig() { let s = ''; for (const a of actors) if (!a.far) s += (a.mesh && a.mesh.visible ? 1 : 0) + ',' + a.x.toFixed(3) + ',' + a.z.toFixed(3) + ',' + (a.lift || 0) + ',' + (a.frame ? a.frame.x + ':' + a.frame.y : a.at) + ',' + (a.caster ? a.caster.scale.x : 0) + ';'; return s; }   // (shadowDraws: the shadow map's redraws, for tools/perf-check.mjs)
 // the GPU may drop the context (a driver reset, too many pages): the game waits for it, then draws from a clean slate
 canvas.addEventListener('webglcontextlost', () => { ctxLost = true; });
 canvas.addEventListener('webglcontextrestored', () => { ctxLost = false; last = performance.now(); acc = 0; drawAcc = 0; resize(); shadowHold = 8; });
@@ -4349,112 +4295,6 @@ LP_CHEST = (lid) => {
   return m;
 };
 
-// ---- content/lowpoly/04-figures.js
-/* ---------- lowpoly.html: the cat and the people of the village, as parts that move ---------- */
-// Figure space is art px: feet at the origin, facing +z. Poses are computed from the game's own state (moving and step,
-// the current anim and its time), so nothing in the game logic changes; the same names as the sheet animations.
-const lpSin = (t) => Math.sin(t), ease = (t) => t * t * (3 - 2 * t), clamp01 = (v) => Math.max(0, Math.min(1, v));
-
-/* ---- the scholar cat: an orange tabby on two legs, round glasses, a quill for a sword ---- */
-{
-  const O = 0xe8963c, OD = 0xc46f28, CR = 0xf6e2c2, PK = 0xe79aa6, DK = 0x2e211c, GL = 0x3b2f2a;
-  const legs = (s) => new LPM().lathe(s * 3, 0, [[1.5, .6], [1.9, 1.6], [1.8, 3.4], [1.4, 4.8]], 10, O, { top: false }).blob(s * 3, 1, 1.2, 1.7, CR, { seed: 20 + s, sx: 1.05, sy: .62, sz: 1.35, jit: .02 });
-  const body = new LPM().blob(0, 8.8, 0, 4.8, O, { seed: 2, sy: 1.12, sz: .9, jit: .03 }).blob(0, 8.3, 2.4, 3.1, CR, { seed: 3, sy: 1.15, sz: .6, jit: .03 }).blob(0, 11.4, 2.6, 2.4, CR, { seed: 19, sx: 1.3, sy: .8, sz: .7, jit: .03 });
-  for (const y of [6.5, 9, 11.5]) body.box(-4.4, y, -3.6, 4.4, y + .9, -2.6, OD);   // tabby stripes down the back
-  const head = new LPM().blob(0, 17.2, .3, 6, O, { seed: 4, sx: 1.12, sy: .92, jit: .04 })
-    .blob(0, 15.4, 4.6, 2.7, CR, { seed: 5, sx: 1.2, sy: .72, sz: .7, jit: .03 })
-    .blob(0, 16.3, 6.4, .7, PK, { seed: 6, jit: 0 });
-  for (const s of [-1, 1]) {
-    head.face([[s * 6, 20, -.5], [s * 2, 21.6, -.5], [s * 4.8, 26, -1.2]], O, { from: [s * 4, 22, -4] }).face([[s * 6, 20, -.5], [s * 2, 21.6, -.5], [s * 4.8, 26, -1.2]], O, { from: [s * 4, 22, 4] });
-    head.face([[s * 5.2, 20.6, -.3], [s * 2.8, 21.6, -.3], [s * 4.6, 24.6, -.6]], PK, { from: [s * 4, 22, -4] });
-    head.box(s * 2.4 - .6, 17.4, 5.2, s * 2.4 + .6, 18.8, 5.9, DK);   // the eyes, and the round glasses over them
-    for (let k = 0; k < 8; k++) { const a0 = k / 8 * Math.PI * 2, a1 = (k + 1) / 8 * Math.PI * 2, r = 2, cx = s * 2.4, cy = 18.1; head.face([[cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 6.1], [cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 6.1], [cx + Math.cos(a1) * (r + .7), cy + Math.sin(a1) * (r + .7), 6.1], [cx + Math.cos(a0) * (r + .7), cy + Math.sin(a0) * (r + .7), 6.1]], GL, { from: [cx, cy, 0], jit: 0 }); }
-    head.box(s * 4.6, 18, 3.8, s * 6.4, 18.5, 6, GL);
-  }
-  head.box(-.4, 18, 6, .4, 18.5, 6.2, GL);
-  for (const s of [-1, 1]) for (let k = 0; k < 2; k++) head.box(s * 4.2 + s * k * .4, 15.2 + k * 1.1, 4.4, s * 7.6, 15.5 + k * 1.1, 4.6, 0xf6efe6);   // whiskers
-  const tail = new LPM();
-  { tail.sg = 1; const pts = [[0, 6, -3.6], [0, 7.4, -7], [0, 10.8, -9.4], [.4, 14.6, -9.8], [.8, 17.2, -8.4]]; for (let i = 0; i + 1 < pts.length; i++) { const [a, b] = [pts[i], pts[i + 1]], r0 = 1.6 - i * .2, r1 = 1.4 - i * .2, n = 10, ring = (p, r, k) => { const t = k / n * Math.PI * 2; return [p[0] + Math.cos(t) * r, p[1] + Math.sin(t) * r * .7, p[2] + Math.sin(t) * r * .5]; }; for (let k = 0; k < n; k++) tail.face([ring(a, r0, k), ring(a, r0, k + 1), ring(b, r1, k + 1), ring(b, r1, k)], i === 3 ? OD : O, { from: [(a[0] + b[0]) / 2 + 9, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], s: 1, jit: 0 }); } tail.blob(.8, 17.6, -8, 1.3, CR, { seed: 7, jit: 0 }); }
-  const arm = (s) => new LPM().lathe(s * 4.2, 0, [[1, 7.4], [1.25, 8.6], [1.3, 11], [1.05, 12.4]], 10, O, { top: false }).blob(s * 4.2, 7.2, .3, 1.45, CR, { seed: 8 + s, jit: 0 });
-  // the quill, held in the right paw: a white feather with a dark nib
-  const quill = new LPM().box(-.3, 3.5, 1.2, .3, 7.5, 1.8, 0x6a5a48);
-  for (let k = 0; k < 5; k++) { const y0 = 7 + k * 2.2, w = 1.4 + Math.sin((k + .5) / 5 * Math.PI) * 1.4; quill.face([[-w, y0, 1.5], [w, y0, 1.5], [w * .8, y0 + 2.4, 1.5 + (k + 1) * .5], [-w * .8, y0 + 2.4, 1.5 + (k + 1) * .5]], k % 2 ? 0xf2ede4 : 0xfaf7f0, { from: [0, y0 + 1, -4], jit: 0 }).face([[-w, y0, 1.4], [w, y0, 1.4], [w * .8, y0 + 2.4, 1.4 + (k + 1) * .5], [-w * .8, y0 + 2.4, 1.4 + (k + 1) * .5]], 0xe2dccf, { from: [0, y0 + 1, 6] }); }
-  LP_FIGURES.cat = {
-    parts: {
-      legL: { m: legs(-1), pivot: [-3, 4.5, 0] }, legR: { m: legs(1), pivot: [3, 4.5, 0] },
-      body: { m: body, pivot: [0, 4.5, 0] }, head: { m: head, pivot: [0, 12.5, 0], parent: 'body' }, tail: { m: tail, pivot: [0, 6, -3.6], parent: 'body' },
-      armL: { m: arm(-1), pivot: [-4.2, 12, 0], parent: 'body' }, armR: { m: arm(1), pivot: [4.2, 12, 0], parent: 'body' },
-      quill: { m: quill, pivot: [4.2, 7, 0], parent: 'armR' },
-    },
-    pose(a, t) {
-      const P0 = {}, walk = a.moving ? a.step * Math.PI / 5 : 0, sw = a.moving ? lpSin(walk) : 0, br = lpSin(t * 2.2);
-      P0.legL = { rx: sw * .7 }; P0.legR = { rx: -sw * .7 }; P0.armL = { rx: -sw * .5 }; P0.armR = { rx: sw * .5 - .25 };
-      P0.body = { rx: a.moving ? .08 : 0, y: a.moving ? Math.abs(sw) * .7 : br * .15 }; P0.head = { rx: a.moving ? -.06 : br * .03, rz: a.moving ? 0 : lpSin(t * .7) * .05 };
-      P0.tail = { rz: lpSin(t * (a.moving ? 6 : 1.8)) * .28, rx: a.moving ? .2 : 0 };
-      P0.quill = { rx: .2 };
-      const an = a.anim, at = a.at || 0;
-      if (an && an.startsWith('attack')) {   // three swipes of the quill: right to left, left to right, overhead
-        const p = ease(clamp01(at * (a.fps || 10) / 3)), k = +an.slice(6);
-        if (k === 1) { P0.armR = { rx: -1.4, ry: 1.2 - p * 2.6 }; P0.body = { ry: .45 - p * .9 }; }
-        else if (k === 2) { P0.armR = { rx: -1.4, ry: -1.3 + p * 2.6 }; P0.body = { ry: -.45 + p * .9 }; }
-        else { P0.armR = { rx: -2.8 + p * 2.6 }; P0.body = { rx: -.15 + p * .4 }; P0.root = { y: Math.sin(p * Math.PI) * 2 }; }
-        P0.armL = { rx: .3, rz: -.4 }; P0.quill = { rx: .5 };
-      } else if (an === 'dodge') { const p = clamp01(at / .32); P0.root = { rx: Math.sin(p * Math.PI) * .5, sy: 1 - Math.sin(p * Math.PI) * .25 }; P0.legL = { rx: -.9 }; P0.legR = { rx: .6 }; P0.tail = { rx: .8 }; }
-      else if (an === 'hurt') { const p = clamp01(at / .3); P0.root = { rx: -Math.sin(p * Math.PI) * .35, y: Math.sin(p * Math.PI) * 1.5 }; P0.head = { rx: -.3 }; P0.armL = { rz: -.9 }; P0.armR = { rz: .9 }; }
-      else if (an === 'defeat' || an === 'over') { const p = clamp01(at / .6); P0.root = { rz: ease(p) * 1.45, y: p * 1.5 }; }
-      return P0;
-    },
-  };
-}
-
-/* ---- the people: one builder, dressed differently ---- */
-function lpPerson(o) {
-  const H = o.h || 1, sk = o.skin || 0xe9c09c, top = o.top, dress = o.dress, legC = o.legs || 0x4a3a30, shoe = o.shoes || 0x3a2a20;
-  const S = (v) => v * H;
-  const legs = (s) => new LPM().lathe(s * 1.8, 0, [[1.05, 1.2], [1.25, S(3)], [1.35, S(6.5)], [1.4, S(9.2)]], 10, legC, { top: false }).blob(s * 1.8, .9, .7, 1.5, shoe, { seed: 30 + s, sx: .95, sy: .6, sz: 1.5, jit: .02 });
-  const body = new LPM();
-  if (dress) body.lathe(0, 0, [[o.wide ? 6.2 : 5.2, S(1.5)], [o.wide ? 5.4 : 4.4, S(8)], [3.6, S(13)], [3.4, S(19)]], 9, dress, { top: dress });
-  else body.lathe(0, 0, [[3.4, S(8.4)], [o.wide ? 5.2 : 3.8, S(12)], [o.wide ? 4.8 : 3.6, S(16)], [3.3, S(19)]], 9, top, { top });
-  if (o.apron) body.face([[-3.6, S(dress ? 3 : 8.6), o.wide ? 5.6 : 4.4], [3.6, S(dress ? 3 : 8.6), o.wide ? 5.6 : 4.4], [3, S(16.5), 3.9], [-3, S(16.5), 3.9]], o.apron, { from: [0, S(12), 0], jit: .02 });
-  if (o.belt) body.frustum(0, 0, o.wide ? 5 : 3.9, o.wide ? 5 : 3.9, S(11.6), S(12.8), 9, o.belt, { top: false });
-  if (o.emblem) body.box(-1.6, S(13.5), 3.5, 1.6, S(16.5), 4.1, o.emblem);
-  const head = new LPM().blob(0, S(19) + 4.6, 0, 4.2, sk, { seed: 11, sy: 1.05, jit: .04 }).blob(0, S(19) + 1, 0, 1.6, sk, { seed: 12, jit: 0 });
-  for (const s of [-1, 1]) head.box(s * 1.6 - .45, S(19) + 4.6, 3.9, s * 1.6 + .45, S(19) + 5.8, 4.3, 0x2a1e18);
-  head.box(-.5, S(19) + 3.6, 4, .5, S(19) + 4.3, 4.4, lpShade(sk, .85));
-  const hy = S(19) + 4.6;
-  if (o.hair) { head.blob(0, hy + 1.2, -1, 4.6, o.hair, { seed: 13, sy: .9, sz: .95, jit: .08, flat: hy - 1 }); if (o.bun) head.blob(0, hy + 2.6, -4.2, 2.2, o.hair, { seed: 14 }); if (o.long) head.box(-4, hy - 5, -4.2, 4, hy + 1, -1, o.hair); }
-  if (o.hat === 'chef') head.frustum(0, 0, 4.2, 5, hy + 2.4, hy + 7.5, 9, 0xf7f3ec, { top: false }).blob(0, hy + 8, 0, 5, 0xf7f3ec, { seed: 15, sy: .65, jit: .1 });
-  if (o.hat === 'helmet') head.blob(0, hy + 1.6, 0, 4.9, 0x9aa0a8, { seed: 16, sy: .78, jit: .02, flat: hy - .2 }).frustum(0, 0, 5.6, 5.6, hy - .4, hy + .2, 10, 0x7c828a, { top: false }).box(-.5, hy + 3, -5.2, .5, hy + 6.3, 4.6, 0x7c828a);
-  if (o.glasses) for (const s of [-1, 1]) head.box(s * 1.6 - 1.1, hy - .3, 4.3, s * 1.6 + 1.1, hy + .1, 4.5, 0x5a4a3a);
-  const arm = (s) => new LPM().lathe(s * 4.3, 0, [[.95, S(11.8)], [1.15, S(13.5)], [1.25, S(16.5)], [1.3, S(18.6)]], 10, o.sleeves || dress || top, { top: false }).blob(s * 4.3, S(18.6), 0, 1.35, o.sleeves || dress || top, { seed: 18, jit: 0 }).blob(s * 4.3, S(11.2), .2, 1.3, sk, { seed: 17, jit: 0 });
-  const item = new LPM();
-  if (o.item === 'spear') item.box(-.5, -6, 1.6, .5, 30, 2.6, LPC.wood).frustum(0, 2.1, 1.4, 0, 30, 35, 4, 0xc8ccd2);
-  if (o.item === 'sword') item.box(-.5, S(9), 1.6, .5, S(17.5), 2.4, LPC.woodLt).box(-2, S(10.6), 1.6, 2, S(11.4), 2.4, LPC.wood);
-  if (o.item === 'book') item.box(-3.2, S(12.5), 2.8, 3.2, S(16.5), 4.4, LPC.red).box(-3, S(12.7), 4.4, 3, S(16.3), 4.6, 0xf2e8d0);
-  if (o.item === 'basket') item.lathe(0, 3, [[2.6, S(9)], [3.4, S(12)]], 8, LPC.hay, { top: LPC.bread });
-  const partsMap = {
-    legL: { m: legs(-1), pivot: [-1.8, S(9), 0] }, legR: { m: legs(1), pivot: [1.8, S(9), 0] },
-    body: { m: body, pivot: [0, S(9), 0] }, head: { m: head, pivot: [0, S(19), 0], parent: 'body' },
-    armL: { m: arm(-1), pivot: [-4.3, S(18), 0], parent: 'body' }, armR: { m: arm(1), pivot: [4.3, S(18), 0], parent: 'body' },
-    item: { m: item, pivot: [o.item === 'book' ? 0 : 4.3, S(11.5), 0], parent: o.item === 'book' ? 'body' : 'armR' },
-  };
-  return {
-    parts: partsMap,
-    pose(a, t) {
-      const walk = a.moving ? a.step * Math.PI / 2 : 0, sw = a.moving ? lpSin(walk) : 0, br = lpSin(t * 1.9 + (o.phase || 0));
-      const P0 = { legL: { rx: sw * .55 }, legR: { rx: -sw * .55 }, armL: { rx: -sw * .45, rz: -.08 }, armR: { rx: sw * .45, rz: .08 }, body: { y: a.moving ? Math.abs(sw) * .5 : br * .12 }, head: { rx: br * .03, ry: lpSin(t * .5 + (o.phase || 0)) * .12 } };
-      if (o.item === 'book') { P0.armL = { rx: -.9, rz: .35 }; P0.armR = { rx: -.9, rz: -.35 }; }
-      if (o.item === 'spear') P0.armR = { rx: -.15 };
-      return P0;
-    },
-  };
-}
-LP_FIGURES.baker = lpPerson({ h: 1, top: 0xf2ebe0, wide: 1, apron: 0xfbf7f0, sleeves: 0xf2ebe0, hair: 0x6a4a34, hat: 'chef', legs: 0x8a4a34, belt: 0xc04a3a, phase: 1 });
-LP_FIGURES.child = lpPerson({ h: .78, top: 0x8a5a36, hair: 0xc8482e, legs: 0x5a4030, item: 'sword', phase: 2 });
-LP_FIGURES.guard = lpPerson({ h: 1.08, top: LPC.blue, sleeves: LPC.blueDk, emblem: LPC.gold, belt: 0x5a3a24, hat: 'helmet', legs: 0x4a4038, item: 'spear', phase: 3 });
-LP_FIGURES.librarian = lpPerson({ h: .95, dress: 0x4e7a48, sleeves: 0x456c40, hair: 0xb8b4ac, bun: 1, glasses: 1, item: 'book', phase: 4 });
-LP_FIGURES.shopkeeper = lpPerson({ h: .98, dress: 0xb2532e, apron: 0xefe2c2, hair: 0x6a4026, long: 1, item: 'basket', phase: 5 });
-
 // ---- content/lowpoly/05-crypt.js
 /* ---------- lowpoly.html: the crypt's stone ---------- */
 const CRY = { st: 0x66607a, stLt: 0x7a748e, stDk: 0x4c4760, moss: 0x5a6a4a };
@@ -4555,7 +4395,6 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
 (async function boot() {
   applyLang(); syncStyle();
   $('styleBtn').onclick = () => setStyle(!settings.flat);
-  if (!LP) for (const e of document.querySelectorAll('.lpOnly')) e.hidden = true;   // the figures option: lowpoly.html only
   if (LP) { settings.flat = false; $('styleBtn').hidden = true; for (const e of [$('optStyle'), $('optStyle').previousElementSibling]) e.hidden = true; }   // lowpoly.html: no 2D style
   if (!renderer) { $('fallback').hidden = false; return; }
   inputSetup(); optionsSetup();
