@@ -21,7 +21,7 @@ const shade = (c, k) => (Math.min(255, Math.round((c >> 16 & 255) * k)) << 16) |
 
 // settings are preferences only (never game content): language, frame-rate cap, shadows, shake, music and sound volume (0–3)
 const SETTINGS_KEY = 'mdv-rpg-cat-settings';   // mdv-allow-storage: preferences
-const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 60, shadows: true, wire: false, flat: false, shake: true, music: 2, sound: 2 },
+const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 0, shadows: true, wire: false, flat: false, shake: true, music: 2, sound: 2 },
   (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; } })());
 if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 2 : 0;   // the first builds stored on/off
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode: keep in memory */ } };
@@ -3058,7 +3058,7 @@ function step(dt) {
 }
 
 function draw(dt) {
-  time += dt;
+  time += dt; drawCount++;
   if (!A) { renderer.setRenderTarget(null); renderer.setClearColor(0x17121c, 1); renderer.clear(); return; }
   setHint(dlg ? null : nearAct);
   if (intro < 1) { intro = Math.min(1, intro + dt / 2.8); const e = 1 - Math.pow(1 - intro, 3); yaw = yawT + (settings.flat ? 0 : (1 - e) * -1.05); Vz = lerp(28, VT, e); }
@@ -3086,7 +3086,7 @@ function draw(dt) {
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
 }
 
-let lastDraw = 0, ctxLost = false, shadowDraws = 0, lastCasters = '';
+let lastDraw = 0, ctxLost = false, shadowDraws = 0, lastCasters = '', drawCount = 0;   // (drawCount: the frames drawn, for the checks)
 // what the figures' shadows depend on: where each stands and which frame it shows
 function castersSig() { let s = ''; for (const a of actors) if (!a.far) s += (a.mesh && a.mesh.visible ? 1 : 0) + ',' + a.x.toFixed(3) + ',' + a.z.toFixed(3) + ',' + (a.lift || 0) + ',' + (a.frame ? a.frame.x + ':' + a.frame.y : a.at) + ',' + (a.caster ? a.caster.scale.x : 0) + ';'; return s; }   // (shadowDraws: the shadow map's redraws, for tools/perf-check.mjs)
 // the GPU may drop the context (a driver reset, too many pages): the game waits for it, then draws from a clean slate
@@ -3094,16 +3094,22 @@ canvas.addEventListener('webglcontextlost', () => { ctxLost = true; });
 canvas.addEventListener('webglcontextrestored', () => { ctxLost = false; last = performance.now(); acc = 0; drawAcc = 0; resize(); shadowHold = 8; });
 function frame(now) {
   requestAnimationFrame(frame);
-  const real = Math.min(.25, (now - last) / 1000); last = now;
+  // (never below 0: a frame's time stamp may come before a performance.now() read since, as freeze(false) sets last)
+  const real = Math.max(0, Math.min(.25, (now - last) / 1000)); last = Math.max(last, now);
   // frozen: a check drives the simulation itself. ctxLost: the GPU dropped the WebGL context; nothing moves unseen
   if (document.hidden || frozen || ctxLost) { lastDraw = 0; return; }
   pollPad();
-  acc += real; let n = 0; while (acc >= SIM && n < 30) { step(SIM); acc -= SIM; n++; } if (n === 30) acc = 0;
-  // the cap keeps its phase: on a 144 Hz screen a 60 cap draws 60 times a second, not every third refresh
-  drawAcc += real; const budget = 1 / settings.fps; if (drawAcc + .002 < budget) return; drawAcc = Math.max(0, drawAcc - budget); if (drawAcc > budget) drawAcc = 0;
-  draw(budget);
+  // the simulation advances by the real time since the last frame, in equal steps of at most SIM (1/120 s). In whole
+  // steps of SIM, frames of 7 or 14 ms moved things by 0, 1, 2 or 3 steps, and walking stuttered
+  const n = Math.ceil(real / SIM - 1e-9); for (let i = 0; i < n; i++) step(real / n);
+  // drawn on every refresh of the screen (settings.fps 0, the default: a cap that does not divide the screen's rate
+  // shows the frames for uneven times, 14 and 21 ms for 60 on 144 Hz), or capped at 30 / 60 / 120 to save power; the
+  // cap keeps its phase
+  drawAcc += real; let dt = drawAcc;
+  if (settings.fps) { const budget = 1 / settings.fps; if (drawAcc + .002 < budget) return; dt = budget; drawAcc = Math.max(0, drawAcc - budget); if (drawAcc > budget) drawAcc = 0; } else drawAcc = 0;
+  draw(dt);
   // the rate reported is the one drawn: the time between draws, not the cap's length (that reported the cap always)
-  frames++; fpsT += lastDraw ? Math.min(.25, (now - lastDraw) / 1000) : budget; lastDraw = now;
+  frames++; fpsT += lastDraw ? Math.min(.25, (now - lastDraw) / 1000) : dt; lastDraw = now;
   if (fpsT >= .5) { fps = frames / fpsT; frames = 0; fpsT = 0; if (!$('menu').hidden) $('diag').textContent = t('diag', { fps: Math.round(fps), ms: (1000 / Math.max(1, fps)).toFixed(1), tris: Math.round((A ? A.tris : 0) / 1000), verts: Math.round((A ? A.tris : 0) * 2 / 1000),   // every face is a quad of its own: 4 vertices, 2 triangles
  calls: calls + 1, build: A ? A.buildMs : 0 }); }
 }
@@ -4499,7 +4505,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     // introNow: the opening at once: its dialogue (else 2.2 s later) and the camera's zoom in (else 2.8 s)
     introNow: () => { intro = 1; clearTimeout(introT); if (!G.flags.intro && CHAPTER.intro) CHAPTER.intro(() => { G.flags.intro = true; }); },
     // (busy: a fade between places, timed by the page in real time)
-    clock: () => time, busy: () => transitioning, shadowDraws: () => shadowDraws, talk: () => openDialogue({ name: 'who.cat', lines: [['cat', 'i.2']] }),
+    clock: () => time, drawn: () => drawCount, busy: () => transitioning, shadowDraws: () => shadowDraws, talk: () => openDialogue({ name: 'who.cat', lines: [['cat', 'i.2']] }),
     save: () => saveGame(), saved: () => loadSave(), resume: () => continueGame(), checkSave: (o) => checkSave(o), importCode: (c) => { $('codeIn').value = c; submitCode(); },
   };
 })();
