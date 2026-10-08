@@ -3146,13 +3146,19 @@ function holePass() {
   return { magenta: n, at: n ? [Math.round(sx / n), Math.round(sy / n)] : null, spots: [...cells].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, m]) => [...c.split(',').map(Number), m]) };
 }
 // skyPass: every mesh white on black: what stays black is the sky, seen past the map's edge or through a chunk not built.
-//   Returns the sky's pixels (of 640x360) and their box on screen, in fractions of the width and height from the top left
+//   Returns the sky's pixels (of 640x360), their box on screen (fractions of the width and height from the top left),
+//   and how many of them look down on the map itself (their line of sight meets the ground plane inside it): a hole,
+//   where the rest is the view reaching past the board's edge
 function skyPass() {
-  const white = qaFlat(0xffffff), px = qaRender(() => white);
-  let n = 0, x0 = 1, y0 = 1, x1 = 0, y1 = 0;
-  for (let k = 0; k < px.length; k += 4) if (!(px[k] | px[k + 1] | px[k + 2])) { n++; const x = ((k / 4) % 640) / 640, y = 1 - (Math.floor(k / 4 / 640) + 1) / 360; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  const white = qaFlat(0xffffff), px = qaRender(() => white), a = new THREE.Vector3(), b = new THREE.Vector3();
+  let n = 0, inside = 0, x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+  for (let k = 0; k < px.length; k += 4) if (!(px[k] | px[k + 1] | px[k + 2])) {
+    n++; const x = ((k / 4) % 640) / 640, y = 1 - (Math.floor(k / 4 / 640) + 1) / 360; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+    a.set(x * 2 - 1, 1 - y * 2, -1).unproject(cam); b.set(x * 2 - 1, 1 - y * 2, 1).unproject(cam);
+    const t = a.y / (a.y - b.y), gx = a.x + (b.x - a.x) * t, gz = a.z + (b.z - a.z) * t; if (A && gx > .5 && gz > .5 && gx < A.W - .5 && gz < A.D - .5) inside++;
+  }
   white.dispose(); qaLast = px;
-  return { sky: n, box: n ? [x0, y0, x1, y1].map((v) => +v.toFixed(2)) : null };
+  return { sky: n, inside, box: n ? [x0, y0, x1, y1].map((v) => +v.toFixed(2)) : null };
 }
 
 /* ---------- fingerprints: what a thing is, as data, for the approvals (tools/approve-check.mjs, the viewer) ---------- */
