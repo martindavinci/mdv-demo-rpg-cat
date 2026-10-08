@@ -61,7 +61,10 @@ no analytics and no ads. The save and the options stay in this browser's storage
 
 ## How it is made
 
-- The world is drawn the way [Borghi in diorama](https://martindavinci.github.io/mdv-demo-diorama/) draws its
+- The world is modelled in code as low-poly shapes, painted with the same pixel textures, and drawn at a low
+  resolution with hard pixels; the characters are the pixel-art sprites. The first style is still there:
+  [diorama.html](https://martindavinci.github.io/mdv-demo-rpg-cat/diorama.html).
+- That first style draws the world the way [Borghi in diorama](https://martindavinci.github.io/mdv-demo-diorama/) draws its
   villages: every building, tree and prop is a flat pixel-art sprite whose pixels are given a depth, then lit and
   shadowed in WebGL with [three.js](https://threejs.org/). Characters are flat cards that always face the camera.
 - The pixel art was generated with ChatGPT from written prompts, then cleaned, cut, resampled to one pixel grid and

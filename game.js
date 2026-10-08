@@ -8,7 +8,7 @@ const PITCH = 0.62, SPR_Y = 1 / Math.cos(PITCH);    // figures stand upright; st
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const coarse = matchMedia('(pointer: coarse)').matches;
 const F_ROOF = 1, F_GLOW = 2, F_WRAP = 4, F_TEXTOP = 8, F_TEXALL = 16, F_OWN = 32, F_GHOST = 64, F_NOSIDE = 128;   // F_NOSIDE: extruded without side faces (a smooth part covers its edges)   // F_GHOST: in the atlas only (a smooth part reads it), never extruded
-const LP = window.__STYLE === 'lowpoly';            // lowpoly.html: things and figures modelled in code (engine/25-lpkit.js)
+const LP = window.__STYLE === 'lowpoly';            // the low-poly page: things and figures modelled in code (engine/25-lpkit.js)
 const GLOW = 0xffe7a0;                              // the prompts' night-glow colour
 
 function hash2(x, y) { let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
@@ -55,8 +55,8 @@ function loadArt() {
       const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
       const x = c.getContext('2d'); x.drawImage(img, 0, 0);
       SHEETS[name] = { meta: window.ART[name].meta, canvas: c, px: x.getImageData(0, 0, img.width, img.height).data, w: img.width, h: img.height };
-      // the frames at a higher resolution, when the sheet has them: lowpoly.html draws with the 2x (its picture is about
-      // 600 rows), index.html with the 4x (drawn at the screen's resolution)
+      // the frames at a higher resolution, when the sheet has them: the low-poly page (index.html) draws with the 2x (its
+      // picture is about 600 rows), diorama.html with the 4x (drawn at the screen's resolution)
       const key = LP ? 'hi' : 'hi4'; if (!window.ART[name][key]) { ok(); return; }
       const hi = new Image(); hi.onload = () => { const c2 = document.createElement('canvas'); c2.width = hi.width; c2.height = hi.height; c2.getContext('2d').drawImage(hi, 0, 0); SHEETS[name][key] = c2; ok(); };
       hi.onerror = () => ok(); hi.src = window.ART[name][key];
@@ -70,7 +70,7 @@ function loadArt() {
         else if (r.depth) DEFS.push({ key, name: key, sheet, pic: applyDepthRules(key, depthPic(S, r)) });
       }
     }
-    if (LP && LP_TILES) Object.assign(TILES, LP_TILES());   // lowpoly.html: the ground painted in code
+    if (LP && LP_TILES) Object.assign(TILES, LP_TILES());   // the low-poly page: the ground painted in code
     // art drawn in code replaces the sheet's drawing of the same key
     // (a building shaped from a spec gets the sheet's drawing it replaces)
     for (const [key, draw] of Object.entries(CODE_ART)) { const k = DEFS.findIndex((d) => d.key === key), old = k >= 0 ? DEFS[k] : null; if (k >= 0) DEFS.splice(k, 1); DEFS.push({ key, name: key, sheet: 'code', pic: draw(old) }); }
@@ -1104,7 +1104,7 @@ function eraseFrom(src, rects) {
 }
 
 // ---- engine/25-lpkit.js
-/* ---------- the low-poly style (lowpoly.html): things and figures modelled in code ---------- */
+/* ---------- the low-poly style (the low-poly page): things and figures modelled in code ---------- */
 // Units are art pixels (PPU to a world unit), y up from the ground; x across the front, 0 at the thing's anchor column;
 // z toward the front (+), 0 at the middle of its depth: where the sheet sprites stand, so collisions, doors and shadows
 // stay where they were. A model (LPM) is a list of flat faces, each with a colour: the light comes from the scene (sun,
@@ -1113,14 +1113,14 @@ function eraseFrom(src, rects) {
 // LP_MODELS[key]: () => LPM, built once.
 const LP_MODELS = {}, lpCache = {};
 let LP_CHEST = null, LP_TILES = null, LP_WALL = null;   // LP_WALL(colour, along, y): a wall's colour at a pixel, by the legend's wall colour   // the chest with its lid at an angle (radians); the ground tiles painted in code
-// lowpoly.html: the figures' and effects' sheets at 2x: resampled from the original drawing when the sheet has its @2x
+// the low-poly page: the figures' and effects' sheets at 2x: resampled from the original drawing when the sheet has its @2x
 // frames, else enlarged by Scale2x (EPX, Eric Johnston 1992; Andrea Mazzoleni's
 // Scale2x): each pixel becomes four, a corner taking a neighbour's colour where two neighbours agree, so diagonals and
 // curves get twice the steps and nothing blurs. Same size in the world, twice the pixels. window.__px2 = false: off
 const lpPx2 = {};
 function lpSheetCanvas(sheet) {
   const SH = SHEETS[sheet]; if (window.__px2 === false) return SH.canvas;
-  // index.html: the figures at 4x when the sheet has them, each frame at four times its 1x place
+  // diorama.html: the figures at 4x when the sheet has them, each frame at four times its 1x place
   if (!LP) {
     if (!SH.hi4) return SH.canvas; if (lpPx2[sheet]) return lpPx2[sheet];
     const c = document.createElement('canvas'); c.width = SH.w * 4; c.height = SH.h * 4; const x = c.getContext('2d');
@@ -1338,7 +1338,7 @@ try { renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: fals
 const scene = new THREE.Scene();
 const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, .6); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 1); sun.castShadow = settings.shadows;
-const SHADOW_MAP = window.__shadowMap || (LP ? 2048 : 1024);   // lowpoly.html: finer, its picture is finer than an art pixel
+const SHADOW_MAP = window.__shadowMap || (LP ? 2048 : 1024);   // the low-poly page: finer, its picture is finer than an art pixel
 //   // a texel about one art pixel: 2048 looked the same at 4 times the cost
 sun.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP); sun.shadow.autoUpdate = false; sun.shadow.bias = -0.0004;
 scene.add(sun); scene.add(sun.target);
@@ -1421,7 +1421,7 @@ function makeMaterials() {
 /* ---------- passata finale: sfondo, antialias leggero, vignettatura ---------- */
 const rt = new THREE.WebGLRenderTarget(4, 4, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, stencilBuffer: false });
 rt.texture.encoding = THREE.sRGBEncoding; rt.texture.generateMipmaps = false;
-if (LP) rt.texture.minFilter = rt.texture.magFilter = THREE.NearestFilter;   // lowpoly.html: hard pixels
+if (LP) rt.texture.minFilter = rt.texture.magFilter = THREE.NearestFilter;   // the low-poly page: hard pixels
 const postU = { tColor: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uShift: { value: new THREE.Vector2() }, uK: { value: 0 }, uSpread: { value: 1 }, uAspect: { value: 1 }, uTime: { value: 0 }, uStars: { value: 0 }, uAur: { value: 0 }, uAurT: { value: 0 }, uBgTop: { value: new THREE.Vector3() }, uBgBot: { value: new THREE.Vector3() } };
 const postMat = new THREE.ShaderMaterial({
   uniforms: postU, depthTest: false, depthWrite: false,
@@ -1433,7 +1433,7 @@ const postMat = new THREE.ShaderMaterial({
     float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     vec4 tap(vec2 o){ vec4 s = texture2D(tColor, vUv - uShift + o * uSpread * uTexel); vec3 c = s.a > 0.001 ? min(s.rgb / s.a, vec3(1.0)) : vec3(0.0); return vec4(c * c * s.a, s.a); }
     void main(){
-      // (lowpoly.html, uK > 0: each screen pixel reads the picture's pixel it lies in, counted in whole screen pixels from
+      // (the low-poly page, uK > 0: each screen pixel reads the picture's pixel it lies in, counted in whole screen pixels from
       // the corner, so the enlargement is exact even when the screen is not a whole number of picture pixels across)
       vec4 acc;
       if (uK > 0.0) { vec2 sp = floor(gl_FragCoord.xy - uShift / uTexel * uK); vec4 s = texture2D(tColor, (floor(sp / uK) + 0.5) * uTexel); vec3 c = s.a > 0.001 ? min(s.rgb / s.a, vec3(1.0)) : vec3(0.0); acc = vec4(c * c * s.a, s.a); }
@@ -1485,7 +1485,7 @@ function applyTod(k) {
 const CD = 60, cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 140), camT = new THREE.Vector3();
 let yaw = 0, yawT = 0, Vz = 15, VT = 15, aspect = 1;
 const minV = () => 13 / aspect;   // a phone held upright still sees 13 units across
-// the view's height as drawn. lowpoly.html rounds it so one art pixel is a whole number of pixels of the picture (a
+// the view's height as drawn. the low-poly page rounds it so one art pixel is a whole number of pixels of the picture (a
 // texel's edge then falls on the same pixel wherever the camera stands, and the ground does not crawl as the cat walks):
 // up to half again the asked height when zoomed out. The follow, the map-edge clamp and the streaming use this one,
 // or the view showed the sky past the map's edge and through chunks never built
@@ -1554,7 +1554,7 @@ function setCamera() {
   // picture by a whole number of screen pixels (k to a picture pixel), so the view walks in steps of one screen pixel
   const k = Math.max(1, Math.round(bh / Math.max(1, rt.height))), sub = px / k;
   // figures stand on the picture's pixel grid (snapView). (On their own texels' grid instead, K / 2 or K pixels in
-  // lowpoly.html, the view followed the cat in steps of up to three pixels of the picture, six of a 2x screen: it lurched)
+  // the low-poly page, the view followed the cat in steps of up to three pixels of the picture, six of a 2x screen: it lurched)
   camView.step = px;
   // where the view stands in effect (the camera's snap and the post pass's shift together): the cat's place on the
   // figures' grid, less the cat's distance from the camera's aim rounded to the shift's steps. The follow lags the cat
@@ -1581,7 +1581,7 @@ function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2) * quality; bw = Math.max(2, Math.round(r.width * dpr)); bh = Math.max(2, Math.round(r.height * dpr));
   // the scene is drawn at the screen's resolution divided by a whole number (1, or 2 on a 2x screen) and enlarged by
   // exactly that number: at 1.25 or 0.75 the pixel pattern crawled while the camera moved, even by whole pixels
-  // (lowpoly.html: about 600 rows, two or three picture pixels to an art pixel at the usual view, every one a block of
+  // (the low-poly page: about 600 rows, two or three picture pixels to an art pixel at the usual view, every one a block of
   // whole screen pixels)
   const ss = window.__ss || (LP ? 1 / Math.max(1, Math.round(bh / 600)) : 1 / Math.max(1, Math.floor(dpr + .01))); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
   aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = LP ? 0 : Math.max(ss, .75); postU.uK.value = LP ? Math.round(1 / ss) : 0;
@@ -1810,7 +1810,7 @@ function openArea(def) {
   const [ccw, cch] = def.chunk || [cols, rows], CW = ccw * cellPx, CH = cch * cellPx, NI = Math.ceil(cols / ccw), NJ = Math.ceil(rows / cch);
   const wallCol = (t, a, y) => { const g = GT[t]; if (g.cliff) return edgeCol(t, a, y, g.h); const c = g.wall !== undefined ? g.wall : shade(avg(g), .62); if (LP) return LP_WALL ? LP_WALL(c, a, y) : Math.floor(y / 6) % 2 ? c : shade(c, .94); return (Math.floor(y / 4) + Math.floor(a / 8)) % 2 ? c : shade(c, .9); };
   const STRATA = [0x6b4a32, 0x5e4230, 0x6f5238, 0x52392a];
-  const LP_STRATA = [0x8a6a4a, 0x7a5c40, 0x93745a, 0x6e5240];   // lowpoly.html: level strata, wide, a grass lip
+  const LP_STRATA = [0x8a6a4a, 0x7a5c40, 0x93745a, 0x6e5240];   // the low-poly page: level strata, wide, a grass lip
   const edgeCol = (t, k, y, top) => LP ? (top - y <= 3 ? shade(avg(GT[t]), .78) : LP_STRATA[Math.floor((top - y + 6) / 11) % LP_STRATA.length]) : top - y <= 2 ? shade(avg(GT[t]), .8) : STRATA[Math.floor((top - y + (k % 7)) / 7) % STRATA.length];
   // every drop too tall to walk is drawn on the ground: a light lip along the top, a dark line at the foot. From the
   // default view the cliff faces turned away from the camera cannot be seen, and both levels wear the same grass.
@@ -4422,7 +4422,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
 (async function boot() {
   applyLang(); syncStyle();
   $('styleBtn').onclick = () => setStyle(!settings.flat);
-  if (LP) { settings.flat = false; $('styleBtn').hidden = true; for (const e of [$('optStyle'), $('optStyle').previousElementSibling]) e.hidden = true; }   // lowpoly.html: no 2D style
+  if (LP) { settings.flat = false; $('styleBtn').hidden = true; for (const e of [$('optStyle'), $('optStyle').previousElementSibling]) e.hidden = true; }   // the low-poly page: no 2D style
   if (!renderer) { $('fallback').hidden = false; return; }
   inputSetup(); optionsSetup();
   try { await loadArt(); } catch (e) { $('fallback').textContent = e.message; $('fallback').hidden = false; return; }
