@@ -1565,6 +1565,10 @@ function applyWire() {
   });
 }
 const _camS = new THREE.Vector3();
+// the view's axes across the screen and up it, in the world, and the step of the figures' grid along them (setCamera)
+const camView = { X: [1, 0, 0], U: [0, 1, 0], step: 0 };
+const viewOf = (x, y, z) => [x * camView.X[0] + z * camView.X[2], x * camView.U[0] + y * camView.U[1] + z * camView.U[2]];
+const snapView = (q) => (camView.step ? Math.round(q / camView.step) * camView.step : q);
 function setCamera() {
   const cp = Math.cos(PITCH), spn = Math.sin(PITCH);
   const v = viewV(Math.max(Vz, minV()));
@@ -1573,12 +1577,26 @@ function setCamera() {
   const px = v / Math.max(1, rt.height), sy = Math.sin(yaw), cy = Math.cos(yaw);
   const X = [cy, 0, -sy], U = [-spn * sy, cp, -spn * cy];                   // the camera's right and up, in the world
   const a = camT.x * X[0] + camT.z * X[2], b = camT.x * U[0] + camT.y * U[1] + camT.z * U[2];
-  const da = Math.round(a / px) * px - a, db = Math.round(b / px) * px - b;
-  _camS.set(camT.x + da * X[0] + db * U[0], camT.y + db * U[1], camT.z + da * X[2] + db * U[2]);
   // drawn at half the screen (a 2x screen), a whole pixel of the scene is two of the screen: the post pass moves the
-  // picture back by the snap's remainder in whole screen pixels, so it walks in steps of one screen pixel, not two
-  const k = Math.max(1, Math.round(bh / Math.max(1, rt.height)));
-  postU.uShift.value.set(Math.round(da / px * k) / k / Math.max(1, rt.width), Math.round(db / px * k) / k / Math.max(1, rt.height));
+  // picture by a whole number of screen pixels (k to a picture pixel), so the view walks in steps of one screen pixel
+  const k = Math.max(1, Math.round(bh / Math.max(1, rt.height))), sub = px / k;
+  // figures stand on the picture's pixel grid (snapView). (On their own texels' grid instead, K / 2 or K pixels in
+  // lowpoly.html, the view followed the cat in steps of up to three pixels of the picture, six of a 2x screen: it lurched)
+  camView.X = X; camView.U = U; camView.step = px;
+  // where the view stands in effect (the camera's snap and the post pass's shift together): the cat's place on the
+  // figures' grid, less the cat's distance from the camera's aim rounded to the shift's steps. The follow lags the cat
+  // by a steady distance while it walks, so the cat keeps its place on screen; rounding the camera and the cat each on
+  // its own, their difference stepped back and forth by a pixel as the two fractions crossed, and the cat trembled
+  let ea = Math.round(a / sub) * sub, eb = Math.round(b / sub) * sub;
+  if (player && A) {
+    const [pa, pb] = viewOf(player.x, A.groundY(player.x, player.z) + (player.lift || 0), player.z);
+    ea = snapView(pa) - Math.round((pa - a) / sub) * sub; eb = snapView(pb) - Math.round((pb - b) / sub) * sub;
+  }
+  // the camera itself on the picture's own grid (the ground's texels fall on the same pixels wherever it stands); the
+  // post pass shifts the picture by what is left, a whole number of screen pixels
+  const sa = Math.round(ea / px) * px, sb = Math.round(eb / px) * px, da = sa - a, db = sb - b;
+  _camS.set(camT.x + da * X[0] + db * U[0], camT.y + db * U[1], camT.z + da * X[2] + db * U[2]);
+  postU.uShift.value.set((sa - ea) / px / Math.max(1, rt.width), (sb - eb) / px / Math.max(1, rt.height));
   cam.position.set(_camS.x + sy * cp * CD, _camS.y + spn * CD, _camS.z + cy * cp * CD); cam.lookAt(_camS);
   cam.top = v / 2; cam.bottom = -v / 2; cam.right = v / 2 * aspect; cam.left = -cam.right; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
 }
@@ -2032,7 +2050,10 @@ function sheetActor(sheet, views, anims, o) {
     const i = own ? Math.min(list.length - 1, Math.floor(a.at * a.fps)) : Math.floor(a.step) % list.length, r = frame(row, list[i]);
     a.tex.repeat.set(r.w / SH.w, r.h / SH.h); a.tex.offset.set(r.x / SH.w, 1 - (r.y + r.h) / SH.h);
     const y = A.groundY(a.x, a.z), sx = Math.sin(cur.az), sz = Math.cos(cur.az), k = a.size;
-    a.mesh.visible = !a.blink; a.mesh.position.set(a.x, y + a.lift, a.z); a.mesh.rotation.y = yaw; a.mesh.scale.set((flip ? -1 : 1) * k, SPR_Y * k, k);
+    // on the figures' grid in the view (setCamera): placed anywhere, the figure's texels fell on the picture's pixels
+    // differently from frame to frame, and its place on screen against the view's stepped back and forth
+    const [va, vb] = viewOf(a.x, y + a.lift, a.z), ma = snapView(va) - va, mb = snapView(vb) - vb, X = camView.X, U = camView.U;
+    a.mesh.visible = !a.blink; a.mesh.position.set(a.x + ma * X[0] + mb * U[0], y + a.lift + mb * U[1], a.z + ma * X[2] + mb * U[2]); a.mesh.rotation.y = yaw; a.mesh.scale.set((flip ? -1 : 1) * k, SPR_Y * k, k);
     a.caster.position.set(a.x, y + a.lift, a.z); a.caster.rotation.y = cur.az; a.caster.scale.set((flip ? -1 : 1) * k, k, k);
     a.probe.set(a.x + sx * .2, y, a.z + sz * .2); a.lampL.value = A.lampLight(a.x, y + .6, a.z, 0, 1, 0);
   };
@@ -4527,7 +4548,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     view: (y) => { yaw = yawT = y; intro = 1; },
     idPass: () => idPass(), holePass: () => holePass(), skyPass: () => skyPass(), qaImage: () => qaImage(),
     rescale: (k) => { window.__ss = k; resize(); },
-    camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: viewV(Math.max(Vz, minV())), rt: [rt.width, rt.height] }),
+    camera: () => ({ t: [camT.x, camT.y, camT.z], p: [cam.position.x, cam.position.y, cam.position.z], v: viewV(Math.max(Vz, minV())), rt: [rt.width, rt.height], k: Math.max(1, Math.round(bh / Math.max(1, rt.height))), shift: [postU.uShift.value.x * rt.width, postU.uShift.value.y * rt.height] }),
     shadowAt: (x, z) => { A.shadowPin = x === undefined ? null : { x, z }; },
     // the triangle edges of every thing drawn over it (for the review): every triangle, also those whose pixels the
     // material discards, since they cost the same
