@@ -24,6 +24,8 @@ const SETTINGS_KEY = 'mdv-rpg-cat-settings';   // mdv-allow-storage: preferences
 const settings = Object.assign({ lang: (navigator.language || 'en').toLowerCase().startsWith('it') ? 'it' : 'en', fps: 0, shadows: true, wire: false, flat: false, shake: true, music: 2, sound: 2 },
   (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; } })());
 if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 2 : 0;   // the first builds stored on/off
+// settings saved before the frame rate's Auto (every refresh) held the old default, 60: they get Auto once
+if (!settings.paced) { if (settings.fps === 60) settings.fps = 0; settings.paced = 1; }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode: keep in memory */ } };
 
 // every visible string comes from lang/<code>.json by key
