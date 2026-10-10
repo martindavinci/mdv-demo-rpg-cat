@@ -1433,7 +1433,7 @@ const TOD_BASE = {
   alba: { sun: 0xffb08a, sunI: .85, az: 1.35, el: .24, sky: 0xc9b4d8, gnd: 0x7a6a72, hemiI: .55, glow: .45, lamp: .55, top: 0x4e5f9c, bot: 0xf4b49a, stars: .3, aur: 0 },
   giorno: { sun: 0xfff0d8, sunI: 1.0, az: -.6, el: .85, sky: 0xcfe0ff, gnd: 0xb8b0a0, hemiI: .6, glow: 0, lamp: 0, top: 0x5d9be0, bot: 0xd8e8f6, stars: 0, aur: 0 },
   tramonto: { sun: 0xff9a60, sunI: 1.15, az: -1.3, el: .3, sky: 0xc8a2c8, gnd: 0x806a70, hemiI: .56, glow: .8, lamp: .9, top: 0x2a2a66, bot: 0xf0905e, stars: .2, aur: 0 },
-  cripta: { sun: 0x8a90c0, sunI: .12, az: -.4, el: 1.2, sky: 0x40405a, gnd: 0x141018, hemiI: .4, glow: 1, lamp: 1.8, top: 0x07060a, bot: 0x120e16, stars: 0, aur: 0 },
+  cripta: { sun: 0x8a90c0, sunI: .3, az: -.4, el: 1.2, sky: 0x6a6c90, gnd: 0x2e2834, hemiI: .6, glow: 1, lamp: 1.8, top: 0x07060a, bot: 0x120e16, stars: 0, aur: 0 },
   interno: { sun: 0xffd9a0, sunI: .35, az: -.4, el: 1.1, sky: 0x9a7a5a, gnd: 0x3a2a20, hemiI: .62, glow: .9, lamp: 1.3, top: 0x0e0a0c, bot: 0x221816, stars: 0, aur: 0 },
   notte: { sun: 0x9cb6ff, sunI: .45, az: .6, el: 1.0, sky: 0x6a8cbc, gnd: 0x283654, hemiI: .5, glow: 1, lamp: 1.5, top: 0x04070f, bot: 0x101a30, stars: 1, aur: 0 },
 };
