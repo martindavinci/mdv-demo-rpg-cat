@@ -3587,6 +3587,7 @@ function applyCode(text) {
 // ---- engine/80-loop.js
 /* ---------- loop: simulation at a fixed 120 Hz, drawing capped at the chosen 30 / 60 / 120 fps ---------- */
 const SIM = 1 / 120;
+const IDLE_FPS = 10;   // outside play (title, menu, shop...) the picture behind the screen's veil is drawn this often
 let frozen = false;
 const kept = {};   // areas kept built while the cat is elsewhere (def.keep)
 const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4();
@@ -3745,14 +3746,18 @@ function frame(now) {
   const n = Math.ceil(real / SIM - 1e-9); for (let i = 0; i < n; i++) step(real / n);
   // drawn on every refresh of the screen (settings.fps 0, the default: a cap that does not divide the screen's rate
   // shows the frames for uneven times, 14 and 21 ms for 60 on 144 Hz), or capped at 30 / 60 / 120 to save power; the
-  // cap keeps its phase
+  // cap keeps its phase. Outside play the cap is IDLE_FPS: the screen's veil hides a picture that barely moves, and a
+  // phone left on the title or the menu kept drawing it on every refresh
+  const play = ui.screen === 'game', cap = play ? settings.fps : IDLE_FPS;
   drawAcc += real; let dt = drawAcc;
-  if (settings.fps) { const budget = 1 / settings.fps; if (drawAcc + .002 < budget) return; dt = budget; drawAcc = Math.max(0, drawAcc - budget); if (drawAcc > budget) drawAcc = 0; } else drawAcc = 0;
+  if (cap) { const budget = 1 / cap; if (drawAcc + .002 < budget) return; dt = budget; drawAcc = Math.max(0, drawAcc - budget); if (drawAcc > budget) drawAcc = 0; } else drawAcc = 0;
   draw(dt);
-  // the rate reported is the one drawn: the time between draws, not the cap's length (that reported the cap always)
-  frames++; fpsT += lastDraw ? Math.min(.25, (now - lastDraw) / 1000) : dt; lastDraw = now;
-  if (fpsT >= .5) { fps = frames / fpsT; frames = 0; fpsT = 0; if (!$('menu').hidden) $('diag').textContent = t('diag', { fps: Math.round(fps), ms: (1000 / Math.max(1, fps)).toFixed(1), tris: Math.round((A ? A.tris : 0) / 1000), verts: Math.round((A ? A.tris : 0) * 2 / 1000),   // every face is a quad of its own: 4 vertices, 2 triangles
- calls: calls + 1, build: A ? A.buildMs : 0 }); }
+  // the rate reported is the game's, drawn in play: the time between draws, not the cap's length (that reported the cap
+  // always); the menu shows the rate measured before it opened, not its own IDLE_FPS
+  if (play) { if (lastDraw) { frames++; fpsT += Math.min(.25, (now - lastDraw) / 1000); } lastDraw = now; } else lastDraw = 0;
+  if (fpsT >= .5) { fps = frames / fpsT; frames = 0; fpsT = 0; }
+  if (!$('menu').hidden) $('diag').textContent = t('diag', { fps: Math.round(fps), ms: (1000 / Math.max(1, fps)).toFixed(1), tris: Math.round((A ? A.tris : 0) / 1000), verts: Math.round((A ? A.tris : 0) * 2 / 1000),   // every face is a quad of its own: 4 vertices, 2 triangles
+ calls: calls + 1, build: A ? A.buildMs : 0 });
 }
 
 // ---- engine/88-qa.js
