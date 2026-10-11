@@ -519,7 +519,7 @@ function applyDepthRules(key, pic) {
 // A sprite is built once at load (s.low) in local art pixels: X right of the anchor, Y up from the ground, Z toward
 // the camera from the middle of its depth. putLow places a copy in the current area's builder S.
 const CUT = 300;
-// hand curation per sprite (content/curate.js fills it), applied at load, so a redrawn sheet keeps its fixes:
+// hand curation per sprite (content/curate.json fills it), applied at load, so a redrawn sheet keeps its fixes:
 //   cuts: [{ front: [x0, y0, x1, y1], side: [z0, y0, z1, y1] }]  parts that stand out of the shell (a chimney, a sign):
 //         left out of the loft and built as boxes of their own (front rect: x and rows; side rect: depth from the front)
 //   back: { wall: 'plaster' | 'stone', paste: [[sx, sy, w, h, dx, dy]] }  the back painted: a wall pattern in the side
@@ -915,6 +915,9 @@ function putLow(quads, x, z, o) {
 //       their side faces, so a step in or out is closed)
 //   spec.flags: { "x,r": { glow, sides, hidden } }   1 or 0 each: lit at night; side faces; colour only (not built)
 const SHAPES = {}, SHAPE_EDITS = {};   // SHAPE_EDITS: content/edits/<key>.json, put in by the build (tools/lib/edits.mjs)
+// the shape specs in use (content/edits/<key>.json, SHAPE_EDITS): a thing with a spec is built from it in place of its
+// sheet extrusion. Called by the build's edits chunk (tools/lib/edits.mjs), after every engine file has run
+function useShapeEdits() { Object.assign(SHAPES, SHAPE_EDITS); for (const key of Object.keys(SHAPES)) { BUILD[key] = 'pixel'; CODE_ART[key] = (old) => shapeBuilding(old.pic, SHAPES[key], old.sheet); } }
 
 function shapeBuilding(src, spec, sheet) {
   const original = src; if (spec.erase) src = eraseFrom(src, spec.erase); if (spec.paint) src = paintFrom(src, spec.paint);
@@ -1266,6 +1269,8 @@ function lpPut(Bd, m, x, z, o = {}) {
     for (let k = 0; k < 4; k++) {
       const y = p[k][1], ao = f.ao ? .72 + .28 * Math.min(1, Math.max(0, y) / 14) : 1;   // contact shade: darker where it meets the ground
       for (let i = 0; i < 3; i++) { pts[k * 3 + i] = wp[k][i]; cols[k * 3 + i] = Math.max(0, Math.min(255, Math.round(base[i] * j * ao))); }
+      // o.shade (0..1): spent, a container opened and emptied: toward its own grey by shade, darker by shade (0.5: half)
+      if (o.shade) { const c = cols, q = k * 3, g = (c[q] + c[q + 1] + c[q + 2]) / 3, s = 1 - o.shade; for (let i = 0; i < 3; i++) c[q + i] = Math.round((c[q + i] + (g - c[q + i]) * o.shade) * s); }
     }
     const vn = f.p.length === 3 ? [VN[fi][0], VN[fi][1], VN[fi][2], VN[fi][2]] : VN[fi];
     for (let k = 0; k < 4; k++) { const [a, c] = tf(vn[k][0], vn[k][2]); nrms[k * 3] = a; nrms[k * 3 + 1] = vn[k][1]; nrms[k * 3 + 2] = c; }
@@ -1434,11 +1439,14 @@ const TOD_BASE = {
   giorno: { sun: 0xfff0d8, sunI: 1.0, az: -.6, el: .85, sky: 0xcfe0ff, gnd: 0xb8b0a0, hemiI: .6, glow: 0, lamp: 0, top: 0x5d9be0, bot: 0xd8e8f6, stars: 0, aur: 0 },
   tramonto: { sun: 0xff9a60, sunI: 1.15, az: -1.3, el: .3, sky: 0xc8a2c8, gnd: 0x806a70, hemiI: .56, glow: .8, lamp: .9, top: 0x2a2a66, bot: 0xf0905e, stars: .2, aur: 0 },
   cripta: { sun: 0x8a90c0, sunI: .3, az: -.4, el: 1.2, sky: 0x6a6c90, gnd: 0x2e2834, hemiI: .6, glow: 1, lamp: 1.8, top: 0x07060a, bot: 0x120e16, stars: 0, aur: 0 },
+  // the Ark (Chapter 2): cool white service light, and the red of the emergency lights; lamps a little cooler than a hearth
+  nave: { sun: 0xcfe0ff, sunI: .35, az: -.4, el: 1.1, sky: 0x9aa8c0, gnd: 0x3a4250, hemiI: .62, glow: 1, lamp: 1.2, top: 0x05070c, bot: 0x0e1420, stars: 0, aur: 0 },
+  emergenza: { sun: 0xff6a5a, sunI: .22, az: -.4, el: 1.1, sky: 0x8a4a4a, gnd: 0x2a1418, hemiI: .5, glow: 1, lamp: 1.6, top: 0x0a0405, bot: 0x180808, stars: 0, aur: 0 },
   interno: { sun: 0xffd9a0, sunI: .35, az: -.4, el: 1.1, sky: 0x9a7a5a, gnd: 0x3a2a20, hemiI: .62, glow: .9, lamp: 1.3, top: 0x0e0a0c, bot: 0x221816, stars: 0, aur: 0 },
   notte: { sun: 0x9cb6ff, sunI: .45, az: .6, el: 1.0, sky: 0x6a8cbc, gnd: 0x283654, hemiI: .5, glow: 1, lamp: 1.5, top: 0x04070f, bot: 0x101a30, stars: 1, aur: 0 },
 };
 let tod = 1, lamps = [];   // lamps: halo sprites of the current area
-const TODS = ['alba', 'giorno', 'tramonto', 'notte', 'interno', 'cripta'].map((label) => {
+const TODS = ['alba', 'giorno', 'tramonto', 'notte', 'interno', 'cripta', 'nave', 'emergenza'].map((label) => {
   const o = Object.assign({}, TOD_BASE[label], null || {});
   for (const k of ['sun', 'sky', 'gnd', 'top', 'bot']) o[k] = lin(o[k]);
   o.label = label; return o;
@@ -1467,15 +1475,38 @@ const minV = () => 13 / aspect;   // a phone held upright still sees 13 units ac
 const viewV = (v) => (LP && rt.height > 2 ? rt.height / (PPU * Math.max(1, Math.round(rt.height / (PPU * v)))) : v);
 function camGoal(vv) {
   vv = viewV(vv);
-  if (A.W > 48 || A.D > 40) {   // the open world: follow the cat, but never show past the map's edge
+  if (A.W > 48 || A.D > 40) {   // the open world: follow the cat, never showing past the map's edge while the cat stays in view
     const k = aspect < .8 ? vv * .12 : 0;   // upright phones: the cat sits above the thumbs
     const x = player.x + Math.sin(yaw) * k, z = player.z - (A.camNorth || 1.5) + Math.cos(yaw) * k;
     // (one pixel of the picture to spare: the camera's snap moves it up to half a pixel, and the last column past the
     // edge showed the sky)
     const m = vv / Math.max(1, rt.height), hz = vv / Math.sin(PITCH) / 2 + m * 2, hx = vv * aspect / 2 + m, c = Math.abs(Math.cos(yaw)), sn = Math.abs(Math.sin(yaw)), ex = hx * c + hz * sn, ez = hz * c + hx * sn;
-    return [clamp(x, Math.min(ex, A.W / 2), Math.max(A.W - ex, A.W / 2)), clamp(z, Math.min(ez, A.D / 2), Math.max(A.D - ez, A.D / 2))];
+    // (a turned view's box is wider than the view: held inside the map near an edge, it left the cat outside the
+    // picture. The cat comes first: a strip past the edge shows instead, on a turned view only. A straight view keeps the
+    // cat only just inside, a turned one with a room's margin (a cat pressed to the top edge hid under the HUD))
+    return keepInView(clamp(x, Math.min(ex, A.W / 2), Math.max(A.W - ex, A.W / 2)), clamp(z, Math.min(ez, A.D / 2), Math.max(A.D - ez, A.D / 2)), vv, 1 - Math.abs(Math.sin(2 * yaw)));
   }
-  const W = A.W, D = A.D, f = clamp(1.45 - vv / 26, .4, .9); return [W / 2 + (player.x - W / 2) * f, D / 2 - (A.camNorth || 1.5) + (player.z - D / 2) * f * .6]; }
+  // a room: framed whole, the camera following the cat by part of the way; then moved on as far as the cat needs to
+  // stay inside the view with a margin (an upright phone sees 13 units across a room of 30: the cat walked out at the
+  // walls). Measured in view terms, across the screen and toward the camera, so a turned view keeps it too
+  const W = A.W, D = A.D, f = clamp(1.45 - vv / 26, .4, .9);
+  return keepInView(W / 2 + (player.x - W / 2) * f, D / 2 - (A.camNorth || 1.5) + (player.z - D / 2) * f * .6, vv, 0); }
+// a camera goal moved on as far as the cat needs to stay inside the view, in view terms: with a room's margin, or by
+// tight (0 to 1) toward only just inside the picture, so a view kept off the map's edge moves past it as little as it can
+function keepInView(gx, gz, vv, tight) {
+  const mix = (room, edge) => room + (edge - room) * tight;
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw), tx = Math.sin(yaw), tz = Math.cos(yaw);   // screen right; toward the camera
+  const hx = vv * aspect / 2, hz = vv / Math.sin(PITCH) / 2, mx = Math.max(0, mix(Math.min(hx - 2, hx * .8), hx - 1.2)), dx = gx - player.x, dz = gz - player.z;
+  // (the aim toward the camera from the cat puts the cat up the picture: in a room its head and 3 units more, or a fifth
+  // of the picture, to the top edge; away, its feet 2 units or a fifth to the bottom: on a phone the HUD covers the top
+  // and the thumbs the bottom. Tight, its head (2 units
+  // up the picture) just under the top, its feet 1.2 over the bottom. The camera aims at half the cat's
+  // ground: on raised ground the cat shows higher by e)
+  const e = A.groundY(player.x, player.z) * .5 / Math.tan(PITCH);
+  const up = mix(Math.min(hz - 3, hz * .6 - 2), hz - 2), down = mix(Math.min(hz - 2, hz * .6), hz - 1.2);
+  const a = clamp(dx * rx + dz * rz, -mx, mx), b = clamp(dx * tx + dz * tz + e, -Math.max(0, down), Math.max(0, up)) - e;
+  return [player.x + a * rx + b * tx, player.z + a * rz + b * tz];
+}
 // the ground the view covers, as a box in world x/z: [x0, z0, x1, z1]. In view terms it grows by side units left and
 // right, far units away from the camera and near units toward it (a tall tree standing below the view's bottom edge
 // still reaches into it: a 7-unit tree up to 10 units out). The box is taken at the height the camera aims at (the cat's
@@ -1560,6 +1591,21 @@ function resize() {
   // whole screen pixels)
   const ss = window.__ss || (LP ? 1 / Math.max(1, Math.round(bh / 600)) : 1 / Math.max(1, Math.floor(dpr + .01))); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
   aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = LP ? 0 : Math.max(ss, .75); postU.uK.value = LP ? Math.round(1 / ss) : 0;
+}
+
+// ---- engine/31-flicker.js
+/* ---------- flicker: a failing ship's lights (an area's "flicker": true) ---------- */
+// The light level at game time t: full most of the time, now and then a short dip (to .7, rarely to .35), chosen per
+// twelfth of a second by hash2 so the same moment always looks the same (the checks and a replay see one picture).
+// A dip lasts one twelfth of a second and the next comes at least half a second later: about one dip every four
+// seconds, never a strobe (two dips a second at most, below the three flashes a second that can harm; the test runs
+// ten minutes of it: tools/test/shipkit.test.mjs)
+const DIP = .02, DIP_GAP = 5;
+function lampFlicker(t) {
+  const s = Math.floor(t * 12), h = hash2(s, 77);
+  if (h >= DIP) return 1;
+  for (let k = 1; k <= DIP_GAP; k++) if (hash2(s - k, 77) < DIP) return 1;   // (a dip this soon after another: none)
+  return h < DIP * .3 ? .35 : .7;
 }
 
 // ---- engine/34-bake.js
@@ -1786,7 +1832,8 @@ function openArea(def) {
   const wallCol = (t, a, y) => { const g = GT[t]; if (g.cliff) return edgeCol(t, a, y, g.h); const c = g.wall !== undefined ? g.wall : shade(avg(g), .62); if (LP) return LP_WALL ? LP_WALL(c, a, y) : Math.floor(y / 6) % 2 ? c : shade(c, .94); return (Math.floor(y / 4) + Math.floor(a / 8)) % 2 ? c : shade(c, .9); };
   const STRATA = [0x6b4a32, 0x5e4230, 0x6f5238, 0x52392a];
   const LP_STRATA = [0x8a6a4a, 0x7a5c40, 0x93745a, 0x6e5240];   // the low-poly page: level strata, wide, a grass lip
-  const edgeCol = (t, k, y, top) => LP ? (top - y <= 3 ? shade(avg(GT[t]), .78) : LP_STRATA[Math.floor((top - y + 6) / 11) % LP_STRATA.length]) : top - y <= 2 ? shade(avg(GT[t]), .8) : STRATA[Math.floor((top - y + (k % 7)) / 7) % STRATA.length];
+  const LPS = def.strata || LP_STRATA, PXS = def.strata || STRATA;   // (an area may paint its own: content's "strata")
+  const edgeCol = (t, k, y, top) => LP ? (top - y <= 3 ? shade(avg(GT[t]), .78) : LPS[Math.floor((top - y + 6) / 11) % LPS.length]) : top - y <= 2 ? shade(avg(GT[t]), .8) : PXS[Math.floor((top - y + (k % 7)) / 7) % PXS.length];
   // every drop too tall to walk is drawn on the ground: a light lip along the top, a dark line at the foot. From the
   // default view the cliff faces turned away from the camera cannot be seen, and both levels wear the same grass.
   const DROP = STEP * PPU, N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -1852,10 +1899,11 @@ function openArea(def) {
         k = e;
       }
     }
-    // things whose foot stands in this chunk (chests are not baked: they are props, see propMesh). In the 2D style a thing
+    // things whose foot stands in this chunk (the wooden chest is not baked: a prop with a lid, see propMesh; any other
+    // container is baked as its model). In the 2D style a thing
     // is its card, and its 3D model is built as well, drawn only into the shadow map: the ground keeps the 3D's shadows
     let shadowS = null;
-    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if (th.o.chest || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); if (LP && lpModel(th.s.key)) { lpPut(B, lpModel(th.s.key), th.x, th.z, o); continue; } if (settings.flat) { const c = cardFor(th.s, o.rot); if (c) putLow(c, th.x, th.z, Object.assign({}, o, { rot: 0 })); const keep = S; S = shadowS = shadowS || new SlabBuilder(256); if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); S = keep; continue; } if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); }
+    for (const th of things) { const px = th.x * PPU, pz = th.z * PPU; if ((th.o.chest && (th.s.key === CHEST.key || (LP && lpModel(th.s.key)))) || px < x0 || px >= x0 + w || pz < z0 || pz >= z0 + h) continue; const o = Object.assign({}, th.o); if (o.y === undefined) o.y = groundY(th.x, th.z) + (o.dy || 0); if (LP && lpModel(th.s.key)) { lpPut(B, lpModel(th.s.key), th.x, th.z, o); continue; } if (settings.flat) { const c = cardFor(th.s, o.rot); if (c) putLow(c, th.x, th.z, Object.assign({}, o, { rot: 0 })); const keep = S; S = shadowS = shadowS || new SlabBuilder(256); if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); S = keep; continue; } if (th.s.pixel) put(th.s, th.x, th.z, o); if (th.s.low.length) putLow(th.s.low, th.x, th.z, o); }
     cardUpload();
     // baked light, meshes
     B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
@@ -2105,12 +2153,18 @@ const clearFloats = () => { for (const f of floats) f.el.remove(); floats.length
 // G = { v, area, x, z, hp, ink, xp, level, coins, inv: { id: count }, eq: { weapon, armour, charm }, quests: { id: step },
 //       flags: { name: true }, opened: { chestId: true }, seen: { areaId: true } }
 const ITEMS = {};        // content: id → { slot?: 'weapon' | 'armour' | 'charm', atk, def, hp, ink, use?: { hp, ink }, price, key? }
-const LEVEL_XP = [0, 0, 20, 50, 95, 160];   // XP to reach level n (1…5)
-const SAVE_KEY = 'mdv-rpg-cat-save', SAVE_V = 1;
+// the levels (game.json "levels"): xp[n] the XP to reach level n, base.hp [at level 1, more a level]; the last level is the cap
+const maxLevel = () => GAME.levels.xp.length - 1;
+// each chapter keeps its own slot (game.json "chapter.save"; Chapter 1's is the first game's key, so its saves need no
+// migration). A save code carries its chapter as a 16th field; codes made before chapters have 15: Chapter 1's
+const SAVE_V = 1, LEGACY_CHAPTER = 'chapter1';
+const saveKey = () => GAME.chapter.save;
 let G = null;
 
 function newGame() {
-  G = { v: SAVE_V, area: START.area, x: null, z: null, hp: 1, ink: 0, xp: 0, level: 1, coins: 0, inv: {}, eq: { weapon: 'quill_sword', armour: null, charm: null }, quests: {}, flags: {}, opened: {}, seen: {} };
+  G = { v: SAVE_V, area: GAME.start.area, x: null, z: null, hp: 1, ink: 0, xp: 0, level: 1, coins: 0, inv: {}, eq: Object.assign({}, GAME.hero.equip), quests: {}, flags: {}, opened: {}, seen: {} };
+  const S = GAME.hero.start;   // a later chapter's hero starts where its story finds the cat (game.json "hero.start")
+  if (S) { if (S.level) { G.level = Math.min(S.level, maxLevel()); G.xp = GAME.levels.xp[G.level]; } G.coins = S.coins || 0; for (const f of S.flags || []) G.flags[f] = true; Object.assign(G.inv, S.inv || {}); }
   G.hp = stats().hp; G.ink = stats().ink;
 }
 // the hero's numbers depend on the level and the three slots only: kept until one of them changes (read every frame by
@@ -2120,13 +2174,13 @@ function stats() {
   const key = G.level + '|' + G.eq.weapon + '|' + G.eq.armour + '|' + G.eq.charm; if (key === statsKey) return statsVal;
   const L = G.level - 1, eq = Object.values(G.eq).filter(Boolean).map((k) => ITEMS[k] || {});
   const sum = (f) => eq.reduce((a, i) => a + (i[f] || 0), 0);
-  statsKey = key; statsVal = Object.freeze({ hp: 24 + L * 6 + sum('hp'), ink: 30 + sum('ink'), atk: 5 + L * 2 + sum('atk'), def: 1 + L + sum('def') });
+  const b = GAME.levels.base, at = (k) => b[k][0] + L * b[k][1] + sum(k); statsKey = key; statsVal = Object.freeze({ hp: at('hp'), ink: at('ink'), atk: at('atk'), def: at('def') });
   return statsVal;
 }
-const xpToNext = () => G.level >= 5 ? 0 : LEVEL_XP[G.level + 1] - G.xp;
+const xpToNext = () => G.level >= maxLevel() ? 0 : GAME.levels.xp[G.level + 1] - G.xp;
 function gainXp(n) {
   G.xp += n;
-  while (G.level < 5 && G.xp >= LEVEL_XP[G.level + 1]) {
+  while (G.level < maxLevel() && G.xp >= GAME.levels.xp[G.level + 1]) {
     G.level++; const s = stats(); G.hp = s.hp; G.ink = s.ink;
     floatText(t('fx.level', { n: G.level }), player.x, 2.4, player.z, 'gold'); sfx('level'); toast(t('toast.level', { n: G.level }));
   }
@@ -2139,6 +2193,14 @@ function equip(id) {
   const old = G.eq[it.slot]; takeItem(id); if (old) addItem(old); G.eq[it.slot] = id;
   const s = stats(); G.hp = Math.min(G.hp, s.hp); G.ink = Math.min(G.ink, s.ink); sfx('item'); return true;
 }
+// an item to wear against the one worn in its slot: { worn: id | null, diff: [[stat, change]] } (the stats that change),
+// null for an item not worn
+const BONUS_STATS = ['atk', 'def', 'hp', 'ink'];
+function equipDiff(id) {
+  const it = ITEMS[id]; if (!it || !it.slot) return null;
+  const worn = G.eq[it.slot] || null, w = (worn && ITEMS[worn]) || {};
+  return { worn, diff: BONUS_STATS.map((k) => [k, (it[k] || 0) - (w[k] || 0)]).filter(([, d]) => d) };
+}
 function useItem(id) {
   const it = ITEMS[id]; if (!it || !it.use || !G.inv[id]) return false;
   const s = stats(); if (it.use.hp && G.hp >= s.hp && !it.use.ink) return false;
@@ -2148,17 +2210,23 @@ function useItem(id) {
 
 /* the save: the browser keeps one slot; the code carries the same data as text a person can copy */
 function snapshot() { const s = JSON.parse(JSON.stringify(G)); if (player && A) { s.area = A.def.id; s.x = +player.x.toFixed(2); s.z = +player.z.toFixed(2); } return s; }
-function saveGame() { if (!G) return false; try { localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot())); return true; } catch (e) { return false; } }
-function loadSave() { try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); return checkSave(s); } catch (e) { return null; } }
+function saveGame() { if (!G) return false; try { localStorage.setItem(saveKey(), JSON.stringify(snapshot())); return true; } catch (e) { return false; } }
+function loadSave() { try { const s = JSON.parse(localStorage.getItem(saveKey())); return checkSave(s); } catch (e) { return null; } }
 const hasSave = () => !!loadSave();
+// the slot as the title shows it: none, ok, or broken (there, but unreadable or for areas this chapter does not have:
+// New game starts the chapter afresh over it, the other chapters' slots untouched)
+function saveState() { let raw = null; try { raw = localStorage.getItem(saveKey()); } catch (e) { return 'none'; } if (raw === null) return 'none'; try { return checkSave(JSON.parse(raw)) ? 'ok' : 'broken'; } catch (e) { return 'broken'; } }
 function checkSave(s) {
   if (!s || typeof s !== 'object' || typeof s.v !== 'number' || s.v > SAVE_V || !AREAS[s.area]) return null;
   // older saves miss newer fields and a hand-edited or damaged one may hold anything: records that are not records and
   // numbers that are not numbers take the defaults
   const rec = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? o : {}), num = (n, d) => (Number.isFinite(n) ? n : d);
+  // a quest's state is { s: its step, n: its count }; any other shape (a hand-edited { main: 1 }) crashed the game at play
+  // start, so the save is refused instead: the title calls it unreadable (saveState) and New game starts afresh
+  if (Object.values(rec(s.quests)).some((q) => !q || typeof q !== 'object' || !Number.isInteger(q.s) || q.s < 0 || !Number.isFinite(q.n))) return null;
   return Object.assign({}, s, {
-    inv: rec(s.inv), quests: rec(s.quests), flags: rec(s.flags), opened: rec(s.opened), seen: rec(s.seen), eq: Object.assign({ weapon: 'quill_sword', armour: null, charm: null }, rec(s.eq)),
-    coins: Math.max(0, num(s.coins, 0)), xp: Math.max(0, num(s.xp, 0)), level: Math.min(5, Math.max(1, Math.round(num(s.level, 1)))), hp: num(s.hp, 0), ink: num(s.ink, 0),
+    inv: rec(s.inv), quests: rec(s.quests), flags: rec(s.flags), opened: rec(s.opened), seen: rec(s.seen), eq: Object.assign({}, GAME.hero.equip, rec(s.eq)),
+    coins: Math.max(0, num(s.coins, 0)), xp: Math.max(0, num(s.xp, 0)), level: Math.min(maxLevel(), Math.max(1, Math.round(num(s.level, 1)))), hp: num(s.hp, 0), ink: num(s.ink, 0),
     x: Number.isFinite(s.x) ? s.x : null, z: Number.isFinite(s.z) ? s.z : null,
   });
 }
@@ -2166,28 +2234,35 @@ function checkSave(s) {
 // code: JSON → UTF-8 → base32 (no look-alike letters) with a CRC-32, in groups of five
 const B32 = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function crc32(bytes) { let c = ~0; for (const b of bytes) { c ^= b; for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xEDB88320 : c >>> 1; } return ~c >>> 0; }
-function saveCode() {
-  const s = snapshot(), compact = [s.v, s.area, s.x, s.z, s.hp, s.ink, s.xp, s.level, s.coins, s.inv, s.eq, s.quests, Object.keys(s.flags), Object.keys(s.opened), Object.keys(s.seen)];
-  const data = new TextEncoder().encode(JSON.stringify(compact)), crc = crc32(data), bytes = new Uint8Array(data.length + 4);
+function encodeCode(fields) {
+  const data = new TextEncoder().encode(JSON.stringify(fields)), crc = crc32(data), bytes = new Uint8Array(data.length + 4);
   bytes.set(data); bytes.set([crc >>> 24, crc >>> 16 & 255, crc >>> 8 & 255, crc & 255], data.length);
   let bits = 0, acc = 0, out = '';
   for (const b of bytes) { acc = (acc << 8) | b; bits += 8; while (bits >= 5) { out += B32[(acc >>> (bits - 5)) & 31]; bits -= 5; } acc &= (1 << bits) - 1; }
   if (bits) out += B32[(acc << (5 - bits)) & 31];
   return out.match(/.{1,5}/g).join('-');
 }
-function readCode(text) {
+function saveCode() {
+  const s = snapshot();
+  return encodeCode([s.v, s.area, s.x, s.z, s.hp, s.ink, s.xp, s.level, s.coins, s.inv, s.eq, s.quests, Object.keys(s.flags), Object.keys(s.opened), Object.keys(s.seen), CHAPTER_ID]);
+}
+function decodeCode(text) {
   const clean = String(text).toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (clean.length < 16) return { error: 'code.short' };
   const bytes = []; let bits = 0, acc = 0;
   for (const ch of clean) { const v = B32.indexOf(ch); if (v < 0) return { error: 'code.char', ch }; acc = (acc << 5) | v; bits += 5; if (bits >= 8) { bytes.push((acc >>> (bits - 8)) & 255); bits -= 8; acc &= (1 << bits) - 1; } }
   const data = Uint8Array.from(bytes.slice(0, -4)), c = bytes.slice(-4), crc = crc32(data);
   if (((c[0] << 24 | c[1] << 16 | c[2] << 8 | c[3]) >>> 0) !== crc) return { error: 'code.crc' };
-  try {
-    const [v, area, x, z, hp, ink, xp, level, coins, inv, eq, quests, flags, opened, seen] = JSON.parse(new TextDecoder().decode(data));
-    const set = (a) => Object.fromEntries((a || []).map((k) => [k, true]));
-    const s = checkSave({ v, area, x, z, hp, ink, xp, level, coins, inv, eq, quests, flags: set(flags), opened: set(opened), seen: set(seen) });
-    return s ? { save: s } : { error: 'code.version' };
-  } catch (e) { return { error: 'code.crc' }; }
+  try { const fields = JSON.parse(new TextDecoder().decode(data)); return Array.isArray(fields) ? { fields } : { error: 'code.crc' }; } catch (e) { return { error: 'code.crc' }; }
+}
+// another chapter's code comes back as { chapter } alone: it is checked once that chapter is loaded (engine/66-chapters.js)
+function readCode(text) {
+  const d = decodeCode(text); if (d.error) return d;
+  const [v, area, x, z, hp, ink, xp, level, coins, inv, eq, quests, flags, opened, seen, chapter = LEGACY_CHAPTER] = d.fields;
+  if (chapter !== CHAPTER_ID) return { chapter: String(chapter) };
+  const set = (a) => Object.fromEntries((Array.isArray(a) ? a : []).map((k) => [k, true]));
+  const s = checkSave({ v, area, x, z, hp, ink, xp, level, coins, inv, eq, quests, flags: set(flags), opened: set(opened), seen: set(seen) });
+  return s ? { save: s, chapter } : { error: 'code.version' };
 }
 
 // ---- engine/56-combat.js
@@ -2200,7 +2275,8 @@ const SWINGS = [
   { reach: 1.35, arc: 2.1, dmg: 1, push: 3, dur: .24, hit: .06, sfx: 'swing' },
   { reach: 1.65, arc: 2.8, dmg: 1.6, push: 8, dur: .34, hit: .1, sfx: 'swing3' },
 ];
-const SKILLS = { dash: { ink: 10 }, well: { ink: 15 } };
+const SKILLS = { dash: { ink: 10 }, well: { ink: 15 }, scan: { ink: 8 } };
+const SCAN_R = 6;   // how far the scanner reaches, in world units
 const hero = { swing: -1, st: 0, queued: false, grace: 0, last: -1, hitSet: null, dodge: 0, cd: 0, dx: 0, dz: 0, dash: false, inv: 0, hurt: 0, kx: 0, kz: 0, dead: 0 };
 let shakeT = 0, combatT = 0;
 const INK_REGEN = 2;
@@ -2227,9 +2303,11 @@ function heroDodge(skill) {
   if (hero.dead || hero.hurt > 0 || hero.dodge > 0 || (!skill && hero.cd > 0)) return;
   if (skill) {
     if (!G.flags['skill_' + skill]) { toast(t('toast.locked')); sfx('no'); return; }
+    if (skill === 'scan' && combatT > 0) { floatText(t('fx.scan.busy'), player.x, 1.8, player.z, 'ink'); sfx('no'); return; }   // (a find rebuilds the area: never in a fight)
     if (G.ink < SKILLS[skill].ink) { floatText(t('fx.noink'), player.x, 1.8, player.z, 'ink'); sfx('no'); return; }
     G.ink -= SKILLS[skill].ink;
     if (skill === 'well') { inkwell(); return; }
+    if (skill === 'scan') { scan(); return; }
   }
   const [ix, iy] = moveVector(); let dx = player.fx, dz = player.fz;
   if (Math.hypot(ix, iy) > .3) { const [mx, mz] = screenToWorld(ix, iy), l = Math.hypot(mx, mz); dx = mx / l; dz = mz / l; player.fx = dx; player.fz = dz; }
@@ -2243,6 +2321,13 @@ function inkwell() {
   fx('ink_splash', player.x, player.z, { size: 2.2, fps: 9 }); sfx('well'); shake(.15);
   const s = stats();
   for (const e of enemies) if (e.hp > 0 && near(e, player) < 3.4) { e.slow = 4; hitEnemy(e, dmgRoll(s.atk, e.T.def, .7), 4, false); }
+}
+// the scanner: a ring of ink; what is written in hidden ink nearby is found (its flag set) and the area shown again with it
+function scan() {
+  fx('ink_splash', player.x, player.z, { size: 3, fps: 9 }); sfx('notice');
+  const found = scanAround(A.def.things || [], G.flags, player.x, player.z, SCAN_R);
+  if (!found.length) { floatText(t('fx.scan.none'), player.x, 1.8, player.z, 'ink'); return; }
+  for (const f of found) setFlag(f); toast(t('toast.scan', { n: found.length })); reopen();
 }
 function hurtHero(atk, fromX, fromZ) {
   if (hero.inv > 0 || hero.dead || !G) return;
@@ -2354,7 +2439,7 @@ function enemiesStep(dt) {
       case 'notice': engaged = true; if (e.st <= 0) setState(e, 'chase', 0); break;
       case 'chase': {
         engaged = true; face(player.x, player.z);
-        if (Math.hypot(e.x - e.hx, e.z - e.hz) > 16 || dist > T.sight * 1.8 || hero.dead) { setState(e, 'return', 0); e.aware = false; break; }
+        if ((!e.hunt && (Math.hypot(e.x - e.hx, e.z - e.hz) > 16 || dist > T.sight * 1.8)) || hero.dead) { setState(e, 'return', 0); e.aware = false; break; }   // (a hunting enemy, a scripted ambush, is never leashed)
         if (dist <= T.reach && A.clear(e.x, e.z, player.x, player.z)) { setState(e, 'windup', T.windup * (e.slow > 0 ? 1.4 : 1)); a.anim = 'windup'; e.sx = e.x; e.sz = e.z; e.tx = player.x; e.tz = player.z; break; }
         if (dist > .9) a.moving = move(e.fx * sp, e.fz * sp);
         break;
@@ -2412,7 +2497,7 @@ function enemyDefeated(e) {
 /* pickups: coins and items on the ground; they drift to the cat when it is close */
 function drop(id, x, z, n) {
   let px = x, pz = z; if (A.blocked(px, pz)) { px = player.x; pz = player.z; }
-  const f = flat('items-1', [id], px, pz, { size: id === 'coin' ? .32 : .4, loop: true, bob: .25, fps: 1 });
+  const f = flat(sheetOf(GAME.sheets.items, id), [id], px, pz, { size: id === 'coin' ? .32 : .4, loop: true, bob: .25, fps: 1 });
   pickups.push({ id, n: n || 1, x: px, z: pz, f, t: 0 });
 }
 function pickupsStep(dt) {
@@ -2539,10 +2624,10 @@ function musicTick() {
 
 // ---- engine/60-input.js
 /* ---------- input: keyboard, touch (stick + buttons) and gamepad feed one set of actions ---------- */
-// move: a vector; pressed actions (attack, dodge, skill1, skill2, interact, menu, rotateL, rotateR) are queued once per
+// move: a vector; pressed actions (attack, dodge, skill1, skill2, skill3, interact, menu, rotateL, rotateR) are queued once per
 // press, never repeated by a held key
 const input = { keys: new Set(), stickX: 0, stickY: 0, padX: 0, padY: 0, queue: [], padPrev: {} };
-const KEYMAP = { ' ': 'interact', enter: 'interact', escape: 'menu', tab: 'menu', q: 'rotateL', e: 'rotateR', j: 'attack', z: 'attack', k: 'dodge', x: 'dodge', shift: 'dodge', l: 'skill1', c: 'skill1', u: 'skill2', v: 'skill2' };
+const KEYMAP = { ' ': 'interact', enter: 'interact', escape: 'menu', tab: 'menu', q: 'rotateL', e: 'rotateR', j: 'attack', z: 'attack', k: 'dodge', x: 'dodge', shift: 'dodge', l: 'skill1', c: 'skill1', u: 'skill2', v: 'skill2', i: 'skill3', b: 'skill3' };
 
 function inputSetup() {
   addEventListener('keydown', (e) => {
@@ -2551,6 +2636,7 @@ function inputSetup() {
     if (k === 'tab' && ui.screen !== 'game') return;   // Tab moves focus in menus; in play it opens the menu
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'tab'].includes(k) && ui.screen === 'game') e.preventDefault();
     if (e.repeat) return;   // a held key acts once
+    if (dlg && dlg.pad && (/^[0-9]$/.test(k) || k === 'backspace' || k === 'escape')) { e.preventDefault(); dlg.pad(k === 'backspace' ? '<' : k === 'escape' ? 'x' : k); return; }   // the keypad
     input.keys.add(k);
     const act = KEYMAP[k];
     if (act && !(act === 'interact' && document.activeElement && /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) input.queue.push(act);
@@ -2573,13 +2659,15 @@ function inputSetup() {
 const isTyping = (e) => e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
 
 // gamepad: left stick moves; A hits (or talks), B dodges, X and Y are the skills, Start opens the menu, shoulders turn the view
+// (a frame the gamepad is not granted to throws on getGamepads: no pad, the game goes on)
 function pollPad() {
-  const pads = navigator.getGamepads ? navigator.getGamepads() : []; const p = pads && [...pads].find(Boolean);
+  let pads = []; try { if (navigator.getGamepads) pads = navigator.getGamepads(); } catch (e) { /* refused: no pad */ }
+  const p = pads && [...pads].find(Boolean);
   input.padX = input.padY = 0; if (!p) return;
   const dz = (v) => Math.abs(v) < .2 ? 0 : v;
   input.padX = dz(p.axes[0] || 0); input.padY = -dz(p.axes[1] || 0);
   const edge = (i, act) => { const on = !!(p.buttons[i] && p.buttons[i].pressed); if (on && !input.padPrev[i]) input.queue.push(act); input.padPrev[i] = on; };
-  edge(0, 'attack'); edge(1, 'dodge'); edge(2, 'skill1'); edge(3, 'skill2'); edge(9, 'menu'); edge(4, 'rotateL'); edge(5, 'rotateR');
+  edge(0, 'attack'); edge(1, 'dodge'); edge(2, 'skill1'); edge(3, 'skill2'); edge(6, 'skill3'); edge(9, 'menu'); edge(4, 'rotateL'); edge(5, 'rotateR');
 }
 
 // the move vector in screen terms: x right, y up
@@ -2636,7 +2724,7 @@ function questEvent(type, what) {
 /* villagers: stand where the area puts them, turn to the cat when it talks to them */
 function spawnNpc(id, x, z, face) {
   const N = NPCS[id]; if (!N) throw new Error('no npc "' + id + '"');
-  const row = N.row, a = sheetActor(N.sheet || 'villagers', { down: row, up: row, side: row },
+  const row = N.row, a = sheetActor(N.sheet || GAME.sheets.people, { down: row, up: row, side: row },
     { idle: { down: ['down_idle'], up: ['up_idle'], side: ['side_idle'] }, walk: { down: ['down_walk1', 'down_walk2'], up: ['up_idle'], side: ['side_walk1', 'side_walk2'] } });
   a.x = x; a.z = z; if (face) { a.fx = face[0]; a.fz = face[1]; }
   const n = { id, N, a, x, z, home: face || [0, 1] };
@@ -2647,19 +2735,29 @@ function spawnNpc(id, x, z, face) {
 /* chests: kept out of the baked ground, all of an area's chests in one mesh (rebuilt while a lid swings: a few chests,
    well under a millisecond); a closed chest shows a faint sparkle while something is inside, an opened one stands open */
 const chests = new Map(); let chestMesh = null;
+// a container's model (the low-poly page; not the wooden chest): drawn with the chests, so an opened one is redrawn spent
+const chestModel = (c) => c.key !== CHEST.key && LP && lpModel(c.key);
+// the top of a container's model above its ground, in world units (the sparkle stands over it, never inside a locker)
+const modelTop = (m) => { let y = 0; for (const f of m.f) for (const q of f.p) y = Math.max(y, q[1]); return y * P; };
 function chestProp(id, key, x, z, o) {
-  const sparkle = G.opened[id] ? null : fx('sparkle', x, z, { loop: true, size: .7, fps: 3, y: A.groundY(x, z) + 1.5 });
+  const m = key !== CHEST.key && LP && lpModel(key), y = (o.y !== undefined ? o.y : A.groundY(x, z) + (o.dy || 0)) + Math.max(1.5, m ? modelTop(m) + .55 : 0);
+  // something inside: a bright sparkle over it, quick enough to catch the eye; an opened one has none, and is drawn spent
+  const sparkle = G.opened[id] ? null : fx('sparkle', x, z, { loop: true, size: 1.05, fps: 6, y });
   if (sparkle && player) sparkle.mesh.visible = Math.hypot(x - player.x, z - player.z) < 14;
   chests.set(id, { id, key, x, z, o, sparkle, lid: G.opened[id] ? CHEST.open : 0 });
 }
 function chestsBuild() {
   if (settings.wire) setTimeout(applyWire);   // after the mesh below exists
   if (chestMesh) chestMesh.dispose(); chestMesh = null; if (!chests.size) return;
-  chestMesh = propMesh([...chests.values()].map((c) => LP && LP_CHEST ? [lpSettle(LP_CHEST(c.lid)), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }] : settings.flat ? [cardFor(sp[c.key], c.o.rot, c.lid) || [], c.x, c.z, { flip: c.o.flip }] : [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
+  // the wooden chest with its lid; on the low-poly page a container with a model of its own (a locker, a crate, a safe)
+  // too, drawn spent once opened (darker, greyer: lpPut's shade); any other is baked with the ground, only its sparkle here
+  const list = [...chests.values()].filter((c) => c.key === CHEST.key || chestModel(c)); if (!list.length) return;
+  chestMesh = propMesh(list.map((c) => chestModel(c) ? [lpModel(c.key), c.x, c.z, { rot: c.o.rot, flip: c.o.flip, y: c.o.y !== undefined ? c.o.y : A.groundY(c.x, c.z) + (c.o.dy || 0), shade: G.opened[c.id] ? .55 : 0 }]
+    : LP && LP_CHEST ? [lpSettle(LP_CHEST(c.lid)), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }] : settings.flat ? [cardFor(sp[c.key], c.o.rot, c.lid) || [], c.x, c.z, { flip: c.o.flip }] : [chestQuads(sp[c.key], c.lid), c.x, c.z, { rot: c.o.rot, flip: c.o.flip }]));
 }
 function openChestProp(id) {
   const c = chests.get(id); if (!c) return;
-  if (c.sparkle) { c.sparkle.dispose(); c.sparkle = null; } c.swing = 0;   // the lid swings open over CHEST.time (chestsTick)
+  if (c.sparkle) { c.sparkle.dispose(); c.sparkle = null; } if (c.key === CHEST.key) c.swing = 0; else if (chestModel(c)) chestsBuild();   // the lid swings open over CHEST.time (chestsTick); a model is redrawn spent at once
   fx('sparkle', c.x, c.z, { size: 1.2, fps: 8, y: A.groundY(c.x, c.z) + 1 });
 }
 function chestsTick(dt) {
@@ -2677,6 +2775,12 @@ function npcsStep(dt) {
   }
 }
 
+// the scanner: things written in ink only it shows (a thing's "scan" flag), within reach of the cat and not found yet
+function scanAround(things, flags, x, z, r) {
+  const out = []; for (const [, tx, tz, , , o] of things) if (o && o.scan && !flags[o.scan] && Math.hypot(tx - x, tz - z) <= r) out.push(o.scan);
+  return out;
+}
+
 /* what Space does next to something */
 function interact(act) {
   if (act.npc) {
@@ -2686,11 +2790,12 @@ function interact(act) {
     return;
   }
   if (act.chest) {
-    const c = act.chest; if (G.opened[c.id]) { openDialogue({ name: 'act.chest', lines: ['chest.empty'] }); return; }
-    if (c.need && !has(c.need)) { sfx('no'); openDialogue({ name: 'act.chest', lines: [c.needLine || 'chest.locked'] }); return; }
+    const c = act.chest, title = c.name || 'act.chest';   // (a container may name itself: a locker, a crate, a safe)
+    if (G.opened[c.id]) { openDialogue({ name: title, lines: ['chest.empty'] }); return; }
+    if (c.need && !has(c.need)) { sfx('no'); openDialogue({ name: title, lines: [c.needLine || 'chest.locked'] }); return; }
     G.opened[c.id] = true; addItem(c.item, c.n || 1); sfx('chest'); if (c.flag) G.flags[c.flag] = true; openChestProp(c.id);
     const found = [t('chest.found', { item: c.item === 'coin' ? t('item.coins', { n: c.n }) : t('item.' + c.item) })].concat((c.lines || []).map((k) => t(k)));
-    openDialogue({ name: 'act.chest', lines: found, raw: true, after: () => { questEvent('collect', c.item); if (c.flag) questEvent('flag', c.flag); saveGame(); } });
+    openDialogue({ name: title, lines: found, raw: true, after: () => { questEvent('collect', c.item); if (c.flag) questEvent('flag', c.flag); saveGame(); } });
     return;
   }
   if (act.desk) {
@@ -2710,7 +2815,7 @@ function populate(def) {
   for (const [key, x, z, , , o] of def.things || []) {
     if (!o || (o.when && !o.when())) continue;
     const d = AP.sprites[key].d || 8, front = z + d * P / 2 + .5;
-    if (o.chest) { A.acts.push({ x, z: front, r: 1.4, label: 'act.open', chest: o.chest, name: 'act.chest', when: () => !G.opened[o.chest.id] }); chestProp(o.chest.id, key, x, z, o); }
+    if (o.chest) { A.acts.push({ x, z: front, r: 1.4, label: 'act.open', chest: o.chest, name: o.chest.name || 'act.chest', when: () => !G.opened[o.chest.id] }); chestProp(o.chest.id, key, x, z, o); }
     if (o.desk) A.acts.push({ x, z: front, r: 1.4, label: 'act.read', desk: true, name: 'act.desk' });
     if (o.act) A.acts.push(Object.assign({ x, z: front, r: 1.4 }, o.act));
   }
@@ -2722,23 +2827,476 @@ function populate(def) {
   if (G) { G.seen[def.id] = true; questEvent('reach', def.id); }
 }
 
+// ---- engine/63-events.js
+/* ---------- events: the conditions, values and command lists the game's data is written in ---------- */
+// content/**/*.json holds no code. A condition, a value or a command list is compiled once, as the data loads, into
+// the kind of small function the engine already calls (a thing's when(), a person's talk(), an area's music(), a
+// lever's run()): nothing is interpreted per frame. A mistake is collected in errs with its place in the file, not
+// thrown, so the build names every one at once; refs collects every name the data points at ([kind, name, place]) for
+// the loader to check (engine/65-data.js).
+const EVENTS = {};   // common events by name (story.json "events"), compiled; run by { "call": name }
+let LOCAL = {};      // the area's scratch numbers ({ "set" } / { "add" }: the crypt's levers); never saved
+const CMP = { '==': (a, b) => a === b, '!=': (a, b) => a !== b, '<': (a, b) => a < b, '<=': (a, b) => a <= b, '>': (a, b) => a > b, '>=': (a, b) => a >= b };
+const isRec = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const unknownFields = (o, known, path, errs) => { for (const k of Object.keys(o)) if (!known.includes(k)) errs.push(`${path}: unknown field "${k}" (known: ${known.join(', ')})`); };
+
+// a value: a string or a number; { t: key } (that text in the player's language); { count: [item, ...] } (how many of
+// them the cat holds); { var: name } (a scratch number); { arg: name } (what a call passed); { choose: [[condition,
+// value], ...], else: value } (the first whose condition holds). ref: what kind of name its strings are ('key' a
+// language key, 'music' a track), recorded for the loader's check
+function compileValue(v, path, errs, refs, ref) {
+  if (typeof v === 'string') { if (ref) refs.push([ref, v, path]); return () => v; }
+  if (typeof v === 'number') return () => v;
+  const kind = isRec(v) && ['t', 'count', 'var', 'arg', 'choose'].find((k) => k in v);
+  if (!kind) { errs.push(`${path}: not a value: ${JSON.stringify(v)}`); return () => undefined; }
+  unknownFields(v, kind === 'choose' ? ['choose', 'else'] : [kind], path, errs);
+  const w = v[kind];
+  if (kind === 't') { refs.push(['key', w, path + '.t']); return () => t(w); }
+  if (kind === 'count') { if (!Array.isArray(w)) { errs.push(`${path}.count: a list of items`); return () => 0; } w.forEach((id, i) => refs.push(['item', id, `${path}.count[${i}]`])); return () => w.filter((id) => has(id)).length; }
+  if (kind === 'var') return () => LOCAL[w] || 0;
+  if (kind === 'arg') return (sc) => (sc && sc.args ? sc.args[w] : undefined);
+  if (!Array.isArray(w)) { errs.push(`${path}.choose: a list of [condition, value]`); return () => undefined; }
+  const cases = w.map((c, i) => Array.isArray(c) && c.length === 2 ? [compileCond(c[0], `${path}.choose[${i}][0]`, errs, refs), compileValue(c[1], `${path}.choose[${i}][1]`, errs, refs, ref)] : (errs.push(`${path}.choose[${i}]: [condition, value]`), [() => false, () => undefined]));
+  const other = 'else' in v ? compileValue(v.else, path + '.else', errs, refs, ref) : () => undefined;
+  return (sc) => { for (const [c, f] of cases) if (c(sc)) return f(sc); return other(sc); };
+}
+
+// a comparison: a number (equal to it) or [op, value]
+function compileCmp(spec, path, errs, refs) {
+  if (typeof spec === 'number') return (a) => a === spec;
+  if (Array.isArray(spec) && spec.length === 2 && CMP[spec[0]]) { const f = CMP[spec[0]], w = compileValue(spec[1], path + '[1]', errs, refs); return (a, sc) => f(a, w(sc)); }
+  errs.push(`${path}: a comparison is a number or [op, value], op one of ${Object.keys(CMP).join(' ')}`); return () => false;
+}
+
+// a condition: true; { flag }; { has, n? }; { quest, step } (-1: not started); { var, is }; { area } (the area the cat is
+// in); { touch } (a touch screen); { dialogue } (one is open); { enemies } (how many still stand); { x } (where the cat
+// stands, west to east); { not }; { all: [...] }; { any: [...] }
+const COND_KINDS = { flag: [], has: ['n'], quest: ['step'], var: ['is'], area: [], touch: [], dialogue: [], enemies: [], x: [], not: [], all: [], any: [] };
+function compileCond(c, path, errs, refs) {
+  if (c === true) return () => true;
+  const kind = isRec(c) && Object.keys(COND_KINDS).find((k) => k in c);
+  if (!kind) { errs.push(`${path}: not a condition: ${JSON.stringify(c)}`); return () => false; }
+  unknownFields(c, [kind, ...COND_KINDS[kind]], path, errs);
+  const v = c[kind];
+  switch (kind) {
+    case 'flag': return () => !!G.flags[v];
+    case 'has': refs.push(['item', v, path + '.has']); return () => has(v, c.n);
+    case 'quest': { refs.push(['quest', v, path + '.quest']); const k = compileCmp(c.step, path + '.step', errs, refs); return (sc) => k(qStep(v), sc); }
+    case 'var': { const k = compileCmp(c.is, path + '.is', errs, refs); return (sc) => k(LOCAL[v] || 0, sc); }
+    case 'area': refs.push(['area', v, path + '.area']); return () => !!A && A.def.id === v;
+    case 'touch': return () => !!coarse === !!v;
+    case 'dialogue': return () => !!dlg === !!v;
+    case 'enemies': { const k = compileCmp(v, path + '.enemies', errs, refs); return (sc) => k(enemies.filter((e) => e.hp > 0).length, sc); }
+    case 'x': { const k = compileCmp(v, path + '.x', errs, refs); return (sc) => k(player.x, sc); }
+    case 'not': { const k = compileCond(v, path + '.not', errs, refs); return (sc) => !k(sc); }
+    default: {   // all, any
+      if (!Array.isArray(v)) { errs.push(`${path}.${kind}: a list of conditions`); return () => false; }
+      const ks = v.map((x, i) => compileCond(x, `${path}.${kind}[${i}]`, errs, refs));
+      return kind === 'all' ? (sc) => ks.every((k) => k(sc)) : (sc) => ks.some((k) => k(sc));
+    }
+  }
+}
+
+// dialogue lines as openDialogue() takes them: a key (a value), or [speaker, key] / [speaker, key, { name: value }]
+function compileLines(lines, path, errs, refs) {
+  if (!Array.isArray(lines)) { errs.push(`${path}: a list of lines`); return () => []; }
+  const fs = lines.map((l, i) => {
+    const p = `${path}[${i}]`; if (!Array.isArray(l)) return compileValue(l, p, errs, refs, 'key');
+    if (l.length < 2 || l.length > 3) errs.push(`${p}: [speaker, key] or [speaker, key, vars]`);
+    refs.push(['speaker', l[0], p + '[0]']); const key = compileValue(l[1], p + '[1]', errs, refs, 'key'), vars = l[2] && compileVars(l[2], p + '[2]', errs, refs);
+    return vars ? (sc) => [l[0], key(sc), vars(sc)] : (sc) => [l[0], key(sc)];
+  });
+  return (sc) => fs.map((f) => f(sc));
+}
+function compileVars(o, path, errs, refs) {
+  if (!isRec(o)) { errs.push(`${path}: a record of values`); return () => ({}); }
+  const fs = Object.entries(o).map(([k, w]) => [k, compileValue(w, `${path}.${k}`, errs, refs)]);
+  return (sc) => Object.fromEntries(fs.map(([k, f]) => [k, f(sc)]));
+}
+
+// a command list: [{ "say": ... }, { "if": ... }, ...], each command named by its first field. A command compiles to
+// (sc, next) => over: true when it is over at once; false when it waits (a dialogue, a pause), and then it calls next
+// once it is. sc: { self: the enemy an onDefeat is about, args: what a call passed }
+const CMD_FIELDS = { say: ['name', 'pic', 'voice', 'choices'], if: ['then', 'else'], call: ['args'], flag: [], unflag: [], take: ['n'], quest: [], drop: ['at', 'offset'], spawn: ['at', 'aware', 'hunt', 'onDefeat'], set: ['to'], add: ['n'], sfx: [], toast: ['vars'], shake: [], music: [], save: [], reopen: [], wait: [], end: [], keypad: ['name', 'then', 'else'], go: ['at', 'face'] };
+function compileCmds(list, path, errs, refs) {
+  if (!Array.isArray(list)) { errs.push(`${path}: a list of commands`); return []; }
+  return list.map((c, i) => compileCmd(c, `${path}[${i}]`, errs, refs));
+}
+function compileCmd(c, path, errs, refs) {
+  const kind = isRec(c) ? Object.keys(c)[0] : null;
+  if (!CMD_FIELDS[kind]) { errs.push(`${path}: not a command: ${JSON.stringify(c)} (commands: ${Object.keys(CMD_FIELDS).join(', ')})`); return () => true; }
+  unknownFields(c, [kind, ...CMD_FIELDS[kind]], path, errs);
+  const v = c[kind], at = (f) => `${path}.${f}`, xz = (p, f) => (Array.isArray(p) && p.length === 2 && p.every(Number.isFinite)) || (errs.push(`${at(f)}: [x, z]`), false);
+  switch (kind) {
+    case 'say': {
+      if (c.name !== undefined) refs.push(['key', c.name, at('name')]);
+      const lines = compileLines(v, at('say'), errs, refs), ch = c.choices && (Array.isArray(c.choices) ? c.choices : (errs.push(`${at('choices')}: a list of [key, commands]`), [])).map((x, j) => [compileValue(x[0], `${path}.choices[${j}][0]`, errs, refs, 'key'), compileCmds(x[1], `${path}.choices[${j}][1]`, errs, refs)]);
+      return (sc, next) => {
+        const o = { name: c.name, lines: lines(sc) }; if (c.pic) o.pic = c.pic; if (c.voice) o.voice = c.voice;
+        // a choice closes the dialogue and runs its own commands, then this list goes on; without choices, closing goes on
+        if (ch) o.choices = ch.map(([k, L]) => [k(sc), () => { if (runSub(L, sc, next)) next(); }]); else o.after = next;
+        openDialogue(o); return false;
+      };
+    }
+    case 'if': { const k = compileCond(v, at('if'), errs, refs), a = compileCmds(c.then || [], at('then'), errs, refs), b = compileCmds(c.else || [], at('else'), errs, refs); return (sc, next) => runSub(k(sc) ? a : b, sc, next); }
+    case 'call': { refs.push(['event', v, at('call')]); const args = Object.entries(c.args || {}).map(([k, w]) => [k, compileValue(w, `${path}.args.${k}`, errs, refs)]); return (sc, next) => runSub(EVENTS[v], { self: sc.self, args: Object.fromEntries(args.map(([k, f]) => [k, f(sc)])) }, next); }
+    case 'flag': return () => { setFlag(v); return true; };
+    case 'unflag': return () => { delete G.flags[v]; return true; };
+    case 'take': refs.push(['item', v, at('take')]); return () => { takeItem(v, c.n); return true; };
+    case 'quest': refs.push(['quest', v, at('quest')]); return () => { startQuest(v); return true; };
+    case 'drop': {
+      refs.push(['item', v, at('drop')]); const off = c.offset || [0, 0]; if (c.at !== 'self') xz(c.at, 'at'); if (c.offset) xz(c.offset, 'offset');
+      return (sc) => { const [x, z] = c.at === 'self' ? [sc.self.x, sc.self.z] : c.at; drop(v, x + off[0], z + off[1]); return true; };
+    }
+    case 'spawn': {
+      refs.push(['enemy', v, at('spawn')]); xz(c.at, 'at'); const od = c.onDefeat && compileCmds(c.onDefeat, at('onDefeat'), errs, refs);
+      return () => { const e = spawnEnemy(v, c.at[0], c.at[1]); if (c.aware || c.hunt) e.aware = true; if (c.hunt) e.hunt = true;   // (hunt: an ambush, the enemy never leashed back home)
+        if (od) e.onDefeat = () => runCmds(od, { self: e }); return true; };
+    }
+    case 'set': { const f = compileValue(c.to, at('to'), errs, refs); return (sc) => { LOCAL[v] = f(sc); return true; }; }
+    case 'add': return () => { LOCAL[v] = (LOCAL[v] || 0) + (c.n === undefined ? 1 : c.n); return true; };
+    case 'sfx': refs.push(['sfx', v, at('sfx')]); return () => { sfx(v); return true; };
+    case 'toast': { const k = compileValue(v, at('toast'), errs, refs, 'key'), vars = c.vars && compileVars(c.vars, at('vars'), errs, refs); return (sc) => { toast(vars ? t(k(sc), vars(sc)) : t(k(sc))); return true; }; }
+    case 'shake': return () => { shake(v); return true; };
+    // (while the cat plays, the area's own track takes over on the next frame: this is for the ending's screen)
+    case 'music': refs.push(['music', v, at('music')]); return () => { playTrack(v); return true; };
+    case 'save': return () => { saveGame(); return true; };
+    // (the area is built again behind a fade; the list goes on at once, as the levers always did)
+    case 'reopen': return () => { reopen(); return true; };
+    // (real time, as the Scribe's line always waited; the frozen checks wait it out with a real sleep)
+    case 'wait': if (!(v >= 0)) errs.push(`${at('wait')}: seconds`); return (sc, next) => { setTimeout(next, v * 1000); return false; };
+    // another area, as walking through a door does (the lift's choices)
+    case 'go': refs.push(['area', v, at('go')]); xz(c.at, 'at'); if (c.face) xz(c.face, 'face'); return () => { goTo({ to: v, at: c.at, face: c.face || [0, 1] }); return true; };
+    // a keypad (a safe, a door): the code typed runs then, a wrong one else; closed without a code, neither
+    case 'keypad': {
+      if (typeof v !== 'string' || !/^\d{1,6}$/.test(v)) errs.push(`${at('keypad')}: a code of 1 to 6 digits`);
+      if (c.name !== undefined) refs.push(['key', c.name, at('name')]);
+      const a = compileCmds(c.then || [], at('then'), errs, refs), b = compileCmds(c.else || [], at('else'), errs, refs);
+      return (sc, next) => { openKeypad({ name: c.name, len: String(v).length, done: (code) => { if (runSub(code === v ? a : b, sc, next)) next(); }, cancel: next }); return false; };
+    }
+    default: return () => { markDone(); ui.screen = 'end'; showScreen('end'); return true; };   // end (the chapter finished: the shared record)
+  }
+}
+
+// runs a compiled list at once up to the first command that waits; that command's next goes on from there. next comes
+// from the engine's own callback (a dialogue's after runs in the game step whose press closed it), so the story moves
+// on in that very step: the checks drive the game by hand and read it straight after
+function runCmds(list, sc, done) { let i = 0; const s = sc || {}; const go = () => { while (i < list.length) if (!list[i++](s, go)) return; if (done) done(); }; go(); }
+// a branch, a choice or a call: over at once (true: the caller goes on in its own loop) or later (false: its end calls next)
+function runSub(list, sc, next) { let now = true, over = false; runCmds(list, sc, () => { over = true; if (!now) next(); }); now = false; return over; }
+
+// ---- engine/65-data.js
+/* ---------- the game's data: the content's JSON files upgraded, checked, and turned into what the engine runs ---------- */
+// GAME_DATA = { files: { 'chapter1/items.json': { schema: 1, items: { ... } }, ... } }, put in game.js by the build
+// (tools/lib/data.mjs, which also runs this file in node to check the data before it ships). Each file carries the
+// schema it was written for: an older one is upgraded by DATA_MIGRATIONS in turn, a newer one refused. A file adds
+// records to collections by id; one id in two places is an error. JSON is the public format, written to be read and
+// edited (named fields, colours as '#rrggbb', no code); compileGameData() turns it into the shapes the engine always
+// ran (tuples, functions), so the engine and the checks see what the content scripts used to make.
+const DATA_SCHEMA = 1;
+const DATA_MIGRATIONS = {};   // n → (file) => void: rewrites a schema-n file's records as schema n + 1 (the loader then bumps its number)
+const GAME = {};              // game.json's record: start, hero, levels, sheets, titleArt, map, intro, onPlay
+const BEHAVIOURS = {};        // plugins (content/plugins/): enemy behaviours by name, { ai?, onHit? }, named by enemies.json "behaviour"
+// chapters: each top-level folder of the content holding a game.json is a chapter, its id the folder's name; a file at the
+// content's root (curate.json) belongs to every chapter. A page plays one chapter: engine/90-boot.js sets CHAPTER_ID and
+// loads chapterFiles(GAME_DATA, CHAPTER_ID) once (another chapter is another page load: engine/66-chapters.js)
+let CHAPTER_ID = null;
+const chapterOf = (data, id) => (((data && data.files && data.files[id + '/game.json']) || {}).game || {}).chapter || {};
+const chapterIds = (data) => Object.keys((data && data.files) || {}).filter((f) => /^[^/]+\/game\.json$/.test(f)).map((f) => f.split('/')[0])
+  .sort((a, b) => (chapterOf(data, a).order || 0) - (chapterOf(data, b).order || 0) || (a < b ? -1 : 1));
+function chapterFiles(data, id) { const files = {}; for (const [f, v] of Object.entries(data.files)) if (!f.includes('/') || f.startsWith(id + '/')) files[f] = v; return { files }; }
+// what no single chapter's compile can see: no chapter at all, one save slot shared by two, a folder name the address's
+// hash (#next=) and the save code cannot carry as they are
+function checkChapters(data) {
+  const errs = [], ids = chapterIds(data), keys = {};
+  if (!ids.length) errs.push('no chapter: a folder of content/ holding a game.json (content/chapter1/game.json)');
+  for (const id of ids) {
+    if (!/^[a-z0-9_-]+$/.test(id)) errs.push(`"${id}": a chapter folder's name is lower-case letters, digits, _ and -`);
+    const k = chapterOf(data, id).save; if (!k) continue;
+    if (keys[k]) errs.push(`save key "${k}" is used by ${keys[k]} and ${id}: each chapter keeps its own slot`); else keys[k] = id;
+  }
+  return errs;
+}
+const COLLECTIONS = { game: 'game', items: 'item', enemies: 'enemy', speakers: 'speaker', npcs: 'npc', quests: 'quest', events: null, music: 'music', areas: 'area', curate: null };
+const REF_OF = { item: 'items', enemy: 'enemies', area: 'areas', npc: 'npcs', speaker: 'speakers', quest: 'quests', event: 'events', music: 'music' };
+
+// a field's kind: 'num' 'int' 'str' 'bool' 'null' 'any' 'colour' ('#rrggbb') 'xz' ([x, z]) 'rect' ([x0, z0, x1, z1]);
+// 'key' (a language key) or the name of another record ('item' 'enemy' 'area' 'npc' 'speaker' 'quest' 'event'
+// 'music'); [values] (one of them); { field: kind } a record ('field!' is required); { list }, { map } (a record by
+// id), { tuple }, { or }. 'cond', 'value', 'cmds', 'lines' and 'on' are checked by their compilers (engine/63-events.js)
+const DATA_SPEC = {
+  game: {
+    'start!': { 'area!': 'area' },
+    'chapter!': { 'title!': 'key', 'blurb!': 'key', 'minutes!': 'int', 'order!': 'int', 'save!': 'str', 'styles!': { list: ['lowpoly', 'diorama'] }, card: { tuple: ['str', 'str'] }, doneFlag: 'str', hidden: 'bool' },
+    'hero!': { 'sheet!': 'str', 'views!': { 'down!': 'str', 'up!': 'str', 'side!': 'str' }, 'anims!': { map: 'any' }, start: { level: 'int', coins: 'int', flags: { list: 'str' }, inv: { map: 'int' } }, 'equip!': { 'weapon!': { or: ['null', 'item'] }, 'armour!': { or: ['null', 'item'] }, 'charm!': { or: ['null', 'item'] } } },
+    'levels!': { 'xp!': { list: 'num' }, 'base!': { 'hp!': { tuple: ['num', 'num'] }, 'ink!': { tuple: ['num', 'num'] }, 'atk!': { tuple: ['num', 'num'] }, 'def!': { tuple: ['num', 'num'] } } },
+    'sheets!': { 'portraits!': { or: ['str', { list: 'str' }] }, 'items!': { or: ['str', { list: 'str' }] }, 'people!': 'str' }, 'titleArt!': { tuple: ['str', 'str'] },
+    map: { 'area!': 'area', 'marks!': { list: 'str' } }, intro: 'event', onPlay: 'event',
+  },
+  item: { slot: ['weapon', 'armour', 'charm'], atk: 'num', def: 'num', hp: 'num', ink: 'num', use: { hp: 'num', ink: 'num' }, price: 'num', key: 'bool' },
+  enemy: { 'sheet!': 'str', 'row!': 'str', 'hp!': 'num', 'atk!': 'num', def: 'num', 'speed!': 'num', 'sight!': 'num', 'reach!': 'num', windup: 'num', strike: 'num', recover: 'num', xp: 'num', coins: { tuple: ['int', 'int'] }, 'r!': 'num',
+    move: ['hop', 'lunge', 'smash'], fly: 'num', shield: 'bool', poise: 'bool', size: 'num', boss: 'key', anims: { map: 'any' }, drops: { list: { 'item!': 'item', 'chance!': 'num' } }, behaviour: 'str' },
+  speaker: { 'name!': 'key', 'pic!': 'str' },
+  npc: { 'row!': 'str', 'name!': 'key', 'pic!': 'str', voice: 'num', sheet: 'str', 'pages!': { list: { if: 'cond', 'lines!': 'lines', then: 'cmds', shop: { list: 'item' } } } },
+  quest: { 'name!': 'key', main: 'bool', 'steps!': { list: { 'text!': 'key', 'on!': 'on', then: 'cmds' } }, reward: { xp: 'num', coins: 'num', item: 'item' } },
+  music: { 'bpm!': 'num', 'voices!': { map: { list: 'str' } } },
+  area: {
+    'name!': 'key', cell: 'num', chunk: { tuple: ['int', 'int'] }, keep: 'bool', 'tod!': ['alba', 'giorno', 'tramonto', 'notte', 'interno', 'cripta', 'nave', 'emergenza'], 'start!': 'xz', camNorth: 'num', step: 'num', music: 'value', halo: 'colour', flicker: 'bool', strata: { list: 'colour' },
+    'legend!': { map: { 'tile!': 'str', h: 'num', water: 'bool', wall: 'colour', cliff: 'bool' } }, 'map!': { list: 'str' },
+    things: { list: { 'key!': 'str', 'at!': 'xz', box: 'xz', when: 'cond', scan: 'str', rot: 'int', flip: 'bool', dy: 'num', desk: 'bool',
+      door: { 'to!': 'area', 'at!': 'xz', face: 'xz', need: 'item' }, chest: { 'id!': 'str', 'item!': 'item', n: 'int', flag: 'str', lines: { list: 'key' }, need: 'item', needLine: 'key', name: 'key' },
+      act: { 'label!': 'key', 'name!': 'key', 'run!': 'cmds' }, look: { 'label!': 'key', 'name!': 'key', 'lines!': { list: 'key' } } } },
+    npcs: { list: { 'id!': 'npc', 'at!': 'xz', face: 'xz', when: 'cond' } }, spawns: { list: { 'type!': 'enemy', 'at!': 'xz', when: 'cond' } },
+    lamps: { list: { list: 'num' } }, solids: { list: 'rect' }, exits: { list: { 'rect!': 'rect', 'to!': 'area', 'at!': 'xz', face: 'xz', need: 'item', when: 'cond' } },
+    tips: { list: { 'rect!': 'rect', 'text!': 'value' } }, onEnter: 'cmds',
+  },
+};
+
+// (a record kind may have a field named "map": { map: kind } is the map kind only when "map" is its only field)
+function checkKind(v, k, path, errs, refs) {
+  const bad = (what) => errs.push(`${path}: expected ${what}, got ${JSON.stringify(v)}`);
+  if (Array.isArray(k)) { if (!k.includes(v)) bad('one of ' + k.join(', ')); return; }
+  if (typeof k === 'object') {
+    if (k.list) { if (!Array.isArray(v)) return bad('a list'); v.forEach((x, i) => checkKind(x, k.list, `${path}[${i}]`, errs, refs)); return; }
+    if (k.map && Object.keys(k).length === 1) { if (!isRec(v)) return bad('a record'); for (const [id, x] of Object.entries(v)) checkKind(x, k.map, `${path}.${id}`, errs, refs); return; }
+    if (k.tuple) { if (!Array.isArray(v) || v.length !== k.tuple.length) return bad(`a list of ${k.tuple.length}`); v.forEach((x, i) => checkKind(x, k.tuple[i], `${path}[${i}]`, errs, refs)); return; }
+    if (k.or) { const fit = k.or.find((kk) => { const e = []; checkKind(v, kk, path, e, []); return !e.length; }); if (fit === undefined) bad(k.or.map((kk) => typeof kk === 'string' ? kk : 'a record').join(' or ')); else checkKind(v, fit, path, errs, refs); return; }
+    if (!isRec(v)) return bad('a record');
+    const spec = Object.fromEntries(Object.entries(k).map(([f, kk]) => [f.replace(/!$/, ''), kk]));
+    for (const f of Object.keys(k)) if (f.endsWith('!') && !(f.slice(0, -1) in v)) errs.push(`${path}: missing "${f.slice(0, -1)}"`);
+    for (const [f, x] of Object.entries(v)) { if (!(f in spec)) errs.push(`${path}: unknown field "${f}" (known: ${Object.keys(spec).join(', ')})`); else checkKind(x, spec[f], `${path}.${f}`, errs, refs); }
+    return;
+  }
+  switch (k) {
+    case 'num': if (typeof v !== 'number' || !Number.isFinite(v)) bad('a number'); return;
+    case 'int': if (!Number.isInteger(v)) bad('a whole number'); return;
+    case 'str': if (typeof v !== 'string') bad('a string'); return;
+    case 'bool': if (typeof v !== 'boolean') bad('true or false'); return;
+    case 'null': if (v !== null) bad('null'); return;
+    case 'colour': if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) bad("a colour '#rrggbb'"); return;
+    case 'xz': if (!Array.isArray(v) || v.length !== 2 || !v.every(Number.isFinite)) bad('[x, z]'); return;
+    case 'rect': if (!Array.isArray(v) || v.length !== 4 || !v.every(Number.isFinite)) bad('[x0, z0, x1, z1]'); return;
+    case 'any': case 'cond': case 'value': case 'cmds': case 'lines': case 'on': return;
+    case 'key': if (typeof v !== 'string') return bad('a language key'); refs.push(['key', v, path]); return;
+    default: if (!REF_OF[k]) throw new Error('DATA_SPEC: no kind ' + k); if (typeof v !== 'string') return bad(`the name of a${/^[aeiou]/.test(k) ? 'n' : ''} ${k}`); refs.push([k, v, path]);
+  }
+}
+
+// the files merged, checked and compiled; errs gets every problem, each with its file and place
+function compileGameData(data, errs) {
+  const P = { game: null }, from = {}, refs = [], out = { refs };
+  for (const c of Object.keys(COLLECTIONS)) if (c !== 'game') P[c] = {};
+  for (const [name, f0] of Object.entries((data && data.files) || {})) {
+    const f = JSON.parse(JSON.stringify(f0));   // (upgraded in place: the caller's copy stays as it was)
+    if (!isRec(f) || !Number.isInteger(f.schema)) { errs.push(`${name}: no "schema" version`); continue; }
+    if (f.schema > DATA_SCHEMA) { errs.push(`${name}: written for schema ${f.schema}; this engine reads up to ${DATA_SCHEMA} (made by a newer engine)`); continue; }
+    while (f.schema < DATA_SCHEMA && DATA_MIGRATIONS[f.schema]) { DATA_MIGRATIONS[f.schema](f); f.schema++; }
+    if (f.schema < DATA_SCHEMA) { errs.push(`${name}: no upgrade from schema ${f.schema}`); continue; }
+    for (const [c, recs] of Object.entries(f)) {
+      if (c === 'schema') continue;
+      if (!(c in COLLECTIONS)) { errs.push(`${name}: unknown collection "${c}" (known: ${Object.keys(COLLECTIONS).join(', ')})`); continue; }
+      if (c === 'game') { if (P.game) errs.push(`${name}: a second game record (the first is in ${from.game})`); else { P.game = recs; from.game = name; } continue; }
+      if (!isRec(recs)) { errs.push(`${name}: ${c}: a record of ids`); continue; }
+      for (const [id, r] of Object.entries(recs)) { const k = c + '.' + id; if (from[k]) errs.push(`${name}: ${k} is also in ${from[k]}`); else { P[c][id] = r; from[k] = name; } }
+    }
+  }
+  const where = (c, id) => `${from[c + '.' + id]}: ${c}.${id}`;
+  if (!P.game) errs.push('game.json: no "game" record (the start, the hero, the levels, the sheets, the title, the map)');
+  if (P.game) checkKind(P.game, DATA_SPEC.game, `${from.game}: game`, errs, refs);
+  for (const [c, kind] of Object.entries(COLLECTIONS)) if (kind && c !== 'game') for (const [id, r] of Object.entries(P[c])) checkKind(r, DATA_SPEC[kind], where(c, id), errs, refs);
+  if (errs.length) return out;   // (compiling assumes the shapes are right)
+  // every item's name and description are language keys too
+  for (const id of Object.keys(P.items)) refs.push(['key', 'item.' + id, where('items', id)], ['key', 'desc.' + id, where('items', id)]);
+  Object.assign(out, { game: P.game, items: P.items, speakers: P.speakers, curate: P.curate, events: {}, enemies: {}, behaviours: {}, npcs: {}, quests: {}, music: {}, areas: {}, hooks: {} });
+  for (const [id, L] of Object.entries(P.events)) out.events[id] = compileCmds(L, where('events', id), errs, refs);
+  for (const [id, e] of Object.entries(P.enemies)) { const T = Object.assign({}, e); if (e.drops) T.drops = e.drops.map((d) => [d.item, d.chance]); if (e.behaviour) { out.behaviours[id] = e.behaviour; delete T.behaviour; } out.enemies[id] = T; }
+  for (const [id, m] of Object.entries(P.music)) out.music[id] = { bpm: m.bpm, voices: Object.fromEntries(Object.entries(m.voices).map(([k, bars]) => [k, bars.join(' | ')])) };
+  for (const [id, n] of Object.entries(P.npcs)) out.npcs[id] = compileNpc(n, where('npcs', id), errs, refs);
+  for (const [id, q] of Object.entries(P.quests)) out.quests[id] = compileQuest(q, where('quests', id), errs, refs);
+  for (const [id, a] of Object.entries(P.areas)) { const p = where('areas', id); out.areas[id] = compileArea(id, a, p, errs, refs); if (a.onEnter) { const L = compileCmds(a.onEnter, p + '.onEnter', errs, refs); out.hooks[id] = () => runCmds(L, {}); } }
+  checkRefs(P, refs, errs);
+  return out;
+}
+
+// every name the data points at must be in the data (the plugins add code, never records)
+function checkRefs(P, refs, errs) {
+  for (const [kind, id, path] of refs) {
+    if (kind === 'key' || (kind === 'item' && id === 'coin')) continue;   // (language keys: the build checks them against lang/)
+    if (kind === 'sfx') { if (typeof SFX !== 'undefined' && !SFX[id]) errs.push(`${path}: no sound "${id}"`); continue; }
+    const c = P[REF_OF[kind]];
+    if (!(id in c)) errs.push(`${path}: no ${kind} "${id}"`);
+  }
+}
+
+// a person: talk() picks the first page whose condition holds, as things stand before the talk counts for a quest
+// (interact() runs the quest event after talk()); its lines with their numbers as they are now; its commands once the
+// dialogue is closed; its shop after that
+function compileNpc(n, path, errs, refs) {
+  const pages = n.pages.map((pg, i) => { const p = `${path}.pages[${i}]`; return { when: pg.if === undefined ? () => true : compileCond(pg.if, p + '.if', errs, refs), lines: compileLines(pg.lines, p + '.lines', errs, refs), then: pg.then && compileCmds(pg.then, p + '.then', errs, refs), shop: pg.shop }; });
+  if (!n.pages.length || n.pages[n.pages.length - 1].if !== undefined) errs.push(`${path}.pages: the last page must have no "if" (someone always answers)`);
+  const N = { row: n.row, name: n.name, pic: n.pic }; if (n.voice !== undefined) N.voice = n.voice; if (n.sheet) N.sheet = n.sheet;
+  N.talk = () => { const pg = pages.find((q) => q.when({})), r = { lines: pg.lines({}) }; if (pg.then) r.after = () => runCmds(pg.then, {}); if (pg.shop) r.shop = pg.shop.slice(); return r; };
+  return N;
+}
+
+// a quest step's event: { talk: person } { collect: item, n? } { defeat: enemy, n? } { reach: area } { flag: name }
+// { check: condition }, as the tuple questEvent() reads: [event, what, count?]
+const STEP_ON = { talk: 'npc', collect: 'item', defeat: 'enemy', reach: 'area', flag: null, check: null };
+function compileQuest(q, path, errs, refs) {
+  const Q = { name: q.name, steps: q.steps.map((s, i) => {
+    const p = `${path}.steps[${i}]`, o = s.on, ev = isRec(o) && Object.keys(STEP_ON).find((k) => k in o), st = { text: s.text };
+    if (!ev) { errs.push(`${p}.on: one of ${Object.keys(STEP_ON).join(', ')}`); st.on = ['none']; }
+    else { unknownFields(o, [ev, 'n'], p + '.on', errs); if (STEP_ON[ev]) refs.push([STEP_ON[ev], o[ev], `${p}.on.${ev}`]); st.on = ev === 'check' ? ['check', compileCond(o.check, p + '.on.check', errs, refs)] : o.n !== undefined ? [ev, o[ev], o.n] : [ev, o[ev]]; }
+    if (s.then) { const L = compileCmds(s.then, p + '.then', errs, refs); st.then = () => runCmds(L, {}); }
+    return st;
+  }) };
+  if (q.main) Q.main = true; if (q.reward) Q.reward = q.reward;
+  return Q;
+}
+
+// an area as openArea() and populate() take it: things [key, x, z, hx, hz, opts], people [id, x, z, face, when],
+// spawns [type, x, z, when] (trailing blanks left off), colours as numbers, conditions and commands as functions
+const trimTuple = (a) => { while (a.length && a[a.length - 1] === undefined) a.pop(); return a; };
+const colourOf = (s) => parseInt(s.slice(1), 16);
+function compileArea(id, a, path, errs, refs) {
+  const D = { id };
+  for (const f of ['name', 'cell', 'chunk', 'keep', 'tod', 'start', 'camNorth', 'step', 'map', 'lamps', 'solids', 'flicker']) if (a[f] !== undefined) D[f] = a[f];
+  if (a.halo !== undefined) D.halo = colourOf(a.halo);
+  if (a.strata) D.strata = a.strata.map(colourOf);   // (the earth under the floor at the area's edges, in its own colours: a ship's hull)
+  if (a.music !== undefined) { const m = compileValue(a.music, path + '.music', errs, refs, 'music'); D.music = typeof a.music === 'string' ? a.music : () => m({}); }
+  D.legend = Object.fromEntries(Object.entries(a.legend).map(([ch, g]) => [ch, g.wall === undefined ? Object.assign({}, g) : Object.assign({}, g, { wall: colourOf(g.wall) })]));
+  if (!a.map.length) errs.push(`${path}.map: no rows`);
+  const w = a.map.length ? a.map[0].length : 0;
+  a.map.forEach((row, r) => { for (const ch of new Set(row)) if (!(ch in a.legend)) errs.push(`${path}.map[${r}]: "${ch}" is not in the legend`); if (row.length !== w) errs.push(`${path}.map[${r}]: ${row.length} cells, the first row has ${w}`); });
+  if (a.things) D.things = a.things.map((th, i) => compileThing(th, `${path}.things[${i}]`, errs, refs));
+  if (a.npcs) D.npcs = a.npcs.map((n, i) => trimTuple([n.id, n.at[0], n.at[1], n.face, n.when === undefined ? undefined : compileCond(n.when, `${path}.npcs[${i}].when`, errs, refs)]));
+  if (a.spawns) D.spawns = a.spawns.map((s, i) => trimTuple([s.type, s.at[0], s.at[1], s.when === undefined ? undefined : compileCond(s.when, `${path}.spawns[${i}].when`, errs, refs)]));
+  if (a.exits) D.exits = a.exits.map((e, i) => { const o = Object.assign({}, e); if (e.when !== undefined) o.when = compileCond(e.when, `${path}.exits[${i}].when`, errs, refs); return o; });
+  if (a.tips) D.tips = a.tips.map((tp, i) => { const f = compileValue(tp.text, `${path}.tips[${i}].text`, errs, refs, 'key'); return { rect: tp.rect, text: () => f({}) }; });
+  return D;
+}
+function compileThing(th, path, errs, refs) {
+  const o = {};
+  for (const [f, v] of Object.entries(th)) {
+    if (f === 'key' || f === 'at' || f === 'box') continue;
+    if (f === 'when') o.when = compileCond(v, path + '.when', errs, refs);
+    else if (f === 'act') { const L = compileCmds(v.run, path + '.act.run', errs, refs); o.act = { label: v.label, name: v.name, run: () => runCmds(L, {}) }; }
+    else o[f] = v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : v;
+  }
+  // a thing written in hidden ink ("scan": a flag) is there only once the scanner has found it, and its own when holds
+  if (th.scan) { const w = o.when, f = th.scan; o.when = () => !!G.flags[f] && (!w || w()); }
+  const box = th.box || [];
+  return trimTuple([th.key, th.at[0], th.at[1], box[0], box[1], Object.keys(o).length ? o : undefined]);
+}
+
+// at boot (engine/90-boot.js): compiled and put into the engine's registries, after the plugins have registered; any
+// problem stops the game with the list. A record a content script made too is a problem, not a quiet swap
+function loadGameData(data) {
+  const errs = [], P = compileGameData(data, errs);
+  if (!errs.length) {
+    const put = (reg, recs, what) => { for (const [id, r] of Object.entries(recs || {})) { if (id in reg) errs.push(`${what} "${id}" is defined twice: in the data and in a content script`); else reg[id] = r; } };
+    put(ITEMS, P.items, 'item'); put(ENEMIES, P.enemies, 'enemy'); put(SPEAKERS, P.speakers, 'speaker'); put(NPCS, P.npcs, 'person'); put(QUESTS, P.quests, 'quest'); put(MUSIC, P.music, 'track');
+    put(EVENTS, P.events, 'event'); put(AREAS, P.areas, 'area'); put(AREA_HOOKS, P.hooks, 'area hook'); put(CURATE, P.curate, 'curation');
+    for (const [id, b] of Object.entries(P.behaviours)) { if (BEHAVIOURS[b]) Object.assign(ENEMIES[id], BEHAVIOURS[b]); else errs.push(`enemies.${id}: no behaviour "${b}" (a plugin in content/plugins/ registers it)`); }
+    if (P.game) { Object.assign(GAME, P.game); if (GAME.intro) CHAPTER.intro = (done) => runCmds(EVENTS[GAME.intro], {}, done); if (GAME.onPlay) CHAPTER.mend = () => runCmds(EVENTS[GAME.onPlay], {}); }
+    // the names checked again against everything loaded (content scripts included), now the plugins have run
+    const live = { item: ITEMS, enemy: ENEMIES, area: AREAS, npc: NPCS, speaker: SPEAKERS, quest: QUESTS, event: EVENTS, music: MUSIC };
+    for (const [kind, id, path] of P.refs) if (live[kind] && !(id in live[kind]) && !(kind === 'item' && id === 'coin')) errs.push(`${path}: no ${kind} "${id}"`);
+  }
+  if (errs.length) throw new Error(`The game's data has ${errs.length} problem(s):\n` + errs.slice(0, 12).join('\n'));
+}
+
+// ---- engine/66-chapters.js
+/* ---------- chapters: the shared record (finished chapters, the last played) and which chapter a page plays ---------- */
+// The record is small and apart from the saves (each chapter's own slot, engine/54-game.js) and the settings
+// (engine/00-core.js): { v: 1, done: [chapter ids], last: chapter id | null }. Read defensively, written whole; storage
+// that throws (private mode) leaves it empty and the game playing
+const PROGRESS_KEY = 'mdv-rpg-cat-progress';
+function readProgress() {
+  let p = null; try { p = JSON.parse(localStorage.getItem(PROGRESS_KEY)); } catch (e) { /* unreadable or blocked: empty */ }
+  const ok = p && typeof p === 'object' && p.v === 1;
+  return { v: 1, done: ok && Array.isArray(p.done) ? p.done.filter((d) => typeof d === 'string') : [], last: ok && typeof p.last === 'string' ? p.last : null };
+}
+function writeProgress(p) { try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(p)); return true; } catch (e) { return false; } }
+function markPlayed() { const p = readProgress(); p.last = CHAPTER_ID; writeProgress(p); }
+function markDone() { const p = readProgress(); if (!p.done.includes(CHAPTER_ID)) p.done.push(CHAPTER_ID); p.last = CHAPTER_ID; writeProgress(p); }
+// finished: in the record, or (saves from before the record) the chapter's own slot holds its done flag (game.json
+// "chapter.doneFlag"); read raw, as another chapter's slot cannot be checked against areas this page has not loaded
+// a game saved in that chapter's own slot (read raw: another chapter's areas are not loaded on this page; the chapters
+// screen offers Continue on it, so going to another chapter never starts this one afresh by surprise)
+function chapterSaved(id) { const k = chapterOf(GAME_DATA, id).save; try { return !!k && localStorage.getItem(k) !== null; } catch (e) { return false; } }
+function chapterDone(id) {
+  if (readProgress().done.includes(id)) return true;
+  const c = chapterOf(GAME_DATA, id); if (!c.doneFlag || !c.save) return false;
+  try { const s = JSON.parse(localStorage.getItem(c.save)); return !!(s && s.flags && s.flags[c.doneFlag]); } catch (e) { return false; }
+}
+
+// which chapter a page plays. One a page load: a chapter's data fills the engine's registries once, and switching is a
+// reload, so nothing of the last chapter (records, actors, caches, timers) stays behind. The title's choice travels in
+// the address's hash, #next=<json> (read once and cleared; it needs no storage, so it works in private mode), else the
+// last chapter played, else the first; never one this page cannot draw (game.json "chapter.styles": Chapter 2 is
+// low-poly only) or one marked hidden unless asked for (the skeleton, until it is a chapter)
+let SHOW_HIDDEN = false;
+const chapterOn = (id, style) => chapterIds(GAME_DATA).includes(id) && (chapterOf(GAME_DATA, id).styles || []).includes(style);
+const visibleChapters = (style) => chapterIds(GAME_DATA).filter((id) => chapterOn(id, style) && (SHOW_HIDDEN || !chapterOf(GAME_DATA, id).hidden));
+function pickChapter(next, style) {
+  const ids = chapterIds(GAME_DATA).filter((id) => chapterOn(id, style)), last = readProgress().last;
+  // (a hidden chapter opens when asked for, a link or its save code, never again as the last played: every later visit
+  // would land in it, with New game starting it again and no card leading out)
+  const want = next ? next.chapter : last && (SHOW_HIDDEN || !chapterOf(GAME_DATA, last).hidden) ? last : null;
+  return ids.includes(want) ? want : ids[0];
+}
+// New game asks first when it would overwrite a game saved in that chapter (this page's slot checked whole: an
+// unreadable one has nothing to lose; another chapter's read raw)
+function newGameNeedsConfirm(id) { return id === CHAPTER_ID ? saveState() === 'ok' : chapterSaved(id); }
+// The title's own choice rides on both the window's name and the hash, as no one of them survives a reload everywhere:
+// a page shown inside a viewer (an iframe's srcdoc, a blob: address) loses the hash, a file opened from a phone's
+// downloads may lose the name. Taken once from whichever arrives (the name first), both cleared; a #next= link works too
+const NEXT_NAME = 'mdv-rpg-cat-next:';
+function takeNext(loc, hist, win) {
+  const name = win && typeof win.name === 'string' && win.name.startsWith(NEXT_NAME) ? win.name.slice(NEXT_NAME.length) : null;
+  if (name !== null) win.name = '';
+  const m = /^#next=(.+)$/.exec(loc.hash || '');
+  if (m) try { hist.replaceState(null, '', loc.pathname + loc.search); } catch (e) { loc.hash = ''; }
+  if (name === null && !m) return null;
+  try { const n = JSON.parse(name !== null ? name : decodeURIComponent(m[1])); return n && typeof n === 'object' && typeof n.chapter === 'string' ? n : null; } catch (e) { return null; }
+}
+// then: 'new' | 'continue' | 'code' (with the code's text): what the next page load does once that chapter is loaded
+function goChapter(chapter, then, code) {
+  const n = JSON.stringify(code ? { chapter, then, code } : { chapter, then });
+  window.name = NEXT_NAME + n;
+  try { history.replaceState(null, '', '#next=' + encodeURIComponent(n)); } catch (e) { /* a viewer that keeps no history: the name carries it */ }
+  location.reload();
+}
+// what the last page load handed over (goChapter), run once this chapter is loaded and the frame loop runs; a failure
+// there leaves the title on screen (a throw inside the boot used to stop it before the frame loop and the hooks)
+function handOver(next) {
+  if (!next || next.chapter !== CHAPTER_ID) return;
+  try { if (next.then === 'new') startGame(); else if (next.then === 'continue') continueGame(); else if (next.then === 'code') applyCode(next.code || ''); }
+  catch (e) { console.error(e); toTitle(); }
+}
+
 // ---- engine/70-ui.js
 /* ---------- ui: dialogue with portraits, hint, toast, HUD, fade (HTML over the canvas) ---------- */
 let dlg = null, nearAct = null;
 const ui = { screen: 'title' };   // title | game | menu | menu-title | shop | over
 
 /* portraits: drawn from the portraits sheet into a small canvas */
+// a chapter may draw its portraits and icons from several sheets (game.json "sheets": a name or a list): a picture
+// comes from the first sheet that has it
+const sheetOf = (sheets, name) => { const L = [].concat(sheets); return L.find((s) => SHEETS[s] && SHEETS[s].meta.sprites[name]) || L[0]; };
 function drawPic(el, sheet, name) {
-  const SH = SHEETS[sheet], r = SH && name && SH.meta.sprites[name]; el.hidden = !r; if (!r) return;
+  const SH = SHEETS[sheetOf(sheet, name)], r = SH && name && SH.meta.sprites[name]; el.hidden = !r; if (!r) return;
   el.width = r.w; el.height = r.h; const x = el.getContext('2d'); x.imageSmoothingEnabled = false; x.clearRect(0, 0, r.w, r.h); x.drawImage(SH.canvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
 }
 
 /* dialogue: a line is a language key, or [speaker, key, vars?]; text scrolls with a blip, a press shows the rest, the next goes on */
 function showPage() {
+  if (dlg.pad) return;   // (the keypad draws itself)
   const L = dlg.lines[dlg.i], page = L.text, n = Math.min(page.length, Math.floor(dlg.n));
   if (dlg.shown !== dlg.i) {
     dlg.shown = dlg.i; const sp = L.who ? SPEAKERS[L.who] || {} : {};
-    $('dWho').textContent = t(sp.name || dlg.name); drawPic($('dPic'), 'portraits-1', L.who ? sp.pic : dlg.pic);
+    $('dWho').textContent = t(sp.name || dlg.name); drawPic($('dPic'), GAME.sheets.portraits, L.who ? sp.pic : dlg.pic);
   }
   $('dText').textContent = page.slice(0, n); $('dMore').hidden = n < page.length || (dlg.choices && dlg.i === dlg.lines.length - 1);
   // choices: buttons under the last page, once its text is all out
@@ -2756,6 +3314,7 @@ function openDialogue(a) {
 }
 function advance() {
   if (!dlg) { if (nearAct) interact(nearAct); return; }
+  if (dlg.pad) return;   // the keypad takes its digits, not a press
   const page = dlg.lines[dlg.i].text;
   if (dlg.n < page.length) dlg.n = page.length;
   else if (dlg.choices && dlg.i === dlg.lines.length - 1) return;   // a choice must be picked
@@ -2764,15 +3323,34 @@ function advance() {
   showPage();
 }
 function tickDialogue(dt) {
-  if (!dlg) return; const page = dlg.lines[dlg.i].text;
+  if (!dlg || dlg.pad) return; const page = dlg.lines[dlg.i].text;
   if (dlg.n < page.length) { dlg.n += dt * 42; const n = Math.floor(dlg.n); if (n !== dlg.last) { dlg.last = n; if (n % 2 === 0 && page[n - 1] !== ' ') blip(dlg.voice); showPage(); } }
+}
+
+/* the keypad: the dialogue box with the digits typed so far and a pad of buttons (keys 0-9, Backspace and Esc too); the
+   data's then / else make the sound of the outcome */
+function openKeypad(o) {
+  let typed = '';
+  const line = { text: '' }, show = () => { line.text = Array.from({ length: o.len }, (_, i) => typed[i] || '_').join(' '); $('dText').textContent = line.text; };
+  const close = () => { dlg = null; $('dialog').hidden = true; const box = $('dChoices'); box.textContent = ''; box.hidden = true; box.classList.remove('keypad'); };
+  const press = (k) => {
+    if (k === 'x') { close(); sfx('no'); o.cancel(); return; }
+    if (k === '<') typed = typed.slice(0, -1); else if (typed.length < o.len) typed += k;
+    sfx('blip'); show();
+    if (typed.length === o.len) { const code = typed; close(); o.done(code); }
+  };
+  dlg = { lines: [line], i: 0, n: 1e9, voice: 330, last: 0, name: o.name, shown: 0, pad: press };
+  $('dialog').hidden = false; $('dWho').textContent = t(o.name || 'act.keypad'); $('dPic').hidden = true; $('dMore').hidden = true; show();
+  const box = $('dChoices'); box.textContent = ''; box.classList.add('keypad'); box.hidden = false;
+  for (const k of ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'x', '0', '<']) { const b = document.createElement('button'); b.type = 'button'; b.textContent = k === 'x' ? '✕' : k === '<' ? '⌫' : k; b.onclick = (e) => { e.stopPropagation(); press(k); }; box.append(b); }
+  box.firstChild.focus({ preventScroll: true }); if (player) player.moving = false;
 }
 
 let hintState = null;
 function setHint(a) {
-  const key = a ? 'z:' + a.label : 'base';
+  const scan = !coarse && G && G.flags.skill_scan ? '.scan' : '', key = a ? 'z:' + a.label : 'base' + scan;   // (the scanner's key is named once the cat has it)
   if (key === hintState) return; hintState = key;
-  $('hint').textContent = a ? t(coarse ? 'hint.act.touch' : 'hint.act', { what: t(a.label) }) : t((coarse ? 'hint.touch' : 'hint.keys') + (settings.flat ? '.flat' : ''));   // the 2D style does not turn
+  $('hint').textContent = a ? t(coarse ? 'hint.act.touch' : 'hint.act', { what: t(a.label) }) : t((coarse ? 'hint.touch' : 'hint.keys' + scan) + (settings.flat ? '.flat' : ''));   // the 2D style does not turn
   $('bAtk').textContent = t(a ? 'btn.talk' : 'btn.atk');
 }
 
@@ -2783,12 +3361,12 @@ function toastTick(dt) { if (toastT > 0 && (toastT -= dt) <= 0) $('toast').hidde
 /* HUD: health, ink, level, coins; the DOM is touched only when a number changes */
 let hudKey = '';
 function hudDraw() {
-  if (!G) return; const s = stats(), ink = Math.floor(G.ink), key = [G.hp, s.hp, ink, s.ink, G.level, G.coins, G.flags.skill_dash, G.flags.skill_well, settings.lang].join();
+  if (!G) return; const s = stats(), ink = Math.floor(G.ink), key = [G.hp, s.hp, ink, s.ink, G.level, G.coins, G.flags.skill_dash, G.flags.skill_well, G.flags.skill_scan, settings.lang].join();
   if (key === hudKey) return; hudKey = key;
   $('hpBar').style.width = (100 * G.hp / s.hp).toFixed(1) + '%'; $('inkBar').style.width = (100 * ink / s.ink).toFixed(1) + '%';
   $('hpNum').textContent = G.hp + '/' + s.hp; $('inkNum').textContent = ink + '/' + s.ink;
   $('hLv').textContent = t('hud.lv', { n: G.level }); $('hCoins').textContent = t('hud.coins', { n: G.coins });
-  $('bDash').hidden = !G.flags.skill_dash; $('bWell').hidden = !G.flags.skill_well;
+  $('bDash').hidden = !G.flags.skill_dash; $('bWell').hidden = !G.flags.skill_well; $('bScan').hidden = !G.flags.skill_scan;
 }
 
 /* the boss's health, across the top while a boss (T.boss: its name key) is alive; the mark is where its second phase starts */
@@ -2811,19 +3389,19 @@ let menuTab = 'items', pick = null;
 
 function showScreen(id) {
   document.body.classList.toggle('playing', !id || id === 'menu' && ui.screen === 'menu' || id === 'shop');
-  for (const s of ['title', 'menu', 'shop', 'over', 'codeBox', 'end']) $(s).hidden = s !== id;
+  for (const s of ['title', 'chapters', 'menu', 'shop', 'over', 'codeBox', 'end']) $(s).hidden = s !== id;
   const first = id && $(id).querySelector('button:not([hidden]):not([disabled]), textarea');
   if (first) first.focus({ preventScroll: true }); else canvas.focus({ preventScroll: true });
 }
-const iconCanvas = (id) => { const c = document.createElement('canvas'); c.className = 'icon'; drawPic(c, 'items-1', id); return c; };
+const iconCanvas = (id) => { const c = document.createElement('canvas'); c.className = 'icon'; drawPic(c, GAME.sheets.items, id); return c; };
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 const btn = (text, on, cls) => { const b = el('button', cls, text); b.type = 'button'; b.onclick = () => { sfx('ok'); on(); }; return b; };
 
 /* pause menu */
 function openMenu(on, onlyOptions) {
   if (!on) { showScreen(null); ui.screen = ui.screen === 'menu-title' ? 'title' : 'game'; if (ui.screen === 'title') showScreen('title'); return; }
-  ui.screen = onlyOptions ? 'menu-title' : 'menu'; menuTab = onlyOptions ? 'options' : menuTab;
-  document.querySelectorAll('#tabs button').forEach((b) => { b.hidden = onlyOptions && b.dataset.tab !== 'options'; });
+  ui.screen = onlyOptions ? 'menu-title' : 'menu'; menuTab = onlyOptions ? 'options' : menuTab === 'map' && !GAME.map ? 'items' : menuTab;
+  document.querySelectorAll('#tabs button').forEach((b) => { b.hidden = (onlyOptions && b.dataset.tab !== 'options') || (b.dataset.tab === 'map' && !GAME.map); });   // (a chapter without a map has no Map tab)
   showScreen('menu'); renderTab(); sfx('ok');
 }
 function renderTab() {
@@ -2848,7 +3426,17 @@ function renderItems(box) {
 function showInfo(info, id) {
   const it = ITEMS[id] || {}; info.textContent = '';
   info.append(el('b', '', t('item.' + id)), el('p', '', t('desc.' + id)));
-  const bonus = ['atk', 'def', 'hp', 'ink'].filter((k) => it[k]).map((k) => t('stat.' + k) + ' +' + it[k]).join(' · '); if (bonus) info.append(el('p', 'dim', bonus));
+  const bonusOf = (o) => BONUS_STATS.filter((k) => o[k]).map((k) => t('stat.' + k) + ' +' + o[k]).join(' · ');
+  const bonus = bonusOf(it); if (bonus) info.append(el('p', 'dim', bonus));
+  // to wear: against the one worn in its slot, and what changes (better in green, worse in red)
+  const c = equipDiff(id);
+  if (c) {
+    info.append(el('p', 'dim', c.worn ? t('menu.worn', { item: t('item.' + c.worn), bonus: bonusOf(ITEMS[c.worn] || {}) || t('menu.nobonus') }) : t('menu.wornNone')));
+    const p = el('p', 'cmp', t('menu.change') + ' ');
+    if (!c.diff.length) p.append(el('span', 'dim', t('menu.nochange')));
+    c.diff.forEach(([k, d], i) => p.append(i ? ' · ' : '', el('span', d > 0 ? 'up' : 'down', t('stat.' + k) + ' ' + (d > 0 ? '+' : '−') + Math.abs(d))));
+    info.append(p);
+  }
   const row = el('div', 'row');
   if (it.use) row.append(btn(t('menu.use'), () => { if (!useItem(id)) { sfx('no'); toast(t('toast.full')); } renderTab(); }));
   if (it.slot) row.append(btn(t('menu.equip'), () => { equip(id); renderTab(); }));
@@ -2856,7 +3444,7 @@ function showInfo(info, id) {
 }
 function renderEquip(box) {
   box.textContent = ''; const s = stats();
-  box.append(el('p', 'line', t('menu.stats', { lv: G.level, hp: s.hp, ink: s.ink, atk: s.atk, def: s.def })), el('p', 'dim', G.level >= 5 ? t('menu.maxlv') : t('menu.xp', { xp: G.xp, next: xpToNext() })));
+  box.append(el('p', 'line', t('menu.stats', { lv: G.level, hp: s.hp, ink: s.ink, atk: s.atk, def: s.def })), el('p', 'dim', G.level >= maxLevel() ? t('menu.maxlv') : t('menu.xp', { xp: G.xp, next: xpToNext() })));
   for (const slot of ['weapon', 'armour', 'charm']) {
     const id = G.eq[slot], row = el('div', 'slot'); row.append(el('span', 'dim', t('slot.' + slot)));
     if (id) row.append(iconCanvas(id), el('span', '', t('item.' + id))); else row.append(el('span', 'dim', '—'));
@@ -2875,13 +3463,13 @@ function renderQuests(box) {
   }
 }
 function renderMap(box) {
-  box.textContent = ''; const def = AREAS.overworld, rows = def.map.length, cols = def.map[0].length, k = 5;
+  box.textContent = ''; const def = AREAS[GAME.map.area], rows = def.map.length, cols = def.map[0].length, k = 5;
   const c = document.createElement('canvas'); c.width = cols * k; c.height = rows * k; c.className = 'map'; const x = c.getContext('2d');
   const col = {}; for (const [ch, g] of Object.entries(def.legend)) { const T = TILES[g.tile], p = T.px; let r = 0, gg = 0, b = 0; for (let o = 0; o < p.length; o += 4) { r += p[o]; gg += p[o + 1]; b += p[o + 2]; } const n = p.length / 4; col[ch] = `rgb(${r / n * (g.h > 20 ? .6 : 1) | 0},${gg / n * (g.h > 20 ? .6 : 1) | 0},${b / n * (g.h > 20 ? .6 : 1) | 0})`; }
   for (let r = 0; r < rows; r++) for (let q = 0; q < cols; q++) { x.fillStyle = col[def.map[r][q]]; x.fillRect(q * k, r * k, k, k); }
-  x.fillStyle = '#2a2030'; for (const [key, tx, tz] of def.things) if (['library', 'bakery', 'shop', 'house_a', 'house_b', 'church', 'windmill'].includes(key)) x.fillRect(tx / 2 * k - 6, tz / 2 * k - 6, 12, 8);
-  const inside = A && A.def.id !== 'overworld';
-  const door = inside && def.things.find((th) => th[5] && th[5].door && th[5].door.to === A.def.id), [px, pz] = inside ? (door ? [door[1], door[2]] : [-99, -99]) : [player.x, player.z];
+  x.fillStyle = '#2a2030'; for (const [key, tx, tz] of def.things || []) if (GAME.map.marks.includes(key)) x.fillRect(tx / 2 * k - 6, tz / 2 * k - 6, 12, 8);
+  const inside = A && A.def.id !== GAME.map.area;
+  const door = inside && (def.things || []).find((th) => th[5] && th[5].door && th[5].door.to === A.def.id), [px, pz] = inside ? (door ? [door[1], door[2]] : [-99, -99]) : [player.x, player.z];
   x.fillStyle = '#ffb85c'; x.fillRect(px / 2 * k - 3, pz / 2 * k - 3, 6, 6); x.strokeStyle = '#000'; x.strokeRect(px / 2 * k - 3.5, pz / 2 * k - 3.5, 7, 7);
   box.append(c, el('p', 'dim', inside ? t('menu.inside', { area: t(A.def.name) }) : t('menu.here')));
 }
@@ -2932,9 +3520,38 @@ function renderShop() {
 
 /* load code (from the title) */
 function openCodeBox() { $('codeIn').value = ''; $('codeErr').textContent = ''; ui.screen = 'code'; showScreen('codeBox'); }
-function submitCode() {
-  const r = readCode($('codeIn').value);
+/* the chapters (New game with two or more on this page): a card each; this page's chapter starts here, another by a
+   page load (engine/66-chapters.js goChapter) */
+// a press that would overwrite a saved game asks again first: the button reads the warning, a second press goes on
+function confirmNew(btn, need, go) {
+  if (!need || btn.dataset.armed) { delete btn.dataset.armed; go(); return; }
+  btn.dataset.armed = '1'; btn.textContent = t('confirm.new'); sfx('no');
+}
+function openChapters() { renderChapters(); ui.screen = 'chapters'; showScreen('chapters'); }
+function renderChapters() {
+  const box = $('chList'); box.textContent = '';
+  for (const id of visibleChapters(STYLE)) {
+    const c = chapterOf(GAME_DATA, id), b = el('div', 'chcard'), here = id === CHAPTER_ID;
+    if (c.card) { const pic = document.createElement('canvas'); drawPic(pic, c.card[0], c.card[1]); b.append(pic); }
+    // a chapter with a game saved offers Continue beside New game (this page's slot checked whole, another's read raw)
+    const saved = here ? saveState() === 'ok' : chapterSaved(id), note = [t('chapters.minutes', { n: c.minutes })];
+    if (chapterDone(id)) note.push(t('chapters.done')); if (saved) note.push(t('chapters.saved'));
+    b.append(el('span', 'line', t(c.title)), el('span', 'dim', t(c.blurb)), el('span', 'dim', note.join(' · ')));
+    const row = el('div', 'row'), act = (key, then, fn) => { const k = el('button', 'small', t(key)); k.type = 'button'; k.dataset.act = then; const go = () => { sfx('ok'); if (here) fn(); else goChapter(id, then); }; k.onclick = then === 'new' ? () => confirmNew(k, newGameNeedsConfirm(id), go) : go; row.append(k); };
+    if (saved) act('menu.continue', 'continue', continueGame);
+    act('menu.new', 'new', startGame);
+    b.append(row); box.append(b);
+  }
+}
+function submitCode() { applyCode($('codeIn').value); }
+// a code from the box, or handed over by a page load (engine/90-boot.js): this chapter's starts play; another chapter's
+// is refused here until the switch exists (Task 4 of the chapter plan)
+function applyCode(text) {
+  const r = readCode(text);
   if (r.error) { $('codeErr').textContent = t(r.error, { ch: r.ch }); sfx('no'); return; }
+  // another chapter's code: its chapter is loaded by a page load and the code read again there (refused if this page
+  // cannot draw that chapter: Chapter 2 on diorama.html)
+  if (!r.save) { if (chapterOn(r.chapter, STYLE)) goChapter(r.chapter, 'code', text); else { $('codeErr').textContent = t('code.chapter'); sfx('no'); } return; }
   G = r.save; beginPlay(); saveGame();   // saved once the cat stands where the code says (the save takes its place from the scene)
 }
 
@@ -2997,6 +3614,12 @@ async function goTo(exit) {
   await fade(1); enterArea(exit.to, exit.at, exit.face); saveGame(); await fade(0);
   transitioning = false;
 }
+// build the current area again (a gate opened, { "reopen": true }): a short fade, the cat stays where it is
+async function reopen() {
+  const keep = pickups.map((p) => [p.id, p.x, p.z, p.n]);   // what lies on the floor stays (a dropped piece of the story is never lost)
+  // (each one dropped again unless the area's entry has put it back already: a story item on the floor comes back on entry)
+  transitioning = true; await fade(1); enterArea(A.def.id, [player.x, player.z]); for (const [id, x, z, n] of keep) if (!pickups.some((p) => p.id === id && Math.hypot(p.x - x, p.z - z) < 1)) drop(id, x, z, n); saveGame(); await fade(0); transitioning = false;
+}
 
 // the zone's track, or the battle track while an enemy has noticed the cat (and for a moment after); the boss keeps its own
 const areaTrack = () => {
@@ -3013,14 +3636,23 @@ function step(dt) {
       else if (ui.screen === 'menu' || ui.screen === 'menu-title') openMenu(false);
       else if (ui.screen === 'shop') closeShop();
       else if (ui.screen === 'code') { ui.screen = 'title'; showScreen('title'); }
+      else if (ui.screen === 'chapters') { ui.screen = 'title'; showScreen('title'); }
       continue;
     }
     if (ui.screen !== 'game' || transitioning) continue;
+    if (dlg && dlg.pad) {   // the keypad from a gamepad: the shoulder buttons move along it, A presses, B closes it
+      const bs = [...$('dChoices').children], i = bs.indexOf(document.activeElement);
+      if (act === 'dodge') dlg.pad('x');
+      else if (act === 'attack' || act === 'interact') { if (i >= 0) bs[i].click(); }
+      else if (act === 'rotateL' || act === 'rotateR') bs[(Math.max(0, i) + (act === 'rotateR' ? 1 : bs.length - 1)) % bs.length].focus({ preventScroll: true });
+      continue;
+    }
     if (act === 'interact') { if (dlg || nearAct) advance(); }
     else if (act === 'attack') { if (dlg) advance(); else if (nearAct && !nearestEnemy(4)) advance(); else heroAttack(); }
     else if (act === 'dodge') { if (!dlg) heroDodge(); }
     else if (act === 'skill1') { if (!dlg) heroDodge('dash'); }
     else if (act === 'skill2') { if (!dlg) heroDodge('well'); }
+    else if (act === 'skill3') { if (!dlg) heroDodge('scan'); }
     else if (act === 'rotateL') rotate(-1); else if (act === 'rotateR') rotate(1);
   }
   if (ui.screen !== 'game' || transitioning || !A) { if (player) player.moving = false; return; }
@@ -3050,6 +3682,9 @@ function draw(dt) {
   // from the old box to the new one, and the shadows' edges jumped a pixel while walking
   A.update(dt, player.x, player.z);
   applyTod(1 - Math.exp(-dt * 2.2)); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); chestsTick(dt); floatsDraw(dt); hudDraw(); bossDraw(); toastTick(dt); musicTick();
+  // a failing ship's lights (an area's "flicker"): the sun, the lamps and their halos dimmed together by lampFlicker;
+  // none for a player who asked for less motion (the system's setting, or screen shake turned off)
+  if (A && A.def.flicker && !reduceMotion && settings.shake !== false) { const f = lampFlicker(time); sun.intensity = cur.sunI * f; uLampCol.value.set(cur.lamp * f, cur.lamp * .663 * f, cur.lamp * .353 * f); for (const h of lamps) h.material.opacity = Math.min(1, cur.lamp * f * .3); }
   // the shadow map is redrawn when what casts a shadow changed: a figure moved or showed another frame (castersSig), the
   // view turned, the sun moved, a chest's lid swung (chestsTick). It was redrawn every frame while any enemy, pickup or
   // dialogue existed, still or not
@@ -3218,181 +3853,10 @@ const qaFingerprints = () => Object.fromEntries(SPRITES.filter((s) => s.count ||
 
 // ---- content/edits/*.json
 Object.assign(SHAPE_EDITS, {"church":{"note":"a nave with its gable to the front, a bell tower set back on the right with a pyramid roof and a cross, a low chapel on the left, a lean-to on the right behind the tower","parts":[{"block":[8,69,0,65],"z":[0,52],"roof":{"ridge":"z","yR":85,"over":3,"x":[13,76]}},{"block":[0,7,0,35],"z":[2,26],"roof":{"shed":"x1","yR":41,"over":1}},{"block":[93,99,0,21],"z":[50,86],"roof":{"shed":"x0","yR":31,"over":1}},{"block":[70,93,0,106],"z":[49,84],"roof":{"ridge":"x","hip":1,"yR":115,"over":2}},{"ring":[45,58,8.5,10.5],"in":2},{"open":[38,50,1,28],"in":4},{"open":[21,24,43,55],"in":2},{"open":[62,65,43,55],"in":2},{"open":[77,86,83,99],"in":5},{"open":[80,84,21,31],"in":2},{"card":[41,47,86,96],"z":4,"t":2},{"card":[79,85,116,126],"z":68,"t":2}]},"house_a":{"note":"a tall side-gabled house with a chimney on the left","parts":[{"block":[1,52,0,64],"z":[8,58],"roof":{"ridge":"x","yR":80,"over":2}},{"box":[5,11,70,87],"z":[12,20]},{"open":[10,25,39,53],"in":2},{"open":[31,45,39,53],"in":2},{"open":[21,32,1,24],"in":3}]},"house_b":{"note":"a cottage with its gable to the front, a round attic window, a little roof over the door; its chimney read as a lantern: erased","erase":[[13,23,38,60]],"parts":[{"block":[4,88,0,37],"z":[8,58],"roof":{"ridge":"z","yR":58,"over":3,"x":[6,93]}},{"ring":[46.5,42.5,4.5,6.5],"in":2},{"open":[15,29,12,25],"in":2},{"open":[63,77,12,25],"in":2},{"open":[40,52,1,24],"in":3},{"slope":[33,59,27,32],"out":5}]},"library":{"note":"two storeys under a hipped roof, a bell cote over the door, a cornice between the floors","parts":[{"block":[5,101,0,81],"z":[0,85],"roof":{"ridge":"z","hip":0.5,"yR":104,"over":4}},{"box":[3,104,41,46],"z":[-1,86]},{"block":[42,64,82,110],"z":[2,14],"roof":{"ridge":"z","yR":115,"over":1,"x":[40,66]}},{"open":[47,58,94,105],"in":4},{"open":[21,35,53,72],"in":3},{"open":[71,85,53,72],"in":3},{"open":[20,33,14,34],"in":3},{"open":[74,87,14,34],"in":3},{"open":[44,62,2,30],"in":4}]},"shop":{"note":"a side-gabled house, its chimney, two windows upstairs, the awning over the shop window, the door, the key hanging from its bracket","parts":[{"block":[11,92,0,58],"z":[6,68],"roof":{"ridge":"x","yR":73,"over":3}},{"box":[19,26,64,81],"z":[20,30]},{"open":[21,39,38,55],"in":2},{"open":[57,72,38,55],"in":2},{"open":[20,63,7,27],"in":4},{"open":[72,83,1,26],"in":3},{"slope":[17,69,28,34],"out":6},{"card":[0,9,31,53],"z":3,"t":2}]},"windmill":{"note":"a round stone tower under a conical cap, four sails across its front","parts":[{"cyl":[44,28,23,0,73],"z":38},{"cone":[44,32,74,113],"z":38},{"sails":{"hub":[44.5,82],"arms":[[6,106],[84,108],[6,33],[84,34]],"w":13},"z":2,"t":2}]}});
+useShapeEdits();
 
-// ---- content/chapter1/areas/crypt.js
-/* ---------- the crypt under the church: an ink pool crossed with the dash, three levers, the arch to the Scribe ---------- */
-// legend: W walls, V low walls (the front, and walls across the room the camera must see past), o floor, w the ink pool
-const CRYPT_LEGEND = { o: { tile: 'crypt_floor' }, W: { tile: 'crypt_floor', h: 52, wall: 0x4a4250 }, V: { tile: 'crypt_floor', h: 6, wall: 0x4a4250 }, w: { tile: 'water', water: true, h: -3 } };
-AREAS.crypt_in = {
-  id: 'crypt_in', name: 'area.crypt', cell: 2, tod: 'cripta', start: [16, 45.4], camNorth: 1, music: 'crypt', halo: 0x8fa8ff,
-  legend: CRYPT_LEGEND,
-  map: [
-    'WWWWWWWWWWWWWWWW',
-    'WooooooooooooooW',   // the arch room: the way to the Scribe, the Inkwell in a chest
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'VVVVVVooooVVVVVV',   // the lever gate (inner walls are low, so the camera sees over them)
-    'WooooooooooooooW',   // the lever room
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'VVVVVVooooVVVVVV',
-    'WwwwwwwwwwwwwwwW',   // the ink pool: too wide to walk, short enough to dash
-    'WwwwwwwwwwwwwwwW',
-    'WooooooooooooooW',   // the first hall
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'WooooooooooooooW',
-    'VVVVVVVooVVVVVVV',
-  ],
-  things: [
-    ['crypt_arch', 16, 4, 2.6, .8, { door: { to: 'crypt_boss', at: [14, 21.4], face: [0, -1] } }],
-    ['chest', 5, 6.4, undefined, undefined, { chest: { id: 'crypt_well', item: 'ink_potion', n: 2, flag: 'skill_well', lines: ['chest.well', 'chest.well2'] } }],
-    ['sarcophagus', 25.5, 5.8],
-    ['crypt_wall', 16, 10.6, 4.2, .8, { when: () => !G.flags.crypt_gate }],
-    ['lever', 5, 15.4, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: () => cryptLever(1) } }],
-    ['lever', 27, 15.4, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: () => cryptLever(2) } }],
-    ['lever', 22.4, 18.6, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: () => cryptLever(3) } }],
-    ['signpost', 9.6, 18.4, undefined, undefined, { look: { label: 'act.read', name: 'act.plaque', lines: ['plaque.1', 'plaque.2'] } }],
-    ['sarcophagus', 7, 32], ['sarcophagus', 25, 32], ['barrel', 3.4, 42.4], ['crate', 28.6, 42.6],
-  ],
-  lamps: [[3, 3, 3, 2.6, 1.3], [29, 3, 3, 2.6, 1.3], [3, 3, 13, 2.4, 1.2], [29, 3, 13, 2.4, 1.2], [3, 3, 28, 2.4, 1.2], [29, 3, 28, 2.4, 1.2], [3, 3, 40, 2.4, 1.2], [29, 3, 40, 2.4, 1.2]],
-  spawns: [['bookworm', 10, 36], ['bookworm', 22, 38], ['wax_golem', 16, 16.4], ['wax_golem', 22, 7.6, () => !G.flags.boss_done]],
-  exits: [{ rect: [14, 47.2, 18, 48], to: 'overworld', at: [45, 25.2], face: [0, 1] }],
-  // at the pool's edge, from either side: how to cross
-  tips: [{ rect: [2, 25.6, 30, 28.6], text: poolTip }, { rect: [12, 19, 20, 22], text: poolTip }],
-};
-
-// the Scribe's chamber
-AREAS.crypt_boss = {
-  id: 'crypt_boss', name: 'area.boss', cell: 2, tod: 'cripta', start: [14, 21.4], camNorth: 1, music: () => G.flags.boss_done ? 'crypt' : 'boss', halo: 0x8fa8ff,
-  legend: CRYPT_LEGEND,
-  map: [
-    'WWWWWWWWWWWWWW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'WooooooooooooW',
-    'VVVVVVooVVVVVV',
-  ],
-  things: [['sarcophagus', 5, 4.4], ['sarcophagus', 23, 4.4]],
-  lamps: [[3, 3, 3, 2.8, 1.4], [25, 3, 3, 2.8, 1.4], [3, 3, 18, 2.6, 1.2], [25, 3, 18, 2.6, 1.2]],
-  exits: [
-    { rect: [12, 23.2, 16, 24], to: 'crypt_in', at: [16, 6.8], face: [0, 1], when: () => !G.flags.boss_done },
-    { rect: [12, 23.2, 16, 24], to: 'overworld', at: [45, 25.2], face: [0, 1], when: () => !!G.flags.boss_done },
-  ],
-};
-
-// ---- content/chapter1/areas/interiors.js
-/* ---------- interiors: separate scenes entered through a door; a low front wall lets the camera look in ---------- */
-// legend: W = back and side walls (tall), V = the front wall (low), o = floor; the doorway is a gap in the front wall
-const room = (cols, rows, door) => Array.from({ length: rows }, (_, r) => Array.from({ length: cols }, (_, c) => {
-  if (r === rows - 1) return Math.abs(c - door) <= 1 ? 'o' : 'V';
-  return c === 0 || c === cols - 1 || r === 0 ? 'W' : 'o';
-}).join(''));
-const INTERIOR_LEGEND = { o: { tile: 'wood_planks' }, W: { tile: 'crypt_floor', h: 48, wall: 0x6e5a48 }, V: { tile: 'crypt_floor', h: 6, wall: 0x6e5a48 } };
-
-// the library: shelves of the cat's own codex, the reading desk where the page went missing
-AREAS.library_in = {
-  id: 'library_in', name: 'area.library', cell: 2, tod: 'interno', start: [13, 13.4], camNorth: 1,
-  legend: INTERIOR_LEGEND, map: room(12, 8, 6),
-  things: [['reading_desk', 13, 7.6, undefined, undefined, { desk: true }], ['statue', 5, 4.6], ['chest', 19.6, 5, undefined, undefined, { chest: { id: 'library', item: 'milk', n: 2 } }], ['crate', 4.4, 11.6], ['barrel', 19.8, 11.4], ['bench', 13, 4.4]],
-  npcs: [['librarian', 17.5, 8.4, [0, 1]]], music: 'library',
-  lamps: [[6, 3, 8, 3, 1.2], [18, 3, 8, 3, 1.2]],
-  exits: [{ rect: [10, 15.2, 16, 16], to: 'overworld', at: [32, 35.6], face: [0, 1] }],
-};
-
-// the bakery: barrels of flour, the counter (a market stall indoors)
-AREAS.bakery_in = {
-  id: 'bakery_in', name: 'area.bakery', cell: 2, tod: 'interno', start: [11, 11.4], camNorth: 1,
-  legend: INTERIOR_LEGEND, map: room(10, 7, 5),
-  things: [['market_stall', 11, 6], ['barrel', 4, 4.6], ['barrel', 5.6, 4.6], ['crate', 16, 9.6], ['chest', 16, 4.6, undefined, undefined, { chest: { id: 'bakery', item: 'coin', n: 12 } }]],
-  npcs: [['baker', 11, 8.6, [0, 1]]], music: 'library',
-  lamps: [[10, 3, 7, 3, 1.3]],
-  exits: [{ rect: [8, 13.2, 14, 14], to: 'overworld', at: [45, 35.6], face: [0, 1] }],
-};
-
-// ---- content/chapter1/areas/overworld.js
-/* ---------- the open world of Chapter 1: one map ringed by cliff plateaus, built in chunks around the cat ---------- */
-// 64 × 48 cells of 2 units (one 32 px tile each): the village square with the library, bakery and shop, the church
-// to the north, the road east to the vineyards and the windmill, a pond to the south.
-AREAS.overworld = (() => {
-  const C = 64, RW = 48, m = Array.from({ length: RW }, () => Array(C).fill('g'));
-  const fill = (c0, r0, c1, r1, ch) => { for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (r >= 0 && c >= 0 && r < RW && c < C) m[r][c] = ch; };
-  // grass with patches of flowers
-  for (let r = 0; r < RW; r++) for (let c = 0; c < C; c++) if (hash2(c >> 1, r >> 1) > .82 && hash2(c * 5, r * 3) > .35) m[r][c] = 'f';
-  // the cliff plateaus all around, a little uneven, so the view never reaches the edge of the world
-  const band = (side, k) => 8 + Math.round(hash2(side * 17 + (k >> 2), side) * 2);   // each side's depth wavers every 4 cells
-  for (let r = 0; r < RW; r++) for (let c = 0; c < C; c++)
-    if (r < band(0, c) || RW - 1 - r < band(1, c) || c < band(2, r) || C - 1 - c < band(3, r)) m[r][c] = hash2(c * 7, r * 3) > .8 ? 'Y' : 'X';
-  fill(14, 15, 29, 26, 'c');                 // the village square
-  fill(19, 10, 26, 13, 'c'); fill(21, 13, 22, 14, 'c');   // the church plaza and its steps down
-  fill(30, 20, 54, 21, 'p');                 // the road east
-  fill(36, 11, 46, 17, 'a');                 // the vineyard fields
-  fill(10, 20, 13, 21, 'p');                 // a path west, toward the houses
-  for (let r = 29; r <= 37; r++) for (let c = 27; c <= 39; c++) if (((c - 33) / 5) ** 2 + ((r - 33) / 3.6) ** 2 < 1) m[r][c] = 'w';   // the pond
-  const map = m.map((r) => r.join(''));
-
-  // trees: a few on the grass, more on the plateau tops; never on roads, water or near buildings
-  const things = [
-    ['library', 32, 31.5, undefined, undefined, { door: { to: 'library_in', at: [13, 13.4], face: [0, -1] } }],
-    ['bakery', 45, 31.5, undefined, undefined, { door: { to: 'bakery_in', at: [11, 11.4], face: [0, -1] } }],
-    ['shop', 56.5, 31.5],
-    ['house_a', 22, 37], ['house_b', 20, 50.5],
-    ['church', 45, 21, undefined, undefined, { door: { to: 'crypt_in', at: [16, 45.4], face: [0, -1], need: 'crypt_key' } }],
-    ['chest', 101, 30.6, undefined, undefined, { chest: { id: 'mill', item: 'hinge' } }],
-    // the fenced garden south of the road (x 96–104, z 48–56); its gate opens by the lever
-    ['fence', 97.3, 48], ['fence', 102.5, 48], ['fence', 99.9, 48, 1.3, .25, { when: () => !G.flags.gate_open }],
-    ['fence', 97.3, 56], ['fence', 99.9, 56], ['fence', 102.5, 56],
-    ['fence', 96, 49.3, undefined, undefined, { rot: 1 }], ['fence', 96, 51.9, undefined, undefined, { rot: 1 }], ['fence', 96, 54.5, undefined, undefined, { rot: 1 }],
-    ['fence', 104, 49.3, undefined, undefined, { rot: 1 }], ['fence', 104, 51.9, undefined, undefined, { rot: 1 }], ['fence', 104, 54.5, undefined, undefined, { rot: 1 }],
-    ['lever', 92.6, 46.6, .3, .3, { act: { label: 'act.pull', name: 'act.lever', run: roadLever } }],
-    ['chest', 98.5, 51, undefined, undefined, { chest: { id: 'garden_page', item: 'page_2' } }],
-    ['chest', 101.6, 51, undefined, undefined, { chest: { id: 'garden_key', item: 'crypt_key', lines: ['chest.cryptkey'] } }],
-    ['statue', 86, 47.2, undefined, undefined, { act: { label: 'act.read', name: 'who.statue', run: statueRiddle } }],
-    ['windmill', 101, 25], ['vine_row', 78, 26], ['vine_row', 88, 26], ['vine_row', 78, 31.5], ['vine_row', 88, 31.5],
-    ['well', 44, 44], ['market_stall', 53, 47], ['bench', 36, 48.5], ['reading_desk', 35.5, 36.6, undefined, undefined, { desk: true }],
-    ['lamp_post', 38, 39, .2, .2], ['lamp_post', 50, 39, .2, .2], ['lamp_post', 38, 51, .2, .2], ['lamp_post', 50, 51, .2, .2],
-    ['signpost', 62, 38.6, undefined, undefined, { look: { label: 'act.read', name: 'act.sign', lines: ['sign.1'] } }], ['barrel', 59.4, 37.6], ['crate', 60.8, 38.2],
-    ['fence', 72, 36.6], ['fence', 74.6, 36.6], ['fence', 77.2, 36.6], ['fence', 92, 36.6], ['fence', 94.6, 36.6],
-  ];
-  const busy = [[90, 44, 110, 60], [26, 26, 64, 56], [36, 14, 56, 30], [70, 18, 108, 38], [58, 38, 112, 46], [52, 56, 80, 76], [14, 34, 30, 58], [18, 38, 28, 44]];
-  const free = (x, z) => !busy.some(([x0, z0, x1, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
-  // an olive is ten thousand triangles, a cypress fourteen hundred (tools/budget-check.mjs): no olives in the scatter,
-  // the plateau rims get cypresses and bushes
-  const pickTree = (v, list) => { let acc = 0; for (const [k, w] of list) { acc += w; if (v < acc) return k; } return list[0][0]; };
-  const LOW = [['oak', .3], ['cypress', .45], ['bush', .25]], RIM = [['cypress', .7], ['bush', .25], ['oak', .05]];
-  for (let r = 1; r < RW - 1; r++) for (let c = 1; c < C - 1; c++) {
-    const ch = map[r][c], x = c * 2 + 1, z = r * 2 + 1, h = hash2(c * 13, r * 29);
-    if ((ch === 'g' || ch === 'f') && h > .962 && free(x, z)) { const k = pickTree(hash2(c, r * 7), LOW); things.push([k, x, z, k === 'bush' ? undefined : .6, k === 'bush' ? undefined : .5]); }
-    else if (ch === 'X' && h > .93) { const inner = Math.min(c, C - 1 - c, r, RW - 1 - r) >= 6; if (inner) things.push([pickTree(hash2(c * 3, r), RIM), x, z, 0, 0]); }
-  }
-  return {
-    id: 'overworld', name: 'area.village', cell: 2, chunk: [16, 12], keep: true, tod: 'giorno', start: [44, 49], camNorth: 1.5, music: (x) => x > 64 ? 'road' : 'village',
-    legend: { g: { tile: 'grass' }, f: { tile: 'grass_flowers' }, c: { tile: 'cobblestone' }, p: { tile: 'dirt_path' }, a: { tile: 'farmland' },
-      w: { tile: 'water', water: true, h: -3 }, X: { tile: 'grass', h: 56, cliff: true }, Y: { tile: 'grass_flowers', h: 56, cliff: true } },
-    map, things,
-    npcs: [['shopkeeper', 53, 49.6, [0, 1]], ['child', 47.6, 45.2, [0, 1]], ['guard', 41.4, 26.2, [0, 1]]],
-    spawns: [['blot', 70, 42], ['blot', 80, 43.6], ['blot', 100, 36], ['inkfly', 88, 41.5], ['inkfly', 93, 44.5], ['inkfly', 97, 31.5], ['blot', 76, 38.4]],
-    lamps: [[38, 2.6, 39], [50, 2.6, 39], [38, 2.6, 51], [50, 2.6, 51]],
-  };
-})();
-
-// ---- content/chapter1/buildings.js
-/* ---------- buildings drawn in code (they replace the sheet drawings of the same key) ---------- */
+// ---- content/plugins/art/bakery.js
+/* ---------- plugin: the bakery drawn in code (it replaces the sheet drawing of the same key) ---------- */
 // The bakery, after the ChatGPT design: a front-gable house in ochre plaster on a stone plinth, a shop window full of
 // bread under a green and cream awning, an arched door, a round attic window, a bread sign on an iron bracket, a brick
 // chimney near the back. 108 × 74 art pixels, 60 deep.
@@ -3504,317 +3968,8 @@ CODE_ART.bakery = () => {
   return p.done();
 };
 
-// ---- content/chapter1/enemies.js
-/* ---------- the inky creatures of Chapter 1 (spec §10): every strike has a tell of at least 0.35 s ---------- */
-Object.assign(ENEMIES, {
-  // a puddle of ink with two eyes: squashes flat (the tell), hops to where the cat stood, slams
-  blot: { sheet: 'enemies-1', row: 'blot', hp: 30, atk: 6, def: 0, speed: 2.4, sight: 7, reach: 2.2, windup: .5, strike: .38, recover: .8, xp: 4, coins: [0, 2], r: .5, move: 'hop', drops: [['milk', .12]] },
-  // a fat drop with paper wings: hovers, stops and shivers (the tell), dives in a line
-  inkfly: { sheet: 'enemies-1', row: 'inkfly', hp: 24, atk: 7, def: 0, speed: 3.1, sight: 9, reach: 4.2, windup: .55, strike: .42, recover: 1, xp: 5, coins: [1, 2], r: .45, move: 'lunge', fly: .8, drops: [['ink_potion', .15]] },
-  // a long worm of stacked pages: shivers in the dust (the tell), charges straight
-  bookworm: { sheet: 'enemies-2', row: 'bookworm', hp: 38, atk: 9, def: 2, speed: 2, sight: 9, reach: 5.5, windup: .65, strike: .6, recover: 1.2, xp: 9, coins: [1, 3], r: .6, move: 'lunge', drops: [['bread', .2]] },
-  // a candle-wax brute: raises both arms (the tell), smashes twice; its front is shielded, its back is not
-  wax_golem: { sheet: 'enemies-2', row: 'wax_golem', hp: 60, atk: 12, def: 3, speed: 1.5, sight: 7, reach: 1.9, windup: .75, strike: .5, recover: 1.3, xp: 15, coins: [2, 5], r: .7, move: 'smash', shield: true, drops: [['fish', .3]] },
-});
-
-/* the Blot Scribe: phase 1 sweeps its quill and draws ink lines; below half health it splits off Blots and calls ink rain.
-   Every attack is announced: the quill drawn back, ink marks on the floor 0.6 s before they burst. */
-ENEMIES.blot_scribe = {
-  sheet: 'boss', row: 'blot_scribe', hp: 900, atk: 13, def: 3, speed: 1.6, sight: 30, reach: 3.4, xp: 60, coins: [8, 12], r: 1.1, poise: true, size: 1, boss: 'who.scribe',
-  anims: { idle: ['idle1', 'idle2'], walk: ['idle1', 'idle2'], windup: ['sweep_windup'], attack: ['sweep'], cast: ['blot_scribe_b.rain_cast'], split: ['blot_scribe_b.split'], hurt: ['blot_scribe_b.hurt'], defeat: ['blot_scribe_b.defeat'] },
-  onHit(e) { if (!e.phase2 && e.hp < e.T.hp / 2) { e.phase2 = true; e.state = 'split'; e.st = .9; e.a.anim = 'split'; e.a.at = 0; toast(t('toast.boss2')); shake(.3); } },
-  ai(e, dt, dist, move, face) {
-    const T = e.T, a = e.a; e.cool = (e.cool || 1.5) - dt;   // (e.st and a.at run in enemiesStep: counted here too, they ran twice as fast)
-    switch (e.state) {
-      case 'wander': case 'notice': case 'chase': {
-        a.anim = null; face(player.x, player.z);
-        if (dist > T.reach * .8) a.moving = move(e.fx * T.speed, e.fz * T.speed);
-        if (e.cool <= 0) {
-          const pick = e.phase2 ? (R() < .5 ? 'rain' : dist < T.reach ? 'sweep' : 'lines') : (dist < T.reach ? 'sweep' : 'lines');
-          if (pick === 'sweep') { e.state = 'windup'; e.st = .65; a.anim = 'windup'; a.at = 0; }
-          else { e.state = pick; e.st = .9; a.anim = 'cast'; a.at = 0; e.done = false; }
-        }
-        break;
-      }
-      case 'windup': face(player.x, player.z); if (e.st <= 0) { e.state = 'sweep'; e.st = .4; a.anim = 'attack'; a.at = 0; e.hit = 0; sfx('swing3'); } break;
-      case 'sweep': {   // a half-circle in front, quill's length
-                if (!e.hit) { e.hit = 1; fx('slash', e.x + e.fx * 1.6, e.z + e.fz * 1.6, { size: 2.4, y: A.groundY(e.x, e.z) + .6 }); const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz); if (d < T.reach + .4 && (dx * e.fx + dz * e.fz) / (d || 1) > -.1) hurtHero(T.atk, e.x, e.z); }
-        if (e.st <= 0) { e.state = 'chase'; e.cool = e.phase2 ? 1.2 : 1.7; }
-        break;
-      }
-      case 'lines': {   // a line of marks from the Scribe toward the cat
-                if (!e.done && e.st < .6) { e.done = true; const l = dist || 1, ux = (player.x - e.x) / l, uz = (player.z - e.z) / l; for (let i = 1; i <= 6; i++) hazard(e.x + ux * i * 1.3, e.z + uz * i * 1.3, .6 + i * .07, .8, T.atk - 2); }
-        if (e.st <= 0) { e.state = 'chase'; e.cool = 1.6; }
-        break;
-      }
-      case 'rain': {   // marks around and under the cat
-                if (!e.done && e.st < .6) { e.done = true; hazard(player.x, player.z, .7, .9, T.atk - 2); for (let i = 0; i < 6; i++) { const an = R() * Math.PI * 2, r = 1.5 + R() * 3.5; hazard(player.x + Math.cos(an) * r, player.z + Math.sin(an) * r, .6 + R() * .5, .9, T.atk - 2); } }
-        if (e.st <= 0) { e.state = 'chase'; e.cool = 1.4; }
-        break;
-      }
-      case 'split': {   // phase 2 and then every so often: two Blots, never more than four
-        a.anim = 'split';
-        if (e.st <= 0) { if (enemies.filter((o) => o.type === 'blot' && o.hp > 0).length < 4) for (const s of [-1, 1]) { const b = spawnEnemy('blot', e.x + s * 1.6, e.z + 1.2); b.aware = true; b.T = Object.assign({}, b.T, { coins: [0, 0], xp: 1, drops: [] }); } e.state = 'chase'; e.cool = 1.2; e.splitT = 9; }
-        break;
-      }
-    }
-    if (e.phase2 && e.state === 'chase' && (e.splitT = (e.splitT || 9) - dt) <= 0) { e.state = 'split'; e.st = .8; a.anim = 'split'; a.at = 0; }
-    return true;
-  },
-};
-
-// ---- content/chapter1/items.js
-/* ---------- items of Chapter 1: three quills, three coats, three charms, four things to eat or drink, story items ---------- */
-// names and descriptions are language keys item.<id> and desc.<id>
-Object.assign(ITEMS, {
-  quill_sword: { slot: 'weapon', atk: 0, price: 0 },
-  steel_quill: { slot: 'weapon', atk: 3, price: 60 },
-  gold_quill: { slot: 'weapon', atk: 6, price: 0 },
-  scarf: { slot: 'armour', def: 1, hp: 4, price: 30 },
-  vest: { slot: 'armour', def: 2, price: 55 },
-  cloak: { slot: 'armour', def: 3, hp: 6, price: 0 },
-  bell_charm: { slot: 'charm', ink: 10, price: 40 },
-  clover_charm: { slot: 'charm', hp: 8, price: 0 },
-  owl_charm: { slot: 'charm', atk: 2, def: 1, price: 0 },
-  milk: { use: { hp: 10 }, price: 6 },
-  fish: { use: { hp: 22 }, price: 14 },
-  bread: { use: { hp: 15 }, price: 9 },
-  ink_potion: { use: { ink: 20 }, price: 12 },
-  page_1: { key: true }, page_2: { key: true }, page_3: { key: true },
-  bronze_key: { key: true }, crypt_key: { key: true }, glasses_case: { key: true }, letter: { key: true }, flour_sack: { key: true }, hinge: { key: true },
-});
-
-// ---- content/chapter1/music.js
-/* ---------- the music of Chapter 1: step patterns, one step = a sixteenth; '.' rests, '-' holds; drums k / s / h ---------- */
-// A voice loops on its own length. The battle track replaces the zone's track while an enemy is after the cat.
-const bars = (...b) => b.join(' | '), rep = (s, n) => Array(n).fill(s).join(' ');
-Object.assign(MUSIC, {
-  village: {   // C major, a walk through the square
-    bpm: 100,
-    voices: {
-      p1: bars('e5 - - - g5 - c6 - b5 - a5 - g5 - - -', 'a5 - - - c6 - e6 - d6 - c6 - a5 - - -', 'f5 - - - a5 - c6 - a5 - g5 - f5 - - -', 'g5 - - - b5 - d6 - b5 - a5 - g5 - - .',
-        'e5 - g5 - e5 - d5 - c5 - - - d5 - e5 -', 'a4 - c5 - e5 - c5 - a4 - - - . . . .', 'f4 - a4 - c5 - f5 - e5 - d5 - c5 - a4 -', 'g4 - b4 - d5 - g5 - - - . . . . . .'),
-      p2: bars('c4 . e4 . g4 . e4 . c4 . e4 . g4 . e4 .', 'a3 . c4 . e4 . c4 . a3 . c4 . e4 . c4 .', 'f3 . a3 . c4 . a3 . f3 . a3 . c4 . a3 .', 'g3 . b3 . d4 . b3 . g3 . b3 . d4 . b3 .'),
-      tri: bars('c3 - - - . . c3 . g2 - - - . . g2 .', 'a2 - - - . . a2 . e2 - - - . . e2 .', 'f2 - - - . . f2 . c3 - - - . . c3 .', 'g2 - - - . . g2 . d3 - - - b2 - - -'),
-    },
-  },
-  road: {   // G major, brisker, out among the vines
-    bpm: 116,
-    voices: {
-      p1: bars('d5 - g5 - b5 - a5 g5 f#5 - g5 - a5 - - -', 'e5 - g5 - c6 - b5 a5 g5 - e5 - g5 - - -', 'b4 - e5 - g5 - f#5 e5 d5 - e5 - g5 - - -', 'a4 - d5 - f#5 - e5 d5 e5 - f#5 - a5 - - -'),
-      p2: bars('. g4 . b4 . g4 . b4 . g4 . b4 . g4 . b4', '. e4 . g4 . e4 . g4 . e4 . g4 . e4 . g4', '. e4 . g4 . e4 . g4 . e4 . g4 . e4 . g4', '. f#4 . a4 . f#4 . a4 . f#4 . a4 . f#4 . a4'),
-      tri: bars('g2 . g2 . d3 . g2 . g2 . d3 . g2 . b2 .', 'c3 . c3 . g2 . c3 . c3 . g2 . c3 . e3 .', 'e2 . e2 . b2 . e2 . e2 . b2 . e2 . g2 .', 'd2 . d2 . a2 . d2 . d2 . a2 . d3 . c3 .'),
-      drums: 'k . h . s . h . k . h . s . h h',
-    },
-  },
-  library: {   // the same tune as the village, slower and softer, for rooms
-    bpm: 84,
-    voices: {
-      p3: bars('e5 - - - g5 - c6 - b5 - a5 - g5 - - -', 'a5 - - - c6 - e6 - d6 - c6 - a5 - - -', 'f5 - - - a5 - c6 - a5 - g5 - f5 - - -', 'g5 - - - b5 - d6 - b5 - a5 - g5 - - .'),
-      tri: bars('c3 - - - - - - - g2 - - - - - - -', 'a2 - - - - - - - e2 - - - - - - -', 'f2 - - - - - - - c3 - - - - - - -', 'g2 - - - - - - - d3 - - - - - - -'),
-    },
-  },
-  crypt: {   // A minor, slow, a drone under a sparse line
-    bpm: 80,
-    voices: {
-      p3: bars('a4 - - - - - c5 - b4 - - - g#4 - - -', 'a4 - - - e5 - - - d5 - c5 - b4 - - -', 'f4 - - - - - a4 - g4 - - - e4 - - -', 'e4 - - - g#4 - - - b4 - - - - - - -'),
-      p2: bars('a3 . c4 . e4 . . . a3 . c4 . e4 . . .', 'a3 . c4 . e4 . . . a3 . c4 . e4 . . .', 'f3 . a3 . c4 . . . f3 . a3 . c4 . . .', 'e3 . g#3 . b3 . . . e3 . g#3 . b3 . . .'),
-      tri: bars('a2 - - - - - - - - - - - - - - -', 'a2 - - - - - - - - - - - - - - -', 'f2 - - - - - - - - - - - - - - -', 'e2 - - - - - - - - - - - - - - -'),
-    },
-  },
-  battle: {   // E minor, quick: any fight outside the boss's chamber
-    bpm: 150,
-    voices: {
-      p1: bars('e5 . e5 g5 . e5 b5 . a5 g5 . f#5 e5 . d5 .', 'e5 . e5 g5 . e5 b5 . c6 b5 . a5 g5 . a5 .', 'c5 . c5 e5 . c5 g5 . f#5 e5 . d5 c5 . b4 .', 'b4 . b4 d#5 . f#5 b5 . a5 . g5 . f#5 . d#5 .'),
-      p2: bars(rep('e4 b4', 8), rep('e4 b4', 8), rep('c4 g4', 8), rep('b3 f#4', 8)),
-      tri: bars(rep('e2 . e3 .', 4), rep('e2 . e3 .', 4), rep('c2 . c3 .', 4), rep('b1 . b2 .', 4)),
-      drums: 'k . h . s . h k k . h . s . s h',
-    },
-  },
-  boss: {   // D minor, fast
-    bpm: 144,
-    voices: {
-      p1: bars('d5 d5 . d5 f5 . e5 d5 c5 . a4 . c5 d5 . .', 'd5 d5 . d5 f5 . g5 f5 e5 . c5 . e5 f5 . .', 'a#4 a#4 . a#4 d5 . c5 a#4 a4 . f4 . a4 a#4 . .', 'a4 a4 . a4 c#5 . e5 c#5 a4 . e5 . c#5 a4 . .'),
-      p2: bars('d4 . a4 . d4 . a4 . d4 . a4 . d4 . a4 .', 'c4 . g4 . c4 . g4 . c4 . g4 . c4 . g4 .', 'a#3 . f4 . a#3 . f4 . a#3 . f4 . a#3 . f4 .', 'a3 . e4 . a3 . e4 . a3 . c#4 . e4 . a4 .'),
-      tri: bars('d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3', 'c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3', 'a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2', 'a1 a2 a1 a2 a1 a2 a1 a2 a1 a2 a1 a2 c#2 c#3 e2 e3'),
-      drums: 'k . h . s . h k k . h . s . s h',
-    },
-  },
-});
-
-// ---- content/chapter1/people.js
-/* ---------- the people of Inkwell village and what they say; every line is a language key ---------- */
-Object.assign(SPEAKERS, {
-  cat: { name: 'who.cat', pic: 'cat_neutral' }, cat_happy: { name: 'who.cat', pic: 'cat_happy' }, cat_worried: { name: 'who.cat', pic: 'cat_worried' },
-  librarian: { name: 'who.librarian', pic: 'librarian' }, baker: { name: 'who.baker', pic: 'baker' }, shopkeeper: { name: 'who.shopkeeper', pic: 'shopkeeper' },
-  child: { name: 'who.child', pic: 'child' }, guard: { name: 'who.guard', pic: 'guard' }, scribe: { name: 'who.scribe', pic: 'blot_scribe' },
-});
-const pages = () => ['page_1', 'page_2', 'page_3'].filter((p) => has(p)).length;
-
-Object.assign(NPCS, {
-  librarian: {
-    row: 'librarian', name: 'who.librarian', pic: 'librarian', voice: 260,
-    talk() {
-      const s = qStep('main');
-      if (s <= 0) return { lines: [['librarian', 'l.intro1'], ['cat_worried', 'l.intro2'], ['librarian', 'l.intro3'], ['librarian', 'l.intro4'], ['cat', 'l.intro5']] };
-      if (s === 1) return { lines: [['librarian', 'l.blots']] };
-      if (s === 2) {
-        const hint = !has('page_1') ? 'l.hint1' : !has('page_2') ? 'l.hint2' : 'l.hint3';
-        return { lines: [['librarian', 'l.pieces', { n: pages() }], ['librarian', hint]] };
-      }
-      if (s === 3) return { lines: [['librarian', 'l.end1'], ['cat_happy', 'l.end2'], ['librarian', 'l.end3'], ['librarian', 'l.end4']], after: showEnding };
-      return { lines: [['librarian', 'l.after']] };
-    },
-  },
-  baker: {
-    row: 'baker', name: 'who.baker', pic: 'baker', voice: 300,
-    talk() {
-      const s = qStep('flap');
-      if (s < 0) return { lines: [['baker', 'b.hello1'], ['baker', 'b.hello2'], ['cat', 'b.hello3']], after: () => startQuest('flap') };
-      if (s === 0) return { lines: [['baker', 'b.wait']], shop: ['bread', 'milk'] };
-      if (s === 1) return { lines: [['baker', 'b.thanks1'], ['baker', 'b.thanks2'], ['cat_happy', 'b.thanks3']] };
-      return { lines: [['baker', 'b.after']], shop: ['bread', 'milk'] };
-    },
-  },
-  shopkeeper: {
-    row: 'shopkeeper', name: 'who.shopkeeper', pic: 'shopkeeper', voice: 220,
-    talk: () => ({ lines: [['shopkeeper', G.flags.met_shop ? 's.again' : 's.hello']], after: () => { G.flags.met_shop = true; }, shop: ['milk', 'fish', 'ink_potion', 'scarf', 'vest', 'steel_quill', 'bell_charm'] }),
-  },
-  guard: {
-    row: 'guard', name: 'who.guard', pic: 'guard', voice: 200,
-    talk() {
-      const s = qStep('glasses');
-      if (s < 0) return { lines: [['guard', 'g.hello1'], ['guard', 'g.hello2']], after: () => startQuest('glasses') };
-      if (s === 0) return { lines: [['guard', 'g.wait']] };
-      if (s === 1) return { lines: [['guard', 'g.thanks1'], ['guard', 'g.thanks2']] };
-      return { lines: [['guard', has('crypt_key') || G.flags.boss_done ? 'g.crypt2' : 'g.crypt']] };
-    },
-  },
-  child: {
-    row: 'child', name: 'who.child', pic: 'child', voice: 420,
-    talk() {
-      const k = qStep('main') <= 1 ? 'c.1' : !G.flags.skill_dash ? 'c.2' : !G.flags.skill_well ? 'c.3' : 'c.4';
-      return { lines: [['child', k]] };
-    },
-  },
-});
-
-// ---- content/chapter1/shapes.js
-/* ---------- buildings shaped from a spec (engine/24-shapes.js) ---------- */
-// The specs are content/edits/<key>.json, one per thing: what each piece of the sheet's drawing is, measured in columns x
-// and rows from the ground (tools/shape-measure.mjs), depths z from the front. The editor (tools/editor.mjs) writes
-// them; the build puts them in SHAPE_EDITS. A thing with a spec is built from it in place of its sheet extrusion.
-Object.assign(SHAPES, SHAPE_EDITS);
-for (const key of Object.keys(SHAPES)) { BUILD[key] = 'pixel'; CODE_ART[key] = (old) => shapeBuilding(old.pic, SHAPES[key], old.sheet); }
-
-// ---- content/chapter1/story.js
-/* ---------- Chapter 1, The Missing Page: quests, the intro, the statue's riddle, levers, the boss, the ending ---------- */
-Object.assign(QUESTS, {
-  main: {
-    name: 'q.main', main: true,
-    steps: [
-      { text: 'q.main.0', on: ['talk', 'librarian'] },
-      { text: 'q.main.1', on: ['defeat', 'blot', 2] },
-      { text: 'q.main.2', on: ['check', () => has('page_1') && has('page_2') && has('page_3')] },
-      { text: 'q.main.3', on: ['talk', 'librarian'] },
-    ],
-    reward: { xp: 30 },
-  },
-  flap: {
-    name: 'q.flap',
-    steps: [
-      { text: 'q.flap.0', on: ['collect', 'hinge'] },
-      { text: 'q.flap.1', on: ['talk', 'baker'], then: () => takeItem('hinge') },
-    ],
-    reward: { item: 'page_1', coins: 15, xp: 12 },
-  },
-  glasses: {
-    name: 'q.glasses',
-    steps: [
-      { text: 'q.glasses.0', on: ['collect', 'glasses_case'] },
-      { text: 'q.glasses.1', on: ['talk', 'guard'], then: () => takeItem('glasses_case') },
-    ],
-    reward: { item: 'clover_charm', xp: 10 },
-  },
-});
-
-CHAPTER.intro = (done) => openDialogue({ name: 'who.cat', lines: [['cat_worried', 'i.1'], ['cat', 'i.2']], after: () => { startQuest('main'); done(); } });
-// saves from before the intro's flag waited for its dialogue: the intro seen, the main quest never given; seen again
-CHAPTER.mend = () => { if (G.flags.intro && !G.quests.main) delete G.flags.intro; };
-
-// build the current area again (a gate opened): a short fade, the cat stays where it is
-async function reopen() {
-  transitioning = true; await fade(1); enterArea(A.def.id, [player.x, player.z]); saveGame(); await fade(0); transitioning = false;
-}
-
-/* the road's statue: a riddle; the right answer teaches the Ink dash */
-function statueRiddle() {
-  if (G.flags.skill_dash) { openDialogue({ name: 'who.statue', lines: ['st.done'] }); return; }
-  const wrong = () => { sfx('no'); openDialogue({ name: 'who.statue', lines: ['st.wrong'] }); };
-  openDialogue({ name: 'who.statue', lines: ['st.1', 'st.2'], choices: [['st.a1', wrong], ['st.a2', () => {
-    setFlag('skill_dash'); sfx('level'); toast(t('toast.skill', { s: t('skill.dash') }));
-    openDialogue({ name: 'who.statue', lines: ['st.right', coarse ? 'st.how.touch' : 'st.how'] });
-  }], ['st.a3', wrong]] });
-}
-
-/* the lever by the walled garden on the road opens its gate */
-function roadLever() {
-  if (G.flags.gate_open) { openDialogue({ name: 'act.lever', lines: ['lever.done'] }); return; }
-  sfx('door'); setFlag('gate_open'); toast(t('toast.gate')); reopen();
-}
-
-/* the crypt's three levers: the plaque gives the order; a wrong pull resets them and wakes a bookworm */
-const LEVER_ORDER = [3, 1, 2];
-let leverDone = [];
-function cryptLever(n) {
-  if (G.flags.crypt_gate) { openDialogue({ name: 'act.lever', lines: ['lever.done'] }); return; }
-  if (leverDone.includes(n)) { sfx('no'); return; }
-  if (LEVER_ORDER[leverDone.length] !== n) {
-    leverDone = []; sfx('no'); toast(t('toast.levers.wrong')); shake(.2);
-    if (enemies.filter((e) => e.hp > 0).length < 3) { const w = spawnEnemy('bookworm', 12, 14); w.aware = true; }
-    return;
-  }
-  leverDone.push(n); sfx('door'); toast(t('toast.levers', { n: leverDone.length }));
-  if (leverDone.length === 3) { setFlag('crypt_gate'); leverDone = []; reopen(); }
-}
-
-// what the cat thinks at the crypt's ink pool
-function poolTip() { return !G.flags.skill_dash ? 'tip.pool.nodash' : coarse ? 'tip.pool.touch' : 'tip.pool'; }   // a declaration: the crypt's area file is read before this one
-
-/* hooks run each time an area is built */
-Object.assign(AREA_HOOKS, {
-  overworld() {
-    if (qStep('glasses') === 0 && !has('glasses_case')) drop('glasses_case', 104, 31.4);
-    if (qStep('main') === 1) for (const [x, z] of [[40, 50.5], [48, 50.5]]) spawnEnemy('blot', x, z);
-  },
-  crypt_in() { leverDone = []; },
-  crypt_boss() {
-    // the page the Scribe drops lies on the floor until it is taken; saved before that, it lies there again
-    if (G.flags.boss_done) { if (!has('page_3')) drop('page_3', 14, 8); return; }
-    const b = spawnEnemy('blot_scribe', 14, 7);
-    b.onDefeat = () => { setFlag('boss_done'); drop('page_3', b.x, b.z + 1); toast(t('toast.boss.done')); };
-    setTimeout(() => { if (A && A.def.id === 'crypt_boss' && !dlg) openDialogue({ name: 'who.scribe', lines: [['scribe', 'sc.1'], ['cat_worried', 'sc.2'], ['scribe', 'sc.3']] }); }, 700);
-  },
-});
-
-/* the ending: the page is mended; the world stays open afterwards */
-function showEnding() {
-  setFlag('chapter_done'); saveGame(); sfx('quest'); playTrack('village');
-  ui.screen = 'end'; showScreen('end');
-}
-
-// ---- content/curate.js
-/* ---------- curation: hand fixes per building, applied at load (see CURATE in engine/22-lowpoly.js) ---------- */
-// Coordinates are art pixels of the sprite's own drawings: front (x, row), side view (depth from the front, row).
-Object.assign(CURATE, {
-  // the bakery is drawn in code now (content/chapter1/buildings.js)
-  library: { back: { wall: 'stone' } },
-  // the signpost: its drawing extruded 4 px (post and arrows), the stones at its foot 10 px
-  signpost: { depth: { rules: [{ box: [0, 0, 23, 26], half: 2 }, { box: [0, 26, 23, 33], half: 5 }] } },
-});
-
-// ---- content/lowpoly/00-palette.js
-/* ---------- lowpoly.html: the palette and the ground, painted in code ---------- */
+// ---- content/plugins/art/lowpoly/00-palette.js
+/* ---------- plugin, the low-poly page (index.html): the palette and the ground, painted in code ---------- */
 // One warm palette for the whole village (an Italian hill town in late afternoon light): every model and tile takes its
 // colours from here, so nothing clashes. The light, the shadows and the night come from the scene.
 const LPC = {
@@ -3873,8 +4028,8 @@ LP_WALL = (c, a, y) => {
   return Math.floor(y / 6) % 2 ? c : lpShade(c, .94);
 };
 
-// ---- content/lowpoly/01-parts.js
-/* ---------- lowpoly.html: the pieces buildings are made of ---------- */
+// ---- content/plugins/art/lowpoly/01-parts.js
+/* ---------- plugin, the low-poly page (index.html): the pieces buildings are made of ---------- */
 // Each returns a small model facing +z with its back at z = 0, the plane of the wall it sits on, so a building puts
 // it on any wall with LPM.add (ry: 0 front, PI back, PI/2 the right side, -PI/2 the left). No holes are cut: frames,
 // sills and reveals stand proud of the wall, so the glass between them reads as set in.
@@ -3941,8 +4096,8 @@ function lpPlinth(m, x0, x1, z0, z1, h, c) { return m.box(x0 - .8, 0, z0 - .8, x
 // a band of stone (cornice, string course) round a body
 function lpBand(m, x0, x1, z0, z1, y, h, out, c) { return m.box(x0 - out, y, z0 - out, x1 + out, y + h, z1 + out, c || LPC.stoneLt); }
 
-// ---- content/lowpoly/02-buildings.js
-/* ---------- lowpoly.html: the village's buildings ---------- */
+// ---- content/plugins/art/lowpoly/02-buildings.js
+/* ---------- plugin, the low-poly page (index.html): the village's buildings ---------- */
 // Each on the footprint of its sheet sprite (x from its anchor column, z from the middle of its depth, front +z), its
 // door where the sprite's door is, so the doorways, collisions and shadows of the game stay as they were.
 
@@ -4139,8 +4294,8 @@ LP_MODELS.windmill = () => {
   return m;
 };
 
-// ---- content/lowpoly/03-props.js
-/* ---------- lowpoly.html: props and plants ---------- */
+// ---- content/plugins/art/lowpoly/03-props.js
+/* ---------- plugin, the low-poly page (index.html): props and plants ---------- */
 // Foliage is lit by its own height: lighter on top, darker underneath, as a canopy reads in late light.
 const lpLeaf = (lo, hi, a, b, c) => (p) => { const t = (p[1] - lo) / Math.max(1, hi - lo); return t > .66 ? a : t > .33 ? b : c; };
 
@@ -4297,8 +4452,8 @@ LP_CHEST = (lid) => {
   return m;
 };
 
-// ---- content/lowpoly/05-crypt.js
-/* ---------- lowpoly.html: the crypt's stone ---------- */
+// ---- content/plugins/art/lowpoly/05-crypt.js
+/* ---------- plugin, the low-poly page (index.html): the crypt's stone ---------- */
 const CRY = { st: 0x66607a, stLt: 0x7a748e, stDk: 0x4c4760, moss: 0x5a6a4a };
 
 LP_MODELS.crypt_arch = () => {
@@ -4364,20 +4519,526 @@ LP_MODELS.crypt_wall = () => {
   return m;
 };
 
+// ---- content/plugins/art/lowpoly/10-ship-ground.js
+/* ---------- plugin, the low-poly page (index.html): the Ark's palette, floors and walls (Chapter 2) ---------- */
+// One palette for the whole ship (spec section 6: blue-grey metals, off-white panels, amber service lights, emergency
+// red, greenhouse green, the blue-black of ink and void). The floors are painted in code like the village's: 128 art px
+// square, seamless, a few flat shades and sparse details. LP_TILES and LP_WALL are wrapped, not replaced: the village's
+// tiles and wall colours come through untouched (tools/test/shipkit.test.mjs holds that).
+const SHP = {
+  metal: 0x8a96a8, metalDk: 0x5c6678, metalLt: 0xb4bfcc, seam: 0x4e5868, rivet: 0xa8b2c0,
+  panel: 0xd8dcd6, panelDk: 0xb0b4ae, amber: 0xf0b040, red: 0xd04a3a, green: 0x5fa05a, greenDk: 0x3f7a3e,
+  ink: 0x1a1c2c, void: 0x0c1020, frost: 0xe4f2fa, screen: 0x7fe0c0, cushion: 0x6a7aa0, blanket: 0x5a6890, earth: 0x4a3424,
+  wall: 0x8a96a8, wallWhite: 0xd8dcd6,
+};
+const lpVillageTiles = LP_TILES, lpVillageWall = LP_WALL;
+function lpShipTiles() {
+  const W = 128, H = 128, tile = (fn) => { const px = new Uint8ClampedArray(W * H * 4); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = fn(x, y), o = (y * W + x) * 4; px[o] = c >> 16 & 255; px[o + 1] = c >> 8 & 255; px[o + 2] = c & 255; px[o + 3] = 255; } return { w: W, h: H, px }; };
+  // seamless value noise with period 128 (cells of s px), as the village's
+  const noise = (seed, s) => { const n = W / s, at = (i, j) => hash2(((i % n) + n) % n + seed * 131, ((j % n) + n) % n + seed * 71); return (x, y) => { const fx = x / s, fy = y / s, i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j, sm = (t) => t * t * (3 - 2 * t); const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1); return a + (b - a) * sm(u) + (c - a) * sm(v) + (a - b - c + d) * sm(u) * sm(v); }; };
+  const n8 = noise(11, 8), n16 = noise(12, 16), n32 = noise(13, 32);
+  // deck plates: 32 px plates, a dark seam, a rivet near each corner, each plate its own shade
+  const plates = (x, y) => { const xx = x % 32, yy = y % 32, px = Math.floor(x / 32), py = Math.floor(y / 32); if (xx === 0 || yy === 0) return SHP.seam; if ((xx === 3 || xx === 29) && (yy === 3 || yy === 29)) return SHP.rivet; const c = [0x7c8798, 0x768192, 0x808b9c][Math.floor(hash2(px * 3 + 1, py * 5 + 2) * 3)]; return n8(x, y) > .8 ? lpShade(c, .95) : c; };
+  // ink: blots of blue-black over the plates where the noise runs high (the stains grow on the floor too)
+  const ink = (x, y) => { const v = n16(x, y) * .6 + n32(x, y) * .4; return v > .74 ? (v > .8 ? SHP.ink : 0x2a2e44) : plates(x, y); };
+  const grating = (x, y) => (x % 4 === 0 || y % 4 === 0 ? (x % 16 === 0 || y % 16 === 0 ? SHP.metalDk : 0x6a7486) : 0x262c38);
+  const carpet = (x, y) => { const v = n16(x, y) * .7 + n8(x, y) * .3; let c = v < .45 ? 0x56607a : v < .7 ? 0x5c6782 : 0x66708a; if (hash2(x * 7 + 1, y * 3 + 5) < .03) c = 0x4c5670; return c; };
+  const soil = (x, y) => { const v = n8(x, y) * .5 + n32(x, y) * .5; let c = v < .4 ? 0x3e2c1e : v < .7 ? SHP.earth : 0x56402c; if (hash2(x * 5 + 2, y * 11 + 7) < .025) c = 0x7a6040; return c; };
+  // the old parquet of the archive (the library's echo): staggered blocks 16 × 4, two warm shades, a dark joint; the
+  // block index taken modulo the tile's 8 blocks, so the block across the edge is one block (no seam every 8 units)
+  const parquet = (x, y) => { const row = Math.floor(y / 4), xx = (x + (row % 2) * 8) % 16; if (y % 4 === 3 || xx === 0) return 0x5e3a22; const c = hash2(Math.floor((x + (row % 2) * 8) / 16) % 8, row) < .5 ? 0x9a6b3e : 0xa57444; return n8(x, y) > .82 ? lpShade(c, .9) : c; };
+  // dark glass over the stars: a few 1-px stars and rare 3-px ones, placed by a seeded list that wraps
+  const ST = []; { const r = rng(311); for (let i = 0; i < 60; i++) ST.push([Math.floor(r() * 128), Math.floor(r() * 128), i % 9 === 0]); }
+  const stars = (x, y) => { for (const [sx, sy, big] of ST) { const dx = ((x - sx + 192) % 128) - 64, dy = ((y - sy + 192) % 128) - 64; if (dx === 0 && dy === 0) return 0xf2f4ff; if (big && Math.abs(dx) + Math.abs(dy) === 1) return 0x8a92c0; } return n32(x, y) > .7 ? 0x101628 : SHP.void; };
+  // hazard: amber and dark stripes on the diagonal, 16 px a pair (128 divides by 16: the stripes wrap)
+  const hazard = (x, y) => (((x + y) % 16) < 8 ? SHP.amber : 0x2a2a30);
+  return { deck_plates: tile(plates), deck_ink: tile(ink), grating: tile(grating), carpet: tile(carpet), soil: tile(soil), parquet_old: tile(parquet), star_glass: tile(stars), hazard: tile(hazard) };
+}
+LP_TILES = () => Object.assign({}, lpVillageTiles(), lpShipTiles());
+
+// the ship's walls, by the legend's wall colour: panels 24 px wide and 32 high with a dark seam, a darker plinth, and an
+// amber service strip at 22 px; blue-grey panels for corridors and machines, off-white for cabins and the infirmary
+LP_WALL = (c, a, y) => {
+  if (c !== SHP.wall && c !== SHP.wallWhite) return lpVillageWall(c, a, y);
+  const base = c, dark = lpShade(base, .78);
+  if (y < 6) return y === 5 ? SHP.seam : dark;
+  if (y === 22) return SHP.amber;
+  if (a % 24 === 0 || (y - 6) % 32 === 0) return SHP.seam;
+  return hash2(Math.floor(a / 24), Math.floor((y - 6) / 32)) < .5 ? base : lpShade(base, .95);
+};
+
+// ---- content/plugins/art/lowpoly/11-ship-kit.js
+/* ---------- plugin, the low-poly page (index.html): the Ark's things (Chapter 2), the story objects ---------- */
+// A ship thing is two registrations: its model (LP_MODELS) and a plain card of the same size (CODE_ART). An area needs a
+// sprite for every thing (its size is the collision box: engine/40-area.js); Chapter 2 is drawn on the low-poly page
+// only, where the model replaces the card. Sizes in art px: w across, h tall, d deep; each model stays inside its card
+// (tools/test/shipkit.test.mjs). Story objects first (spec section 6); the detail objects come with the kit's part B.
+const SHIP_KEYS = [];
+function shipThing(key, w, h, d, c, model) {
+  SHIP_KEYS.push(key); LP_MODELS[key] = model; BUILD[key] = 'pixel';   // (the card extrudes as a pixel sprite: the editor and the diorama page need a geometry)
+  CODE_ART[key] = () => { const p = new Pic(w, h), z = Math.round(d / 2); p.wall(0, 0, w, h, c, z, -z); return p.done(); };
+}
+
+// the cryo pod: an upright capsule, frosted glass in front lit from inside, a status light and a small screen
+const cryoShell = (m) => {
+  m.box(-13, 0, -11, 13, 4, 11, SHP.metalDk, { top: SHP.metal });
+  m.box(-12, 4, -11, 12, 40, -4, SHP.panel, { top: SHP.panelDk });
+  for (const [x0, x1] of [[-12, -10], [10, 12]]) m.box(x0, 4, -4, x1, 40, 8, SHP.metal);
+  m.box(-12, 40, -11, 12, 44, 8, SHP.metalLt, { top: SHP.metal });
+  m.box(10.5, 16, 8, 11.8, 22, 8.6, SHP.screen, { f: { glow: 1 } });
+  return m;
+};
+shipThing('cryo_pod', 26, 44, 22, SHP.panel, () => { const m = cryoShell(new LPM()); m.box(-10, 6, 6, 10, 38, 8, SHP.frost, { f: { glow: 1 } }); m.box(-2, 41, 8, 2, 43, 8.6, SHP.amber, { f: { glow: 1 } }); return m; });
+// open: the glass slid up into the top, the cushioned inside showing, the light gone red
+shipThing('cryo_pod_open', 26, 44, 22, SHP.panel, () => { const m = cryoShell(new LPM()); m.box(-9, 6, -4, 9, 38, -3, SHP.cushion); m.box(-10, 4, -4, 10, 6, 8, SHP.metalDk); m.box(-2, 41, 8, 2, 43, 8.6, SHP.red, { f: { glow: 1 } }); return m; });
+
+// the codex case: a pedestal, an open frame of thin posts, Chapter 1's codex inside, its pages glowing faintly
+shipThing('codex_case', 20, 30, 20, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-8, 0, -8, 8, 18, 8, SHP.metalDk, { top: SHP.metal });
+  for (const [x, z] of [[-8, -8], [7, -8], [-8, 7], [7, 7]]) m.box(x, 18, z, x + 1, 29, z + 1, SHP.metalLt);
+  for (const z of [-8, 7]) m.box(-8, 29, z, 8, 30, z + 1, SHP.metalLt);
+  for (const x of [-8, 7]) m.box(x, 29, -7, x + 1, 30, 7, SHP.metalLt);
+  m.box(-5, 18, -4, 5, 21, 4, LPC.red, { top: lpShade(LPC.red, 1.1) });
+  m.box(-4.5, 21, -3.5, 4.5, 22, 3.5, 0xf0e6cc, { f: { glow: 1 } });
+  return m;
+});
+
+// the console: a desk, a screen slanted toward the user and glowing, a row of buttons
+shipThing('console', 32, 22, 18, SHP.metal, () => {
+  const m = new LPM();
+  m.box(-16, 0, -9, 16, 12, 9, SHP.metal, { top: SHP.metalDk });
+  m.box(-15, 12, -9, 15, 21, -6, SHP.metalDk);
+  m.face([[-14, 12.2, 2], [14, 12.2, 2], [14, 21, -5.9], [-14, 21, -5.9]], SHP.screen, { from: [0, 8, -9], glow: 1 });
+  for (let k = 0; k < 4; k++) m.box(-12 + k * 7, 12, 4, -9 + k * 7, 13, 7, [SHP.amber, SHP.red, SHP.green, SHP.amber][k], { f: { glow: 1 } });
+  return m;
+});
+
+// a crew member's locker: tall, a door seam, three vents, a handle
+shipThing('crew_locker', 18, 40, 12, SHP.metal, () => {
+  const m = new LPM();
+  m.box(-9, 0, -6, 9, 40, 6, SHP.metal, { top: SHP.metalLt });
+  m.box(-.4, 2, 6, .4, 38, 6.4, SHP.seam);
+  for (let k = 0; k < 3; k++) m.box(-6, 32 + k * 2, 6, 6, 33 + k * 2, 6.3, SHP.metalDk);
+  m.box(2, 18, 6, 3, 23, 7, SHP.metalDk);
+  return m;
+});
+
+// a supply crate: dark metal, amber bands and a light lid
+shipThing('supply_crate', 20, 14, 14, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-10, 0, -7, 10, 14, 7, SHP.metalDk, { top: SHP.metal });
+  for (const y of [3, 9]) m.box(-10.3, y, -7.3, 10.3, y + 2, 7.3, SHP.amber, { skip: ['bottom', 'top'] });
+  return m;
+});
+
+// an archive shelf: a wooden case (the old library's), five shelves, books of every colour, a few gone black with ink
+shipThing('archive_shelf', 48, 58, 12, LPC.wood, () => {
+  const m = new LPM(), BOOKS = [0x8a3a2e, 0x2e5a7a, 0x5a7a3a, 0xb08a3a, 0x6a3a6a, 0x3a6a6a, 0x9a6a3a];
+  for (const [x0, x1] of [[-24, -22], [22, 24]]) m.box(x0, 0, -6, x1, 58, 6, LPC.woodDk);
+  m.box(-22, 0, -6, 22, 58, -4.5, LPC.wood);
+  for (const y of [0, 14, 28, 42, 56]) m.box(-22, y, -4.5, 22, y + 1.5, 6, LPC.woodDk);
+  for (const [s, y] of [0, 14, 28, 42].entries()) {
+    let x = -21.5, i = 0;
+    while (x < 20) {
+      const w = 2 + Math.floor(hash2(i * 7 + s, s * 13) * 2), h = 8 + Math.floor(hash2(i * 3 + s * 5, 11) * 4), inked = hash2(i, s * 29 + 3) < .12;
+      if (x + w > 21.5) break;
+      m.box(x, y + 1.5, -4, x + w - .2, y + 1.5 + h, 4, inked ? SHP.ink : BOOKS[Math.floor(hash2(i * 5 + s, 7) * BOOKS.length)]);
+      x += w; i++;
+    }
+  }
+  return m;
+});
+
+// a plant tank: a metal tank of earth, the old village's olive growing in it, a grow light on two posts above
+shipThing('plant_tank', 36, 35, 18, SHP.metal, () => {
+  const m = new LPM();
+  m.box(-18, 0, -9, 18, 10, 9, SHP.metal, { top: SHP.earth });
+  m.box(-18.4, 9, -9.4, 18.4, 10.5, 9.4, SHP.metalDk, { skip: ['bottom', 'top'] });
+  m.frustum(0, 0, 2, 1.4, 10, 20, 6, LPC.trunk, { top: false, smooth: false });
+  m.blob(0, 24, 0, 8, LPC.olive, { facet: true, sy: .7, seed: 3 });
+  for (const x of [-17, 16]) m.box(x, 10, -1, x + 1, 33, 1, SHP.metalDk);
+  m.box(-17, 33, -2, 17, 35, 2, SHP.metalDk);
+  m.box(-15, 32, -1.5, 15, 33, 1.5, 0xf8e8b0, { f: { glow: 1 } });
+  return m;
+});
+
+// the observatory's telescope: a round foot, a column, a mount, the tube raised toward the window (tilted about x)
+shipThing('telescope', 30, 48, 40, SHP.metalDk, () => {
+  const m = new LPM(), a = .7, ca = Math.cos(a), sa = Math.sin(a);
+  m.frustum(0, 0, 8, 5, 0, 6, 8, SHP.metalDk, { top: SHP.metal, smooth: false });
+  m.box(-2, 6, -2, 2, 26, 2, SHP.metal);
+  m.box(-4, 26, -4, 4, 30, 4, SHP.metalDk);
+  const tube = new LPM().frustum(0, 0, 4, 3.2, -10, 22, 10, SHP.metalLt, { top: SHP.void, bottom: SHP.metalDk });
+  for (const f of tube.f) m.f.push(Object.assign({}, f, { p: f.p.map(([x, y, z]) => [x, 30 + y * ca - z * sa, -(y * sa + z * ca)]) }));
+  return m;
+});
+
+// a power switch panel: three levers with their lamps above, for the engine room's puzzle
+shipThing('power_switch', 16, 26, 12, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-8, 0, -4, 8, 26, 4, SHP.metalDk, { top: SHP.metal });
+  m.box(-7, 4, 4, 7, 24, 4.4, SHP.metal);
+  for (let k = 0; k < 3; k++) { const x = -5.5 + k * 4.5; m.box(x, 9, 4.4, x + 2, 15, 6, LPC.red); m.box(x, 18, 4.4, x + 2, 20, 4.8, SHP.amber, { f: { glow: 1 } }); }
+  return m;
+});
+
+// a bunk in the quarters: a metal frame, a mattress under a blue blanket folded back, a pillow
+shipThing('bunk', 40, 15, 22, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-20, 0, -11, 20, 8, 11, SHP.metalDk, { top: SHP.metal });
+  m.box(-19, 8, -10, 19, 12, 10, SHP.blanket, { top: SHP.cushion });
+  m.box(-6, 12, -10, 19, 12.6, 10, SHP.blanket);
+  m.box(-18, 12, -8, -10, 14.5, 8, 0xe8e8e0);
+  return m;
+});
+
+// ---- content/plugins/art/lowpoly/12-ship-detail.js
+/* ---------- plugin, the low-poly page (index.html): the Ark's things (Chapter 2), the detail objects ---------- */
+// The furniture and the machinery around the story objects (11-ship-kit.js), on the same kit: shipThing() registers the
+// model, its card (the collision, filling the model's footprint: tools/test/shipkit.test.mjs) and a pixel card build.
+// A wall-mounted thing stands at the back of its card (z from -d/2): placed against a wall, it hangs on it.
+// A thing the cat walks over (floor_vent, cable_coil) is placed with box [0, 0]: a card is otherwise a solid box.
+// The lift and the door frame are solid across their whole card, opening included: an area puts its exit beside or in
+// front of them (a thing's "door", whose exit stands before the solid), never through them.
+
+// the mess table: a long top on two trestles, a tray and two cups left as they were
+shipThing('mess_table', 40, 16, 18, SHP.metal, () => {
+  const m = new LPM();
+  m.box(-20, 11, -9, 20, 13, 9, SHP.panel, { top: SHP.panel });
+  for (const x of [-15, 13]) m.box(x, 0, -7, x + 2, 11, 7, SHP.metalDk);
+  m.box(-15, 3, -1, 15, 4.5, 1, SHP.metalDk);
+  m.box(-8, 13, -4, 2, 13.6, 3, SHP.metalLt);
+  for (const [x, z] of [[6, -2], [11, 3]]) m.frustum(x, z, 1.6, 1.8, 13, 16, 8, SHP.amber, { top: lpShade(SHP.amber, .7), smooth: false });
+  return m;
+});
+
+// a chair: seat, back, four legs (a mess chair, pushed back from the table)
+shipThing('chair', 12, 18, 12, SHP.metalDk, () => {
+  const m = new LPM();
+  for (const [x, z] of [[-6, -6], [4.5, -6], [-6, 4.5], [4.5, 4.5]]) m.box(x, 0, z, x + 1.5, 8, z + 1.5, SHP.metalDk);
+  m.box(-6, 8, -6, 6, 9.5, 6, SHP.cushion, { top: SHP.cushion });
+  m.box(-6, 9.5, -6, 6, 18, -4.5, SHP.metal);
+  return m;
+});
+
+// the infirmary's bed: a white frame on a pedestal, a thin mattress, a raised head, a monitor arm with a green trace
+shipThing('med_bed', 44, 26, 22, SHP.panel, () => {
+  const m = new LPM();
+  m.box(-6, 0, -6, 6, 8, 6, SHP.metalDk);
+  m.box(-20, 8, -11, 22, 11, 11, SHP.panel, { top: SHP.panelDk });
+  m.box(-19, 11, -10, 21, 13, 10, 0xe8eef0);
+  m.prism([[-10, 13], [10, 13], [10, 18], [-10, 15]], 'x', -19, -12, 0xe8eef0);
+  m.box(-22, 8, -2, -20, 24, 2, SHP.metal);
+  m.box(-22, 20, -8, -20, 26, -2, SHP.metalDk);
+  m.box(-21.9, 21, -7, -21.6, 25, -3, SHP.green, { f: { glow: 1 } });
+  return m;
+});
+
+// the infirmary's cabinet: white, two glass doors with bottles behind, a red cross
+shipThing('med_cabinet', 22, 36, 10, SHP.panel, () => {
+  const m = new LPM();
+  m.box(-11, 0, -5, 11, 36, 5, SHP.panel, { top: SHP.panelDk });
+  m.box(-.4, 14, 5, .4, 34, 5.4, SHP.panelDk);
+  for (const [x, c] of [[-8, 0x6aa0c0], [-5, 0xc06a5a], [3, 0x8ac06a], [6, 0x6aa0c0]]) m.box(x, 20, 4, x + 2, 25, 4.8, c);
+  m.box(-2, 6, 5, 2, 12, 5.4, SHP.red); m.box(-4, 8, 5, 4, 10, 5.4, SHP.red);
+  return m;
+});
+
+// the captain's safe: heavy, a dial and a small keypad lit amber
+shipThing('safe', 18, 18, 16, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-9, 0, -8, 9, 18, 8, SHP.metalDk, { top: SHP.metal });
+  m.box(-7, 2, 8, 7, 16, 8.4, SHP.metal);
+  m.box(-5, 7, 8.4, -1, 11, 9, SHP.metalLt, { top: SHP.metalLt });
+  m.box(3, 6, 8.4, 6, 12, 8.9, SHP.amber, { f: { glow: 1 } });
+  return m;
+});
+
+// the navigator's chart table: a slanted top under glass, a star chart drawn in gold lines on it (lit from below)
+shipThing('chart_table', 34, 16, 22, SHP.metal, () => {
+  const m = new LPM();
+  m.box(-17, 0, -11, 17, 10, 11, SHP.metal, { top: SHP.metalDk });
+  m.face([[-16, 10.2, 10], [16, 10.2, 10], [16, 15.8, -10], [-16, 15.8, -10]], SHP.void, { from: [0, 6, 0], glow: 1 });
+  m.box(-17, 10, -11, 17, 16, -10, SHP.metalDk);
+  for (let k = 0; k < 6; k++) { const x = -12 + k * 5, a = hash2(k, 5) * 8; m.face([[x, 10.6 + a * .05, 9 - a], [x + 1, 10.6 + a * .05, 9 - a], [x + 1, 11.2 + a * .05, 8 - a], [x, 11.2 + a * .05, 8 - a]], 0xe0c060, { glow: 1 }); }
+  return m;
+});
+
+// the crew's group photo, on the mess wall (M4 stains its faces one by one): a frame, a pale picture
+shipThing('photo_frame', 24, 30, 4, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-12, 14, -2, 12, 30, 2, SHP.metalDk);
+  m.box(-10.5, 15.5, 2, 10.5, 28.5, 2.4, 0xd8d0b8, { f: { glow: 1 } });
+  for (let k = 0; k < 5; k++) m.box(-9 + k * 4, 19, 2.4, -7 + k * 4, 24, 2.7, [0x3a4a7a, 0x6a8ac0, 0xd07040, 0x5a8a4a, 0xe8e8e0][k]);
+  return m;
+});
+
+// a toy in a cabin: a small tin robot, red and blue, one antenna (what a crew member kept from home)
+shipThing('toy_robot', 8, 12, 6, SHP.red, () => {
+  const m = new LPM();
+  for (const x of [-3, 1]) m.box(x, 0, -2, x + 2, 3, 2, SHP.metalDk);
+  m.box(-4, 3, -3, 4, 8, 3, SHP.red);
+  m.box(-3, 8, -2.5, 3, 11, 2.5, 0x4a6aa8);
+  m.box(-1.5, 9, 2.5, -.5, 10, 3, SHP.amber, { f: { glow: 1 } }); m.box(.5, 9, 2.5, 1.5, 10, 3, SHP.amber, { f: { glow: 1 } });
+  m.box(-.3, 11, -.3, .3, 12, .3, SHP.metalLt);
+  return m;
+});
+
+// pipes along a wall: three runs at different heights, brackets, a red valve wheel
+shipThing('pipes', 48, 30, 6, SHP.metal, () => {
+  const m = new LPM();
+  for (const [y, r, c] of [[8, 1.6, SHP.metal], [16, 1.2, SHP.metalLt], [24, 2, SHP.metalDk]]) m.prism(Array.from({ length: 8 }, (_, k) => { const a = k / 8 * Math.PI * 2; return [-3 + 3 + Math.cos(a) * r - 1, y + Math.sin(a) * r]; }), 'x', -24, 24, c);
+  for (const x of [-18, 0, 18]) m.box(x - 1, 4, -3, x + 1, 28, -2, SHP.metalDk);
+  m.frustum(10, 0, 3.4, 3.4, 15, 16, 10, SHP.red, { top: SHP.red, smooth: false });
+  return m;
+});
+
+// a coil of cable on the floor, a loose end running off
+shipThing('cable_coil', 14, 4, 14, SHP.ink, () => {
+  const m = new LPM();
+  for (const r of [6.5, 5, 3.5]) m.frustum(0, 0, r, r, 0, 2.2 + (6.5 - r) * .3, 12, 0x2a2e3a, { top: 0x3a3e4a, smooth: false });
+  m.box(5, 0, -.6, 7, 1.2, .6, 0x2a2e3a);
+  return m;
+});
+
+// a floor vent: a raised grill, dark slots
+shipThing('floor_vent', 16, 2, 16, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-8, 0, -8, 8, 1, 8, SHP.metalDk, { top: 0x262c38 });
+  for (let k = 0; k < 5; k++) m.box(-7, 1, -6.5 + k * 3, 7, 2, -5.5 + k * 3, SHP.metal);
+  return m;
+});
+
+// the engine room's generator: a big drum on a plinth, cooling fins, a glowing core window, cables
+shipThing('generator', 40, 40, 28, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-20, 0, -14, 20, 6, 14, SHP.metalDk, { top: SHP.metal });
+  m.lathe(0, 0, [[12, 6], [13, 10], [13, 32], [10, 38]], 16, SHP.metal, { top: SHP.metalDk, col: (b, k) => (k % 4 === 0 ? SHP.metalDk : SHP.metal) });
+  m.box(-4, 16, 12.4, 4, 26, 13.6, 0x9fd8ff, { f: { glow: 1 } });
+  for (const x of [-18, 15]) m.box(x, 6, -6, x + 3, 30, 6, SHP.metalDk);
+  return m;
+});
+
+// a coolant tank: a tall cylinder, a level window, hazard band
+shipThing('coolant_tank', 20, 44, 20, SHP.metal, () => {
+  const m = new LPM();
+  m.frustum(0, 0, 9.5, 9.5, 0, 40, 12, SHP.metalLt, { top: SHP.metal, smooth: false });
+  m.frustum(0, 0, 10, 10, 6, 9, 12, SHP.amber, { top: false, smooth: false });
+  m.frustum(0, 0, 6, 4, 40, 44, 8, SHP.metal, { top: SHP.metalDk, smooth: false });
+  m.box(-2, 14, 9.4, 2, 34, 10, 0x6ac0e0, { f: { glow: 1 } });
+  return m;
+});
+
+// a wall screen: a dark panel on the wall, lines of status in teal
+shipThing('wall_screen', 30, 30, 3, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-15, 12, -1.5, 15, 30, 1.5, SHP.metalDk);
+  m.box(-13.5, 13.5, 1.5, 13.5, 28.5, 1.9, 0x0e1c24, { f: { glow: 1 } });
+  for (let k = 0; k < 4; k++) m.box(-11, 16 + k * 3, 1.9, -11 + 8 + Math.floor(hash2(k, 3) * 12), 17 + k * 3, 2.2, SHP.screen, { f: { glow: 1 } });
+  return m;
+});
+
+// a porthole: a round frame on the wall, stars behind dark glass
+shipThing('porthole', 22, 34, 4, SHP.metal, () => {
+  const m = new LPM(), cy = 23, n = 16;
+  for (let k = 0; k < n; k++) { const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2, P = (r, a) => [Math.cos(a) * r, cy + Math.sin(a) * r]; const [p0, p1, q1, q0] = [P(11, a0), P(11, a1), P(8.5, a1), P(8.5, a0)]; m.face([[p0[0], p0[1], 2], [p1[0], p1[1], 2], [q1[0], q1[1], 2], [q0[0], q0[1], 2]], k % 2 ? SHP.metal : SHP.metalLt, { from: [0, cy, -2] }); }
+  m.face(Array.from({ length: n }, (_, k) => { const a = k / n * Math.PI * 2; return [Math.cos(a) * 8.5, cy + Math.sin(a) * 8.5, 1.6]; }), SHP.void, { from: [0, cy, -2], glow: 1 });
+  m.box(-11, 12, -2, 11, 34, 1.4, SHP.metalDk, { skip: ['bottom', 'front'] });
+  for (const [x, y] of [[-3, 26], [4, 21], [1, 29]]) m.box(x, y, 1.6, x + 1, y + 1, 1.9, 0xf2f4ff, { f: { glow: 1 } });
+  return m;
+});
+
+// a sector's door frame: two posts and a lintel with a light, the door itself open; the card is the whole frame, gap
+// included (solid: the exit goes before it, as a thing's "door")
+shipThing('door_frame', 36, 44, 8, SHP.metal, () => {
+  const m = new LPM();
+  for (const x of [-18, 12]) m.box(x, 0, -4, x + 6, 44, 4, SHP.metal, { top: SHP.metalDk });
+  m.box(-12, 36, -4, 12, 44, 4, SHP.metalDk);
+  m.box(-4, 38, 4, 4, 40, 4.4, SHP.amber, { f: { glow: 1 } });
+  for (const x of [-18, 17.5]) m.box(x, 2, 4, x + .5, 34, 4.3, SHP.amber);
+  return m;
+});
+
+// the central lift: a cage of posts and rails around a platform, a call panel lit green
+shipThing('lift', 40, 50, 40, SHP.metalDk, () => {
+  const m = new LPM();
+  m.box(-20, 0, -20, 20, 2, 20, SHP.metalDk, { top: 0x6a7486 });
+  for (const [x, z] of [[-20, -20], [18, -20], [-20, 18], [18, 18]]) m.box(x, 2, z, x + 2, 50, z + 2, SHP.metal);
+  for (const y of [24, 48]) { m.box(-18, y, -20, 18, y + 2, -18, SHP.metalDk); m.box(-20, y, -18, -18, y + 2, 18, SHP.metalDk); m.box(18, y, -18, 20, y + 2, 18, SHP.metalDk); }
+  m.box(14, 14, 18, 18, 20, 20, SHP.metalDk); m.box(15, 16, 20, 17, 18, 20.4, SHP.green, { f: { glow: 1 } });
+  return m;
+});
+
+// ---- content/plugins/art/lowpoly/13-ship-ink.js
+/* ---------- plugin, the low-poly page (index.html): the ink the crew left on the Ark (Chapter 2) ---------- */
+// A person's shape on a wall, writing and footprints on the floor (the scanner's finds: placed with box [0, 0]), and the
+// bridge's star map, torn and whole. Same kit and rules as 11-ship-kit.js and 12-ship-detail.js: the parts of a model
+// stand at different depths or overlap in volume, never on one plane (tools/test/shipkit.test.mjs counts fights).
+const INK_WET = 0x2c3350, INK_GLOW = 0x4a68b8;
+
+// a person's shape in ink on a wall: legs, a body, arms a little open, a round head, two drips; flat against the wall
+shipThing('ink_stain', 24, 40, 4, SHP.ink, () => {
+  const m = new LPM();
+  m.box(-6, 0, -2, -1.5, 17, .6, SHP.ink); m.box(1.5, 0, -2, 6, 17, .6, SHP.ink);
+  m.box(-7, 16, -2, 7, 31, 1, SHP.ink);
+  m.box(-12, 18, -2, -6.5, 29, .8, INK_WET); m.box(6.5, 18, -2, 12, 29, .8, INK_WET);
+  m.prism(Array.from({ length: 8 }, (_, k) => { const a = k / 8 * Math.PI * 2; return [Math.cos(a) * 5, 35 + Math.sin(a) * 5]; }), 'z', -2, 1.2, SHP.ink);
+  m.box(-11.6, 9, -2, -10.6, 18.5, .4, INK_WET); m.box(10.8, 12, -2, 11.6, 18.5, .4, INK_WET);
+  return m;
+});
+
+// writing in hidden ink on the floor: strokes of an unknown hand, a few still glowing
+shipThing('ink_writing', 28, 1, 16, SHP.ink, () => {
+  const m = new LPM();
+  const strokes = [[-14, -8, -8, -7], [-6, -8, 1, -7], [3, -7.5, 9, -6.5], [10.5, -8, 14, -7], [-13, -4, -9, -3], [-7.5, -4.5, -1, -3.5],
+    [1, -4, 6, -3], [8, -4.5, 13, -3.5], [-12, 0, -5, 1], [-3, -.5, 4, .5], [6, 0, 11, 1], [-14, 4, -10, 5], [-8, 3.5, -2, 4.5], [0, 4, 7, 5],
+    [9, 3.5, 14, 4.5], [-10, 7, -3, 8], [-1, 7, 5, 8]];
+  strokes.forEach(([x0, z0, x1, z1], k) => m.box(x0, 0, z0, x1, .4 + (k % 3) * .1, z1, k % 4 === 1 ? INK_GLOW : SHP.ink, k % 4 === 1 ? { f: { glow: 1 } } : undefined));
+  return m;
+});
+
+// footprints in wet ink: bare feet side by side, all going the same way
+shipThing('ink_steps', 24, 1, 12, SHP.ink, () => {
+  const m = new LPM();
+  for (let p = 0; p < 5; p++) for (let s = 0; s < 2; s++) {
+    const x = -12 + p * 5 + s * 2.2, z = -6 + ((p + s) % 2) * 6.5 + (s ? 0 : 1);
+    m.box(x, 0, z, x + 1.8, .4 + s * .1, z + 3.5, s ? INK_WET : SHP.ink);
+  }
+  return m;
+});
+
+// the bridge's star map: a dark glass panel high on the wall, stars and the gold route; torn, four ragged holes
+function starMap(torn) {
+  const m = new LPM();
+  m.box(-20, 12, -2, 20, 40, 1.5, SHP.metalDk);
+  m.box(-18.5, 13.5, 1.5, 18.5, 38.5, 1.9, SHP.void, { f: { glow: 1 } });
+  const holes = torn ? [[-16, 30, -9, 37], [-4, 15, 3, 22], [6, 28, 13, 36], [12, 15, 17, 21]] : [];
+  const inHole = (x, y) => holes.some(([a, b, c, d]) => x > a - 1 && x < c + 1 && y > b - 1 && y < d + 1);
+  for (let k = 0; k < 26; k++) { const x = -17 + hash2(k, 41) * 33, y = 15 + hash2(k, 42) * 22; if (!inHole(x, y)) m.box(x, y, 1.9, x + .7, y + .7, 2.1, 0xe8e8f0, { f: { glow: 1 } }); }
+  const route = [[-15, 18], [-8, 24], [-1, 21], [6, 30], [14, 34]];
+  for (let k = 0; k < route.length - 1; k++) {
+    const [x0, y0] = route[k], [x1, y1] = route[k + 1];
+    for (let s = 0; s < 6; s++) { const x = x0 + (x1 - x0) * s / 6, y = y0 + (y1 - y0) * s / 6; if (!inHole(x, y)) m.box(x, y, 2.1, x + 1, y + .6, 2.3, SHP.amber, { f: { glow: 1 } }); }
+  }
+  for (const [a, b, c, d] of holes) { m.box(a, b, 1.9, c, d, 2, 0x3a3e4a); m.box(a + 1, b + 1, 2, c - 1, d - 1, 2.05, 0x262a36); }
+  return m;
+}
+shipThing('star_map_torn', 40, 40, 4, SHP.metalDk, () => starMap(true));
+shipThing('star_map_whole', 40, 40, 4, SHP.metalDk, () => starMap(false));
+
+// ---- content/plugins/behaviours/blot_scribe.js
+/* ---------- plugin: the Blot Scribe's own behaviour (content/chapter1/enemies.json: "behaviour": "blot_scribe") ---------- */
+// Phase 1 sweeps its quill and draws ink lines; below half health it splits off Blots and calls ink rain. Every attack
+// is announced: the quill drawn back, ink marks on the floor 0.6 s before they burst. A boss is a small program, so it
+// stays code: it drives the engine's combat (hazard, spawnEnemy, hurtHero, fx) as the content script did.
+BEHAVIOURS.blot_scribe = {
+  onHit(e) { if (!e.phase2 && e.hp < e.T.hp / 2) { e.phase2 = true; e.state = 'split'; e.st = .9; e.a.anim = 'split'; e.a.at = 0; toast(t('toast.boss2')); shake(.3); } },
+  ai(e, dt, dist, move, face) {
+    const T = e.T, a = e.a; e.cool = (e.cool || 1.5) - dt;   // (e.st and a.at run in enemiesStep: counted here too, they ran twice as fast)
+    switch (e.state) {
+      case 'wander': case 'notice': case 'chase': {
+        a.anim = null; face(player.x, player.z);
+        if (dist > T.reach * .8) a.moving = move(e.fx * T.speed, e.fz * T.speed);
+        if (e.cool <= 0) {
+          const pick = e.phase2 ? (R() < .5 ? 'rain' : dist < T.reach ? 'sweep' : 'lines') : (dist < T.reach ? 'sweep' : 'lines');
+          if (pick === 'sweep') { e.state = 'windup'; e.st = .65; a.anim = 'windup'; a.at = 0; }
+          else { e.state = pick; e.st = .9; a.anim = 'cast'; a.at = 0; e.done = false; }
+        }
+        break;
+      }
+      case 'windup': face(player.x, player.z); if (e.st <= 0) { e.state = 'sweep'; e.st = .4; a.anim = 'attack'; a.at = 0; e.hit = 0; sfx('swing3'); } break;
+      case 'sweep': {   // a half-circle in front, quill's length
+                if (!e.hit) { e.hit = 1; fx('slash', e.x + e.fx * 1.6, e.z + e.fz * 1.6, { size: 2.4, y: A.groundY(e.x, e.z) + .6 }); const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz); if (d < T.reach + .4 && (dx * e.fx + dz * e.fz) / (d || 1) > -.1) hurtHero(T.atk, e.x, e.z); }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = e.phase2 ? 1.2 : 1.7; }
+        break;
+      }
+      case 'lines': {   // a line of marks from the Scribe toward the cat
+                if (!e.done && e.st < .6) { e.done = true; const l = dist || 1, ux = (player.x - e.x) / l, uz = (player.z - e.z) / l; for (let i = 1; i <= 6; i++) hazard(e.x + ux * i * 1.3, e.z + uz * i * 1.3, .6 + i * .07, .8, T.atk - 2); }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = 1.6; }
+        break;
+      }
+      case 'rain': {   // marks around and under the cat
+                if (!e.done && e.st < .6) { e.done = true; hazard(player.x, player.z, .7, .9, T.atk - 2); for (let i = 0; i < 6; i++) { const an = R() * Math.PI * 2, r = 1.5 + R() * 3.5; hazard(player.x + Math.cos(an) * r, player.z + Math.sin(an) * r, .6 + R() * .5, .9, T.atk - 2); } }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = 1.4; }
+        break;
+      }
+      case 'split': {   // phase 2 and then every so often: two Blots, never more than four
+        a.anim = 'split';
+        if (e.st <= 0) { if (enemies.filter((o) => o.type === 'blot' && o.hp > 0).length < 4) for (const s of [-1, 1]) { const b = spawnEnemy('blot', e.x + s * 1.6, e.z + 1.2); b.aware = true; b.T = Object.assign({}, b.T, { coins: [0, 0], xp: 1, drops: [] }); } e.state = 'chase'; e.cool = 1.2; e.splitT = 9; }
+        break;
+      }
+    }
+    if (e.phase2 && e.state === 'chase' && (e.splitT = (e.splitT || 9) - dt) <= 0) { e.state = 'split'; e.st = .8; a.anim = 'split'; a.at = 0; }
+    return true;
+  },
+};
+
+// ---- content/plugins/behaviours/what_remains.js
+/* ---------- plugin: What Remains, Chapter 2's boss (content/chapter2/enemies.json: "behaviour": "what_remains") ---------- */
+// The crew merged into one shape of ink, on the bridge. Phase 1 reaches for the cat (a line of ink marks toward it and a
+// blow in front) and pulses (a ring of marks around itself); below half health it calls shadows off the walls (never
+// more than three) and pulses twice as often. Every attack is announced: the arm drawn back, the marks on the floor
+// 0.6 s before they burst. Built as the Blot Scribe's behaviour is (blot_scribe.js).
+BEHAVIOURS.what_remains = {
+  onHit(e) { if (!e.phase2 && e.hp < e.T.hp / 2) { e.phase2 = true; e.state = 'summon'; e.st = .9; e.a.anim = 'summon'; e.a.at = 0; toast(t('toast.boss2r')); shake(.3); } },
+  ai(e, dt, dist, move, face) {
+    const T = e.T, a = e.a; e.cool = (e.cool || 1.6) - dt;
+    switch (e.state) {
+      case 'wander': case 'notice': case 'chase': {
+        a.anim = null; face(player.x, player.z);
+        if (dist > T.reach * .8) a.moving = move(e.fx * T.speed, e.fz * T.speed);
+        if (e.cool <= 0) {
+          const pulse = e.phase2 ? R() < .5 : R() < .25 || dist < 2;
+          if (pulse) { e.state = 'pulse'; e.st = .9; a.anim = 'pulse'; a.at = 0; e.done = false; }
+          else { e.state = 'windup'; e.st = .7; a.anim = 'windup'; a.at = 0; }
+        }
+        break;
+      }
+      case 'windup': face(player.x, player.z); if (e.st <= 0) { e.state = 'reach'; e.st = .5; a.anim = 'attack'; a.at = 0; e.hit = 0; e.done = false; sfx('swing3'); } break;
+      case 'reach': {   // a blow in front, the reach's length, and a line of marks running on toward the cat
+        if (!e.hit) {
+          e.hit = 1; fx('slash', e.x + e.fx * 1.8, e.z + e.fz * 1.8, { size: 2.6, y: A.groundY(e.x, e.z) + .6 });
+          const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz); if (d < T.reach && (dx * e.fx + dz * e.fz) / (d || 1) > .55) hurtHero(T.atk, e.x, e.z);   // (a cone in front: a dodge to the side clears it)
+        }
+        if (!e.done) { e.done = true; for (let i = 3; i <= 7; i++) hazard(e.x + e.fx * i * 1.2, e.z + e.fz * i * 1.2, .6 + i * .06, .8, T.atk - 3); }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = e.phase2 ? 1.3 : 1.8; }
+        break;
+      }
+      case 'pulse': {   // a ring of marks around itself
+        if (!e.done && e.st < .6) { e.done = true; for (let i = 0; i < 10; i++) { const an = i / 10 * Math.PI * 2, r = 2.2 + (i % 2) * 1.6; hazard(e.x + Math.cos(an) * r, e.z + Math.sin(an) * r, .7, .9, T.atk - 3); } }
+        if (e.st <= 0) { e.state = 'chase'; e.cool = e.phase2 ? 1.1 : 1.6; }
+        break;
+      }
+      case 'summon': {   // phase 2 and then every so often: two shadows off the walls, never more than three alive
+        a.anim = 'summon';
+        if (e.st <= 0) {
+          for (const s of [-1, 1]) {
+            if (enemies.filter((o) => o.type === 'shadow' && o.hp > 0).length >= 3) break;
+            const b = spawnEnemy('shadow', e.x + s * 2.4, e.z + 1.4); b.aware = true; b.hunt = true; b.T = Object.assign({}, b.T, { xp: 1, drops: [] });
+          }
+          e.state = 'chase'; e.cool = 1.2; e.summonT = 10;
+        }
+        break;
+      }
+    }
+    if (e.phase2 && e.state === 'chase' && (e.summonT = (e.summonT || 10) - dt) <= 0) { e.state = 'summon'; e.st = .9; a.anim = 'summon'; a.at = 0; }
+    return true;
+  },
+};
+
+// ---- content/**/*.json
+const GAME_DATA = {"files":{"chapter1/areas/bakery_in.json":{"schema":1,"areas":{"bakery_in":{"name":"area.bakery","cell":2,"tod":"interno","start":[11,11.4],"camNorth":1,"music":"library","legend":{"o":{"tile":"wood_planks"},"W":{"tile":"crypt_floor","h":48,"wall":"#6e5a48"},"V":{"tile":"crypt_floor","h":6,"wall":"#6e5a48"}},"map":["WWWWWWWWWW","WooooooooW","WooooooooW","WooooooooW","WooooooooW","WooooooooW","VVVVoooVVV"],"things":[{"key":"market_stall","at":[11,6]},{"key":"barrel","at":[4,4.6]},{"key":"barrel","at":[5.6,4.6]},{"key":"crate","at":[16,9.6]},{"key":"chest","at":[16,4.6],"chest":{"id":"bakery","item":"coin","n":12}}],"npcs":[{"id":"baker","at":[11,8.6],"face":[0,1]}],"lamps":[[10,3,7,3,1.3]],"exits":[{"rect":[8,13.2,14,14],"to":"overworld","at":[45,35.6],"face":[0,1]}]}}},"chapter1/areas/crypt_boss.json":{"schema":1,"areas":{"crypt_boss":{"name":"area.boss","cell":2,"tod":"cripta","start":[14,21.4],"camNorth":1,"music":{"choose":[[{"flag":"boss_done"},"crypt"]],"else":"boss"},"halo":"#8fa8ff","legend":{"o":{"tile":"crypt_floor"},"W":{"tile":"crypt_floor","h":52,"wall":"#4a4250"},"V":{"tile":"crypt_floor","h":6,"wall":"#4a4250"},"w":{"tile":"water","water":true,"h":-3}},"map":["WWWWWWWWWWWWWW","WooooooooooooW","WooooooooooooW","WooooooooooooW","WooooooooooooW","WooooooooooooW","WooooooooooooW","WooooooooooooW","WooooooooooooW","WooooooooooooW","WooooooooooooW","VVVVVVooVVVVVV"],"things":[{"key":"sarcophagus","at":[5,4.4]},{"key":"sarcophagus","at":[23,4.4]}],"lamps":[[3,3,3,2.8,1.4],[25,3,3,2.8,1.4],[3,3,18,2.6,1.2],[25,3,18,2.6,1.2]],"exits":[{"rect":[12,23.2,16,24],"to":"crypt_in","at":[16,6.8],"face":[0,1],"when":{"not":{"flag":"boss_done"}}},{"rect":[12,23.2,16,24],"to":"overworld","at":[45,25.2],"face":[0,1],"when":{"flag":"boss_done"}}],"onEnter":[{"if":{"flag":"boss_done"},"then":[{"if":{"not":{"has":"page_3"}},"then":[{"drop":"page_3","at":[14,8]}]}],"else":[{"spawn":"blot_scribe","at":[14,7],"onDefeat":[{"flag":"boss_done"},{"drop":"page_3","at":"self","offset":[0,1]},{"toast":"toast.boss.done"}]},{"wait":0.7},{"if":{"all":[{"area":"crypt_boss"},{"dialogue":false}]},"then":[{"say":[["scribe","sc.1"],["cat_worried","sc.2"],["scribe","sc.3"]],"name":"who.scribe"}]}]}]}}},"chapter1/areas/crypt_in.json":{"schema":1,"areas":{"crypt_in":{"name":"area.crypt","cell":2,"tod":"cripta","start":[16,45.4],"camNorth":1,"music":"crypt","halo":"#8fa8ff","legend":{"o":{"tile":"crypt_floor"},"W":{"tile":"crypt_floor","h":52,"wall":"#4a4250"},"V":{"tile":"crypt_floor","h":6,"wall":"#4a4250"},"w":{"tile":"water","water":true,"h":-3}},"map":["WWWWWWWWWWWWWWWW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","VVVVVVooooVVVVVV","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","VVVVVVooooVVVVVV","WwwwwwwwwwwwwwwW","WwwwwwwwwwwwwwwW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","WooooooooooooooW","VVVVVVVooVVVVVVV"],"things":[{"key":"crypt_arch","at":[16,4],"box":[2.6,0.8],"door":{"to":"crypt_boss","at":[14,21.4],"face":[0,-1]}},{"key":"chest","at":[5,6.4],"chest":{"id":"crypt_well","item":"ink_potion","n":2,"flag":"skill_well","lines":["chest.well","chest.well2"]}},{"key":"sarcophagus","at":[25.5,5.8]},{"key":"crypt_wall","at":[16,10.6],"box":[4.2,0.8],"when":{"not":{"flag":"crypt_gate"}}},{"key":"lever","at":[5,15.4],"box":[0.3,0.3],"act":{"label":"act.pull","name":"act.lever","run":[{"call":"crypt_lever","args":{"i":1}}]}},{"key":"lever","at":[27,15.4],"box":[0.3,0.3],"act":{"label":"act.pull","name":"act.lever","run":[{"call":"crypt_lever","args":{"i":2}}]}},{"key":"lever","at":[22.4,18.6],"box":[0.3,0.3],"act":{"label":"act.pull","name":"act.lever","run":[{"call":"crypt_lever","args":{"i":0}}]}},{"key":"signpost","at":[9.6,18.4],"look":{"label":"act.read","name":"act.plaque","lines":["plaque.1","plaque.2"]}},{"key":"sarcophagus","at":[7,32]},{"key":"sarcophagus","at":[25,32]},{"key":"barrel","at":[3.4,42.4]},{"key":"crate","at":[28.6,42.6]}],"spawns":[{"type":"bookworm","at":[10,36]},{"type":"bookworm","at":[22,38]},{"type":"wax_golem","at":[16,16.4]},{"type":"wax_golem","at":[22,7.6],"when":{"not":{"flag":"boss_done"}}}],"lamps":[[3,3,3,2.6,1.3],[29,3,3,2.6,1.3],[3,3,13,2.4,1.2],[29,3,13,2.4,1.2],[3,3,28,2.4,1.2],[29,3,28,2.4,1.2],[3,3,40,2.4,1.2],[29,3,40,2.4,1.2]],"exits":[{"rect":[14,47.2,18,48],"to":"overworld","at":[45,25.2],"face":[0,1]}],"tips":[{"rect":[2,25.6,30,28.6],"text":{"choose":[[{"not":{"flag":"skill_dash"}},"tip.pool.nodash"],[{"touch":true},"tip.pool.touch"]],"else":"tip.pool"}},{"rect":[12,19,20,22],"text":{"choose":[[{"not":{"flag":"skill_dash"}},"tip.pool.nodash"],[{"touch":true},"tip.pool.touch"]],"else":"tip.pool"}}],"onEnter":[{"set":"levers","to":0}]}}},"chapter1/areas/library_in.json":{"schema":1,"areas":{"library_in":{"name":"area.library","cell":2,"tod":"interno","start":[13,13.4],"camNorth":1,"music":"library","legend":{"o":{"tile":"wood_planks"},"W":{"tile":"crypt_floor","h":48,"wall":"#6e5a48"},"V":{"tile":"crypt_floor","h":6,"wall":"#6e5a48"}},"map":["WWWWWWWWWWWW","WooooooooooW","WooooooooooW","WooooooooooW","WooooooooooW","WooooooooooW","WooooooooooW","VVVVVoooVVVV"],"things":[{"key":"reading_desk","at":[13,7.6],"desk":true},{"key":"statue","at":[5,4.6]},{"key":"chest","at":[19.6,5],"chest":{"id":"library","item":"milk","n":2}},{"key":"crate","at":[4.4,11.6]},{"key":"barrel","at":[19.8,11.4]},{"key":"bench","at":[13,4.4]}],"npcs":[{"id":"librarian","at":[17.5,8.4],"face":[0,1]}],"lamps":[[6,3,8,3,1.2],[18,3,8,3,1.2]],"exits":[{"rect":[10,15.2,16,16],"to":"overworld","at":[32,35.6],"face":[0,1]}]}}},"chapter1/areas/overworld.json":{"schema":1,"areas":{"overworld":{"name":"area.village","cell":2,"chunk":[16,12],"keep":true,"tod":"giorno","start":[44,49],"camNorth":1.5,"music":{"choose":[[{"x":[">",64]},"road"]],"else":"village"},"legend":{"g":{"tile":"grass"},"f":{"tile":"grass_flowers"},"c":{"tile":"cobblestone"},"p":{"tile":"dirt_path"},"a":{"tile":"farmland"},"w":{"tile":"water","water":true,"h":-3},"X":{"tile":"grass","h":56,"cliff":true},"Y":{"tile":"grass_flowers","h":56,"cliff":true}},"map":["XXYYYXXXXXYXXXXXXXYXXXXYXXXYXXXXYXYXYXXXXYXXYXYXXXXXXYXXXYXXXXXY","XXYXYXXXXXXXXXXXYYXXXXXXYXYXYXYXXXYYXYXXXXXXXXXXXXXXXXXXXYXXXYYX","XXXXYYXYXYXYXXXXXXXXXYXXXXXXYXXXXXXXXXXXXXXXXXXXXXXXYXXXXXXYXXYX","XXXXXXYXXYXXXXXYXXXXYXXYXXXXXYXXXXXXXXYXXYXYXXYXYXXXXXYXXXXXXXXY","XXXXXXXXXXXYYXXXYXYYXYYXXXXYXYXXXYXXXXXXXXXXXXYXXXYXXXXXXXXYXXXX","XXXXXXYXXYYXXXXYXXXYYXXYXYXYXXXXYXXYXYXXXYXYXXXXXXYXXXXXYXXXXYXX","XXXYXXXXXXXXXXXXXXXXYXXXXXXYYXXXYXXXXYYXYXXXYYYXXYXXXXXXXXXYXXXX","XXXXXXXXYYXXXXYXXYXXYXXXXXYXXXXXXXYYXYXXYYXXXXYXYYXXYXXXXXXXXXXX","XXXXXXXXXgggXYXXffggXXXXXYXXXXXXYXXXYXYXXXXXYXYXXXXXYXXXXXXXYXXX","YXXXXXXYXgggggggffggggggXXXXggfgggggggffggggggggXXXXYXXXXXYYXXXX","XXXXYYXYYgffgggggggccccccccgffgggggggggggggggggggggggfXXXXXYXYXX","XXYXXXXXXggfgggggggccccccccfffggggggaaaaaaaaaaagggggffXXXYYYXXXX","XXXYXYXXXggfggggffgccccccccgggggggggaaaaaaaaaaagggfgggXXYYXXXYXY","XXXXYXXXXggfggggffgccccccccfggggggggaaaaaaaaaaagggggggXXXXXXXXXX","YYXXXXYXXgffffgggggfgccgfgggggggggggaaaaaaaaaaagggggggXXXXXXYXXY","XXXXYXXXYggffgccccccccccccccccggggggaaaaaaaaaaagggggggXXXYXXXXXX","XXXYXXXXXYggggccccccccccccccccggggggaaaaaaaaaaagffgfgggYYYXXXXXX","XXYXXXYXXYggggccccccccccccccccfgggggaaaaaaaaaaagffffgggXXXXXXXXX","YXXXYXYXXXggggccccccccccccccccffggffggggggggggggggggfffXXXYXXXXX","XXXXYXXXXXggggccccccccccccccccgfggffggggggggggggggggffgXXXXYYXXX","XXXXXYXXYgppppccccccccccccccccpppppppppppppppppppppppppYYYXXXXXX","YXYXYXXXXgppppccccccccccccccccpppppppppppppppppppppppppXXXXYXYXY","YXXXXXXXYgggggccccccccccccccccggggggggggggggggffgggggggXYXXXYXXX","XXXXXXXYYgggggccccccccccccccccgggggggggggggggggggggggggXYXXXYXXX","XXXXXXXXggggggccccccccccccccccggggggggggfgggggggggffffgXXXXXXYXX","XXYXXXYXggggggccccccccccccccccggggggggggffgggggggggggfgXXXXXYYYX","XXXXXXYXggfgfgccccccccccccccccfgggfggggggggggggggggggggXXXYXYXYX","YXXYXXYXgggggfgggggggggfggggfgffggffgggggggggggggggggggXXXXYXXXX","XXYXYYXXXgggggggggggggggggggggffffggggffffggggfgggggfggXYXXXYXXY","XXYYYXXXXgggggffgggggggggggggggfffggggffffgggggfgggggfgXXYXXYXXY","YYXXYXXXYggggggggggggggggggggggwwwwwffgggggggggggggggggXXXXXXXXX","XXYYXXXXXggggggggggggggggggggwwwwwwwwwgggggggggggggggggXYYXXYYXX","XYXXXXXXggggggggggggggggggggfwwwwwwwwwgfggggffggggggfgggYYXXXXXX","XXXYYXXXggggggggggggggggggggfwwwwwwwwwffggggfgggggggfgffXXXXXXYX","XYXXYXXXggggggggggggffgggggggwwwwwwwwwggggggggggggggggffXXYXXXXX","XXXXXXYXgggggggggggggfgggggggwwwwwwwwwggggggggggggggggffYXXXXXYX","XXXXXXXXXggggggggggggggfffgggggwwwwwggggfffgggggggggggXXXXXYYXXX","XXXXXXXYYggggggggggggggfffggggggggggggggfffgggggggggggXXXXXXXXXX","XXXXXXXXYfggggggggggggggffgggggfgggfgggggggfggfgggggXXXXXXXXXXYX","XYXXXXXXXXXXggggYXXYggggXXXXXXXXggffggggggfgXXXXXXXYXYYXXYXXXXXX","XXXXXXXXXXXXYXYXYXXXYXYXXXXXXXXYXYXXXXYXXYXXXYYXXXXXXXYXXYYXXXXX","XXXXXXXYXXXXYXXXYXXYXXXXXXXXXXXXXXXXXXXYXXXXXXYXXXXXXYXYXYYXXXXX","XXXXXXXXYXXXXXYYXYYXXYXXXXXYXYXYXXXXXXXXXXXXXXYYXYXYYXXXXYYYYXYX","XXXXXXYXXXXXXXXXXXXXXYXXXXXXXYYXXYXYXXXXXXXYXYXXYXYXXYYYXXXXYXYX","YXXXYXXXXXXXXXYXXYXXYXXYXYXXXXXXXXXXXYYXYXXXXXXYXXXXYXXXXXXXXXYX","XYXXXXXXYXXXXXXXXXYYXXXXYXYXXXXXXXXXXXXXXXXXXXXXXXYXXXYXXYXXYXYX","XXXXXXXXXXYXXXYXXYXXXXXXXXXXXXXXXXXYYXXXXXXXXXYYXXXXXXXXXYYXXXXX","YYXXXYXXXYXXXYXYXXXYXXXYXXXXXXXXXXXYXXXXYXYYXXXXYXXXXXXYXYXXXXXX"],"things":[{"key":"library","at":[32,31.5],"door":{"to":"library_in","at":[13,13.4],"face":[0,-1]}},{"key":"bakery","at":[45,31.5],"door":{"to":"bakery_in","at":[11,11.4],"face":[0,-1]}},{"key":"shop","at":[56.5,31.5]},{"key":"house_a","at":[22,37]},{"key":"house_b","at":[20,50.5]},{"key":"church","at":[45,21],"door":{"to":"crypt_in","at":[16,45.4],"face":[0,-1],"need":"crypt_key"}},{"key":"chest","at":[101,30.6],"chest":{"id":"mill","item":"hinge"}},{"key":"fence","at":[97.3,48]},{"key":"fence","at":[102.5,48]},{"key":"fence","at":[99.9,48],"box":[1.3,0.25],"when":{"not":{"flag":"gate_open"}}},{"key":"fence","at":[97.3,56]},{"key":"fence","at":[99.9,56]},{"key":"fence","at":[102.5,56]},{"key":"fence","at":[96,49.3],"rot":1},{"key":"fence","at":[96,51.9],"rot":1},{"key":"fence","at":[96,54.5],"rot":1},{"key":"fence","at":[104,49.3],"rot":1},{"key":"fence","at":[104,51.9],"rot":1},{"key":"fence","at":[104,54.5],"rot":1},{"key":"lever","at":[92.6,46.6],"box":[0.3,0.3],"act":{"label":"act.pull","name":"act.lever","run":[{"call":"road_lever"}]}},{"key":"chest","at":[98.5,51],"chest":{"id":"garden_page","item":"page_2"}},{"key":"chest","at":[101.6,51],"chest":{"id":"garden_key","item":"crypt_key","lines":["chest.cryptkey"]}},{"key":"statue","at":[86,47.2],"act":{"label":"act.read","name":"who.statue","run":[{"call":"statue"}]}},{"key":"windmill","at":[101,25]},{"key":"vine_row","at":[78,26]},{"key":"vine_row","at":[88,26]},{"key":"vine_row","at":[78,31.5]},{"key":"vine_row","at":[88,31.5]},{"key":"well","at":[44,44]},{"key":"market_stall","at":[53,47]},{"key":"bench","at":[36,48.5]},{"key":"reading_desk","at":[35.5,36.6],"desk":true},{"key":"lamp_post","at":[38,39],"box":[0.2,0.2]},{"key":"lamp_post","at":[50,39],"box":[0.2,0.2]},{"key":"lamp_post","at":[38,51],"box":[0.2,0.2]},{"key":"lamp_post","at":[50,51],"box":[0.2,0.2]},{"key":"signpost","at":[62,38.6],"look":{"label":"act.read","name":"act.sign","lines":["sign.1"]}},{"key":"barrel","at":[59.4,37.6]},{"key":"crate","at":[60.8,38.2]},{"key":"fence","at":[72,36.6]},{"key":"fence","at":[74.6,36.6]},{"key":"fence","at":[77.2,36.6]},{"key":"fence","at":[92,36.6]},{"key":"fence","at":[94.6,36.6]},{"key":"cypress","at":[19,13],"box":[0,0]},{"key":"bush","at":[95,13],"box":[0,0]},{"key":"bush","at":[37,15],"box":[0,0]},{"key":"cypress","at":[67,15],"box":[0,0]},{"key":"cypress","at":[115,15],"box":[0,0]},{"key":"cypress","at":[31,17],"box":[0,0]},{"key":"cypress","at":[71,17],"box":[0,0]},{"key":"bush","at":[83,17],"box":[0,0]},{"key":"bush","at":[61,19]},{"key":"cypress","at":[113,19],"box":[0,0]},{"key":"cypress","at":[15,23],"box":[0,0]},{"key":"cypress","at":[21,23],"box":[0.6,0.5]},{"key":"oak","at":[33,23],"box":[0.6,0.5]},{"key":"cypress","at":[15,25],"box":[0,0]},{"key":"cypress","at":[67,25],"box":[0.6,0.5]},{"key":"oak","at":[65,27],"box":[0.6,0.5]},{"key":"cypress","at":[111,29],"box":[0,0]},{"key":"bush","at":[13,31],"box":[0,0]},{"key":"bush","at":[13,43],"box":[0,0]},{"key":"bush","at":[83,47]},{"key":"cypress","at":[85,47],"box":[0.6,0.5]},{"key":"cypress","at":[15,55],"box":[0,0]},{"key":"bush","at":[115,55],"box":[0,0]},{"key":"bush","at":[45,57]},{"key":"bush","at":[33,59]},{"key":"cypress","at":[87,59],"box":[0.6,0.5]},{"key":"cypress","at":[109,61],"box":[0.6,0.5]},{"key":"bush","at":[17,63],"box":[0,0]},{"key":"bush","at":[81,63]},{"key":"cypress","at":[15,65],"box":[0,0]},{"key":"oak","at":[41,65],"box":[0.6,0.5]},{"key":"bush","at":[93,65]},{"key":"cypress","at":[107,65],"box":[0.6,0.5]},{"key":"cypress","at":[35,67],"box":[0.6,0.5]},{"key":"cypress","at":[29,69],"box":[0.6,0.5]},{"key":"oak","at":[35,69],"box":[0.6,0.5]},{"key":"oak","at":[111,69],"box":[0.6,0.5]},{"key":"bush","at":[113,69],"box":[0,0]},{"key":"cypress","at":[115,69],"box":[0,0]},{"key":"oak","at":[21,71],"box":[0.6,0.5]},{"key":"cypress","at":[35,71],"box":[0.6,0.5]},{"key":"oak","at":[43,73],"box":[0.6,0.5]},{"key":"bush","at":[49,73]},{"key":"bush","at":[43,75]},{"key":"cypress","at":[81,75],"box":[0.6,0.5]},{"key":"bush","at":[85,75]},{"key":"cypress","at":[33,77],"box":[0.6,0.5]},{"key":"cypress","at":[73,77],"box":[0.6,0.5]},{"key":"bush","at":[113,77],"box":[0,0]},{"key":"bush","at":[89,79],"box":[0,0]},{"key":"cypress","at":[73,81],"box":[0,0]},{"key":"bush","at":[85,81],"box":[0,0]},{"key":"cypress","at":[89,81],"box":[0,0]},{"key":"bush","at":[99,81],"box":[0,0]},{"key":"cypress","at":[43,83],"box":[0,0]},{"key":"cypress","at":[47,83],"box":[0,0]},{"key":"cypress","at":[95,83],"box":[0,0]}],"npcs":[{"id":"shopkeeper","at":[53,49.6],"face":[0,1]},{"id":"child","at":[47.6,45.2],"face":[0,1]},{"id":"guard","at":[41.4,26.2],"face":[0,1]}],"spawns":[{"type":"blot","at":[70,42]},{"type":"blot","at":[80,43.6]},{"type":"blot","at":[100,36]},{"type":"inkfly","at":[88,41.5]},{"type":"inkfly","at":[93,44.5]},{"type":"inkfly","at":[97,31.5]},{"type":"blot","at":[76,38.4]}],"lamps":[[38,2.6,39],[50,2.6,39],[38,2.6,51],[50,2.6,51]],"onEnter":[{"if":{"all":[{"quest":"glasses","step":0},{"not":{"has":"glasses_case"}}]},"then":[{"drop":"glasses_case","at":[104,31.4]}]},{"if":{"quest":"main","step":1},"then":[{"spawn":"blot","at":[40,50.5]},{"spawn":"blot","at":[48,50.5]}]}]}}},"chapter1/enemies.json":{"schema":1,"enemies":{"blot":{"sheet":"enemies-1","row":"blot","hp":30,"atk":6,"def":0,"speed":2.4,"sight":7,"reach":2.2,"windup":0.5,"strike":0.38,"recover":0.8,"xp":4,"coins":[0,2],"r":0.5,"move":"hop","drops":[{"item":"milk","chance":0.12}]},"inkfly":{"sheet":"enemies-1","row":"inkfly","hp":24,"atk":7,"def":0,"speed":3.1,"sight":9,"reach":4.2,"windup":0.55,"strike":0.42,"recover":1,"xp":5,"coins":[1,2],"r":0.45,"move":"lunge","fly":0.8,"drops":[{"item":"ink_potion","chance":0.15}]},"bookworm":{"sheet":"enemies-2","row":"bookworm","hp":38,"atk":9,"def":2,"speed":2,"sight":9,"reach":5.5,"windup":0.65,"strike":0.6,"recover":1.2,"xp":9,"coins":[1,3],"r":0.6,"move":"lunge","drops":[{"item":"bread","chance":0.2}]},"wax_golem":{"sheet":"enemies-2","row":"wax_golem","hp":60,"atk":12,"def":3,"speed":1.5,"sight":7,"reach":1.9,"windup":0.75,"strike":0.5,"recover":1.3,"xp":15,"coins":[2,5],"r":0.7,"move":"smash","shield":true,"drops":[{"item":"fish","chance":0.3}]},"blot_scribe":{"sheet":"boss","row":"blot_scribe","hp":900,"atk":13,"def":3,"speed":1.6,"sight":30,"reach":3.4,"xp":60,"coins":[8,12],"r":1.1,"poise":true,"size":1,"boss":"who.scribe","anims":{"idle":["idle1","idle2"],"walk":["idle1","idle2"],"windup":["sweep_windup"],"attack":["sweep"],"cast":["blot_scribe_b.rain_cast"],"split":["blot_scribe_b.split"],"hurt":["blot_scribe_b.hurt"],"defeat":["blot_scribe_b.defeat"]},"behaviour":"blot_scribe"}}},"chapter1/game.json":{"schema":1,"game":{"start":{"area":"library_in"},"hero":{"sheet":"cat","views":{"down":"cat_down","up":"cat_up","side":"cat_side"},"anims":{"idle":["idle"],"walk":["walk1","walk2","walk3","walk4","walk5"],"attack1":["attack1"],"attack2":["attack2"],"attack3":["attack3"],"hurt":{"down":["cat_extra.hurt_down"],"up":["cat_extra.hurt_up"],"side":["cat_extra.hurt_side"]},"dodge":{"down":["cat_extra.dodge_down"],"up":["cat_extra.dodge_up"],"side":["cat_extra.dodge_side"]}},"equip":{"weapon":"quill_sword","armour":null,"charm":null}},"levels":{"xp":[0,0,20,50,95,160],"base":{"hp":[24,6],"ink":[30,0],"atk":[5,2],"def":[1,1]}},"sheets":{"portraits":"portraits-1","items":"items-1","people":"villagers"},"titleArt":["title","title"],"map":{"area":"overworld","marks":["library","bakery","shop","house_a","house_b","church","windmill"]},"intro":"intro","onPlay":"mend","chapter":{"title":"title.chapter","blurb":"chapter1.blurb","minutes":17,"order":1,"save":"mdv-rpg-cat-save","styles":["lowpoly","diorama"],"card":["title","title"],"doneFlag":"chapter_done"}}},"chapter1/items.json":{"schema":1,"items":{"quill_sword":{"slot":"weapon","atk":0,"price":0},"steel_quill":{"slot":"weapon","atk":3,"price":60},"gold_quill":{"slot":"weapon","atk":6,"price":0},"scarf":{"slot":"armour","def":1,"hp":4,"price":30},"vest":{"slot":"armour","def":2,"price":55},"cloak":{"slot":"armour","def":3,"hp":6,"price":0},"bell_charm":{"slot":"charm","ink":10,"price":40},"clover_charm":{"slot":"charm","hp":8,"price":0},"owl_charm":{"slot":"charm","atk":2,"def":1,"price":0},"milk":{"use":{"hp":10},"price":6},"fish":{"use":{"hp":22},"price":14},"bread":{"use":{"hp":15},"price":9},"ink_potion":{"use":{"ink":20},"price":12},"page_1":{"key":true},"page_2":{"key":true},"page_3":{"key":true},"bronze_key":{"key":true},"crypt_key":{"key":true},"glasses_case":{"key":true},"letter":{"key":true},"flour_sack":{"key":true},"hinge":{"key":true}}},"chapter1/music.json":{"schema":1,"music":{"village":{"bpm":100,"voices":{"p1":["e5 - - - g5 - c6 - b5 - a5 - g5 - - -","a5 - - - c6 - e6 - d6 - c6 - a5 - - -","f5 - - - a5 - c6 - a5 - g5 - f5 - - -","g5 - - - b5 - d6 - b5 - a5 - g5 - - .","e5 - g5 - e5 - d5 - c5 - - - d5 - e5 -","a4 - c5 - e5 - c5 - a4 - - - . . . .","f4 - a4 - c5 - f5 - e5 - d5 - c5 - a4 -","g4 - b4 - d5 - g5 - - - . . . . . ."],"p2":["c4 . e4 . g4 . e4 . c4 . e4 . g4 . e4 .","a3 . c4 . e4 . c4 . a3 . c4 . e4 . c4 .","f3 . a3 . c4 . a3 . f3 . a3 . c4 . a3 .","g3 . b3 . d4 . b3 . g3 . b3 . d4 . b3 ."],"tri":["c3 - - - . . c3 . g2 - - - . . g2 .","a2 - - - . . a2 . e2 - - - . . e2 .","f2 - - - . . f2 . c3 - - - . . c3 .","g2 - - - . . g2 . d3 - - - b2 - - -"]}},"road":{"bpm":116,"voices":{"p1":["d5 - g5 - b5 - a5 g5 f#5 - g5 - a5 - - -","e5 - g5 - c6 - b5 a5 g5 - e5 - g5 - - -","b4 - e5 - g5 - f#5 e5 d5 - e5 - g5 - - -","a4 - d5 - f#5 - e5 d5 e5 - f#5 - a5 - - -"],"p2":[". g4 . b4 . g4 . b4 . g4 . b4 . g4 . b4",". e4 . g4 . e4 . g4 . e4 . g4 . e4 . g4",". e4 . g4 . e4 . g4 . e4 . g4 . e4 . g4",". f#4 . a4 . f#4 . a4 . f#4 . a4 . f#4 . a4"],"tri":["g2 . g2 . d3 . g2 . g2 . d3 . g2 . b2 .","c3 . c3 . g2 . c3 . c3 . g2 . c3 . e3 .","e2 . e2 . b2 . e2 . e2 . b2 . e2 . g2 .","d2 . d2 . a2 . d2 . d2 . a2 . d3 . c3 ."],"drums":["k . h . s . h . k . h . s . h h"]}},"library":{"bpm":84,"voices":{"p3":["e5 - - - g5 - c6 - b5 - a5 - g5 - - -","a5 - - - c6 - e6 - d6 - c6 - a5 - - -","f5 - - - a5 - c6 - a5 - g5 - f5 - - -","g5 - - - b5 - d6 - b5 - a5 - g5 - - ."],"tri":["c3 - - - - - - - g2 - - - - - - -","a2 - - - - - - - e2 - - - - - - -","f2 - - - - - - - c3 - - - - - - -","g2 - - - - - - - d3 - - - - - - -"]}},"crypt":{"bpm":80,"voices":{"p3":["a4 - - - - - c5 - b4 - - - g#4 - - -","a4 - - - e5 - - - d5 - c5 - b4 - - -","f4 - - - - - a4 - g4 - - - e4 - - -","e4 - - - g#4 - - - b4 - - - - - - -"],"p2":["a3 . c4 . e4 . . . a3 . c4 . e4 . . .","a3 . c4 . e4 . . . a3 . c4 . e4 . . .","f3 . a3 . c4 . . . f3 . a3 . c4 . . .","e3 . g#3 . b3 . . . e3 . g#3 . b3 . . ."],"tri":["a2 - - - - - - - - - - - - - - -","a2 - - - - - - - - - - - - - - -","f2 - - - - - - - - - - - - - - -","e2 - - - - - - - - - - - - - - -"]}},"battle":{"bpm":150,"voices":{"p1":["e5 . e5 g5 . e5 b5 . a5 g5 . f#5 e5 . d5 .","e5 . e5 g5 . e5 b5 . c6 b5 . a5 g5 . a5 .","c5 . c5 e5 . c5 g5 . f#5 e5 . d5 c5 . b4 .","b4 . b4 d#5 . f#5 b5 . a5 . g5 . f#5 . d#5 ."],"p2":["e4 b4 e4 b4 e4 b4 e4 b4 e4 b4 e4 b4 e4 b4 e4 b4","e4 b4 e4 b4 e4 b4 e4 b4 e4 b4 e4 b4 e4 b4 e4 b4","c4 g4 c4 g4 c4 g4 c4 g4 c4 g4 c4 g4 c4 g4 c4 g4","b3 f#4 b3 f#4 b3 f#4 b3 f#4 b3 f#4 b3 f#4 b3 f#4 b3 f#4"],"tri":["e2 . e3 . e2 . e3 . e2 . e3 . e2 . e3 .","e2 . e3 . e2 . e3 . e2 . e3 . e2 . e3 .","c2 . c3 . c2 . c3 . c2 . c3 . c2 . c3 .","b1 . b2 . b1 . b2 . b1 . b2 . b1 . b2 ."],"drums":["k . h . s . h k k . h . s . s h"]}},"boss":{"bpm":144,"voices":{"p1":["d5 d5 . d5 f5 . e5 d5 c5 . a4 . c5 d5 . .","d5 d5 . d5 f5 . g5 f5 e5 . c5 . e5 f5 . .","a#4 a#4 . a#4 d5 . c5 a#4 a4 . f4 . a4 a#4 . .","a4 a4 . a4 c#5 . e5 c#5 a4 . e5 . c#5 a4 . ."],"p2":["d4 . a4 . d4 . a4 . d4 . a4 . d4 . a4 .","c4 . g4 . c4 . g4 . c4 . g4 . c4 . g4 .","a#3 . f4 . a#3 . f4 . a#3 . f4 . a#3 . f4 .","a3 . e4 . a3 . e4 . a3 . c#4 . e4 . a4 ."],"tri":["d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3 d2 d3","c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3 c2 c3","a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2 a#1 a#2","a1 a2 a1 a2 a1 a2 a1 a2 a1 a2 a1 a2 c#2 c#3 e2 e3"],"drums":["k . h . s . h k k . h . s . s h"]}}}},"chapter1/people.json":{"schema":1,"speakers":{"cat":{"name":"who.cat","pic":"cat_neutral"},"cat_happy":{"name":"who.cat","pic":"cat_happy"},"cat_worried":{"name":"who.cat","pic":"cat_worried"},"librarian":{"name":"who.librarian","pic":"librarian"},"baker":{"name":"who.baker","pic":"baker"},"shopkeeper":{"name":"who.shopkeeper","pic":"shopkeeper"},"child":{"name":"who.child","pic":"child"},"guard":{"name":"who.guard","pic":"guard"},"scribe":{"name":"who.scribe","pic":"blot_scribe"}},"npcs":{"librarian":{"row":"librarian","name":"who.librarian","pic":"librarian","voice":260,"pages":[{"if":{"quest":"main","step":["<=",0]},"lines":[["librarian","l.intro1"],["cat_worried","l.intro2"],["librarian","l.intro3"],["librarian","l.intro4"],["cat","l.intro5"]]},{"if":{"quest":"main","step":1},"lines":[["librarian","l.blots"]]},{"if":{"quest":"main","step":2},"lines":[["librarian","l.pieces",{"n":{"count":["page_1","page_2","page_3"]}}],["librarian",{"choose":[[{"not":{"has":"page_1"}},"l.hint1"],[{"not":{"has":"page_2"}},"l.hint2"]],"else":"l.hint3"}]]},{"if":{"quest":"main","step":3},"lines":[["librarian","l.end1"],["cat_happy","l.end2"],["librarian","l.end3"],["librarian","l.end4"]],"then":[{"flag":"chapter_done"},{"save":true},{"sfx":"quest"},{"music":"village"},{"end":true}]},{"lines":[["librarian","l.after"]]}]},"baker":{"row":"baker","name":"who.baker","pic":"baker","voice":300,"pages":[{"if":{"quest":"flap","step":["<",0]},"lines":[["baker","b.hello1"],["baker","b.hello2"],["cat","b.hello3"]],"then":[{"quest":"flap"}]},{"if":{"quest":"flap","step":0},"lines":[["baker","b.wait"]],"shop":["bread","milk"]},{"if":{"quest":"flap","step":1},"lines":[["baker","b.thanks1"],["baker","b.thanks2"],["cat_happy","b.thanks3"]]},{"lines":[["baker","b.after"]],"shop":["bread","milk"]}]},"shopkeeper":{"row":"shopkeeper","name":"who.shopkeeper","pic":"shopkeeper","voice":220,"pages":[{"lines":[["shopkeeper",{"choose":[[{"flag":"met_shop"},"s.again"]],"else":"s.hello"}]],"then":[{"flag":"met_shop"}],"shop":["milk","fish","ink_potion","scarf","vest","steel_quill","bell_charm"]}]},"guard":{"row":"guard","name":"who.guard","pic":"guard","voice":200,"pages":[{"if":{"quest":"glasses","step":["<",0]},"lines":[["guard","g.hello1"],["guard","g.hello2"]],"then":[{"quest":"glasses"}]},{"if":{"quest":"glasses","step":0},"lines":[["guard","g.wait"]]},{"if":{"quest":"glasses","step":1},"lines":[["guard","g.thanks1"],["guard","g.thanks2"]]},{"lines":[["guard",{"choose":[[{"any":[{"has":"crypt_key"},{"flag":"boss_done"}]},"g.crypt2"]],"else":"g.crypt"}]]}]},"child":{"row":"child","name":"who.child","pic":"child","voice":420,"pages":[{"lines":[["child",{"choose":[[{"quest":"main","step":["<=",1]},"c.1"],[{"not":{"flag":"skill_dash"}},"c.2"],[{"not":{"flag":"skill_well"}},"c.3"]],"else":"c.4"}]]}]}}},"chapter1/story.json":{"schema":1,"quests":{"main":{"name":"q.main","main":true,"steps":[{"text":"q.main.0","on":{"talk":"librarian"}},{"text":"q.main.1","on":{"defeat":"blot","n":2}},{"text":"q.main.2","on":{"check":{"all":[{"has":"page_1"},{"has":"page_2"},{"has":"page_3"}]}}},{"text":"q.main.3","on":{"talk":"librarian"}}],"reward":{"xp":30}},"flap":{"name":"q.flap","steps":[{"text":"q.flap.0","on":{"collect":"hinge"}},{"text":"q.flap.1","on":{"talk":"baker"},"then":[{"take":"hinge"}]}],"reward":{"item":"page_1","coins":15,"xp":12}},"glasses":{"name":"q.glasses","steps":[{"text":"q.glasses.0","on":{"collect":"glasses_case"}},{"text":"q.glasses.1","on":{"talk":"guard"},"then":[{"take":"glasses_case"}]}],"reward":{"item":"clover_charm","xp":10}}},"events":{"intro":[{"say":[["cat_worried","i.1"],["cat","i.2"]],"name":"who.cat"},{"quest":"main"}],"mend":[{"if":{"all":[{"flag":"intro"},{"quest":"main","step":["<",0]}]},"then":[{"unflag":"intro"}]}],"statue":[{"if":{"flag":"skill_dash"},"then":[{"say":["st.done"],"name":"who.statue"}],"else":[{"say":["st.1","st.2"],"name":"who.statue","choices":[["st.a1",[{"sfx":"no"},{"say":["st.wrong"],"name":"who.statue"}]],["st.a2",[{"flag":"skill_dash"},{"sfx":"level"},{"toast":"toast.skill","vars":{"s":{"t":"skill.dash"}}},{"say":["st.right",{"choose":[[{"touch":true},"st.how.touch"]],"else":"st.how"}],"name":"who.statue"}]],["st.a3",[{"sfx":"no"},{"say":["st.wrong"],"name":"who.statue"}]]]}]}],"road_lever":[{"if":{"flag":"gate_open"},"then":[{"say":["lever.done"],"name":"act.lever"}],"else":[{"sfx":"door"},{"flag":"gate_open"},{"toast":"toast.gate"},{"reopen":true}]}],"crypt_lever":[{"if":{"flag":"crypt_gate"},"then":[{"say":["lever.done"],"name":"act.lever"}],"else":[{"if":{"var":"levers","is":[">",{"arg":"i"}]},"then":[{"sfx":"no"}],"else":[{"if":{"var":"levers","is":["<",{"arg":"i"}]},"then":[{"set":"levers","to":0},{"sfx":"no"},{"toast":"toast.levers.wrong"},{"shake":0.2},{"if":{"enemies":["<",3]},"then":[{"spawn":"bookworm","at":[12,14],"aware":true}]}],"else":[{"add":"levers","n":1},{"sfx":"door"},{"toast":"toast.levers","vars":{"n":{"var":"levers"}}},{"if":{"var":"levers","is":["==",3]},"then":[{"flag":"crypt_gate"},{"set":"levers","to":0},{"reopen":true}]}]}]}]}]}},"chapter2/areas/archive.json":{"schema":1,"areas":{"archive":{"name":"area.archive","tod":"nave","start":[18,19.4],"camNorth":1,"music":"stacks","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"f":{"tile":"parquet_old"}},"map":["WWWWWWWWWWWWWWWWWW","WffffffffffffffffW","WffffffffffffffffW","WffffffffffffffffW","WffffffffffffffffW","WffffffffffffffffW","WffffffffffffffffW","WffffffffffffffffW","WffffffffffffffffW","WffffffffffffffffW","VVVVVVVVffVVVVVVVV"],"things":[{"key":"archive_shelf","at":[5,2.8],"act":{"label":"act.pull","name":"act.atlas_deneb","run":[{"call":"atlas","args":{"i":2}}]}},{"key":"archive_shelf","at":[11,2.8],"act":{"label":"act.pull","name":"act.atlas_polaris","run":[{"call":"atlas","args":{"i":3}}]}},{"key":"archive_shelf","at":[25,2.8],"act":{"label":"act.pull","name":"act.atlas_vega","run":[{"call":"atlas","args":{"i":0}}]}},{"key":"archive_shelf","at":[31,2.8],"act":{"label":"act.pull","name":"act.atlas_altair","run":[{"call":"atlas","args":{"i":1}}]}},{"key":"codex_case","at":[18,3.4],"chest":{"id":"ar_codex","item":"archivist_lens","name":"act.codex","lines":["ark.ar.codex1","ark.ar.codex2"]}},{"key":"archive_shelf","at":[6,9]},{"key":"archive_shelf","at":[12,9]},{"key":"archive_shelf","at":[24,9]},{"key":"archive_shelf","at":[30,9]},{"key":"archive_shelf","at":[6,14]},{"key":"archive_shelf","at":[12,14]},{"key":"archive_shelf","at":[24,14]},{"key":"archive_shelf","at":[30,14]},{"key":"ink_writing","at":[9,11.6],"box":[0,0],"scan":"ar_books","look":{"label":"act.read","name":"act.writing","lines":["ark.ar.books1","ark.ar.books2"]}},{"key":"supply_crate","at":[33.4,17.6],"scan":"ar_crate","chest":{"id":"ar_shard","item":"dark_shard","name":"act.crate","lines":["ark.ar.shard"]}},{"key":"chart_table","at":[27,18.4],"act":{"label":"act.read","name":"diary.varga","run":[{"flag":"diary_varga_2"},{"say":["ark.d.varga2.1","ark.d.varga2.2"],"name":"diary.varga","pic":"navigator"}]}},{"key":"reading_desk","at":[8,18.4],"desk":true}],"lamps":[[9,3,5,3],[27,3,5,3],[18,3,12,3],[18,3,18,2.6]],"exits":[{"rect":[16,21.2,20,22],"to":"spine","at":[42,4.4],"face":[0,1]}],"onEnter":[{"set":"atlas","to":0},{"if":{"all":[{"flag":"ar_done"},{"not":{"flag":"archive_clear"}}]},"then":[{"wait":0.8},{"set":"archive_clear","to":0},{"spawn":"shadow","at":[8,6],"onDefeat":[{"add":"archive_clear","n":1},{"if":{"var":"archive_clear","is":["==",2]},"then":[{"flag":"archive_clear"},{"toast":"ark.enc.archive"}]}],"hunt":true},{"spawn":"shadow","at":[28,6],"onDefeat":[{"add":"archive_clear","n":1},{"if":{"var":"archive_clear","is":["==",2]},"then":[{"flag":"archive_clear"},{"toast":"ark.enc.archive"}]}],"hunt":true}]},{"if":{"all":[{"flag":"ar_done"},{"not":{"flag":"map_whole"}},{"not":{"has":"map_piece_2"}}]},"then":[{"drop":"map_piece_2","at":[18,6.2]}]}]}}},"chapter2/areas/bridge.json":{"schema":1,"areas":{"bridge":{"name":"area.bridge","tod":"emergenza","start":[32,7.2],"camNorth":1,"music":{"choose":[[{"all":[{"flag":"map_whole"},{"not":{"flag":"boss_done"}}]},"boss"]],"else":"stars"},"strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"b":{"tile":"deck_ink"},"d":{"tile":"carpet"}},"map":["WWWWWWWWWWWWWWWWWW","WbbbbbbbbbbbbbbbbW","WbbbbbbbbbbbbbbbbW","WbbbbbbddddbbbbbbW","WbbbbbbddddbbbbbbW","WbbbbbbddddbbbbbbW","WbbbbbbddddbbbbbbW","WbbbbbbbbbbbbbbbbW","WbbbbbbbbbbbbbbbbW","VVVVVVVVVVVVVVVVVV"],"things":[{"key":"lift","at":[32,4.4],"act":{"label":"act.use","name":"act.lift","run":[{"call":"lift"}]}},{"key":"star_map_torn","at":[18,2.1],"when":{"not":{"flag":"map_whole"}},"act":{"label":"act.use","name":"act.starmap","run":[{"call":"restore"}]}},{"key":"star_map_whole","at":[18,2.1],"when":{"flag":"map_whole"},"look":{"label":"act.look","name":"act.starmap","lines":["ark.br.whole_look"]}},{"key":"console","at":[10,6.4],"act":{"label":"act.talk","name":"who.vesper","run":[{"call":"vesper_claim"}]}},{"key":"console","at":[26,6.4],"act":{"label":"act.read","name":"diary.vesper","run":[{"flag":"diary_vesper_2"},{"say":["ark.vlog2.1","ark.vlog2.2","ark.vlog2.3"],"name":"diary.vesper","pic":"vesper_glitch"}]}},{"key":"chair","at":[14,7.8],"rot":2,"look":{"label":"act.look","name":"act.helm","lines":["ark.br.helm"]}},{"key":"chart_table","at":[7,14.4]},{"key":"door_frame","at":[4,2.3],"when":{"flag":"boss_done"},"door":{"to":"observatory","at":[14,13.4],"face":[0,-1]}},{"key":"ink_stain","at":[11,2.1],"act":{"label":"act.read","name":"act.stain","run":[{"say":["ark.stain.br"],"name":"act.stain"},{"if":{"has":"archivist_lens"},"then":[{"flag":"lens_stain"},{"say":["ark.lens.stain"],"name":"item.archivist_lens"}]}]}},{"key":"ink_stain","at":[25,2.1]},{"key":"ink_steps","at":[6,5.6],"box":[0,0],"look":{"label":"act.read","name":"act.steps","lines":["ark.br.steps"]}}],"lamps":[[10,3,7,3],[26,3,7,3],[18,3,12,3]],"onEnter":[{"if":{"all":[{"flag":"map_whole"},{"not":{"flag":"boss_done"}}]},"then":[{"wait":0.6},{"call":"boss"}]}]}}},"chapter2/areas/captain_cabin.json":{"schema":1,"areas":{"captain_cabin":{"name":"area.captain_cabin","tod":"nave","start":[10,11.4],"camNorth":1,"music":"ark","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"w":{"tile":"deck_plates","h":52,"wall":"#d8dcd6"},"V":{"tile":"deck_plates","h":6,"wall":"#d8dcd6"},"d":{"tile":"carpet"}},"map":["wwwwwwwwww","wddddddddw","wddddddddw","wddddddddw","wddddddddw","wddddddddw","VVVVddVVVV"],"things":[{"key":"bunk","at":[4.4,3]},{"key":"wall_screen","at":[10,2.1],"act":{"label":"act.read","name":"diary.hale","run":[{"flag":"diary_hale_2"},{"say":["ark.d.hale2.1","ark.d.hale2.2","ark.d.hale2.3"],"name":"diary.hale","pic":"captain"}]}},{"key":"crew_locker","at":[16.6,2.9],"chest":{"id":"cab_suit","item":"eva_suit","name":"act.locker","lines":["ark.cab.suit"]}},{"key":"chart_table","at":[14,7.4],"act":{"label":"act.read","name":"diary.hale","run":[{"flag":"diary_hale_1"},{"say":["ark.d.hale1.1","ark.d.hale1.2"],"name":"diary.hale","pic":"captain"}]}},{"key":"safe","at":[3.4,8.6],"act":{"label":"act.use","name":"act.safe","run":[{"if":{"flag":"cab_safe"},"then":[{"say":["ark.cab.safe_empty"],"name":"act.safe"}],"else":[{"keypad":"4071","name":"act.keypad","then":[{"flag":"cab_safe"},{"sfx":"chest"},{"toast":"ark.toast.safe"},{"drop":"badge_captain","at":[3,10.6]},{"drop":"map_piece_4","at":[5,10.6]}],"else":[{"sfx":"no"}]}]}]}},{"key":"ink_writing","at":[7.6,10.2],"box":[0,0],"scan":"cab_code","look":{"label":"act.read","name":"act.writing","lines":["ark.cab.code"]}},{"key":"photo_frame","at":[4.4,2.1],"look":{"label":"act.look","name":"act.photo","lines":["ark.cab.photo"]}}],"lamps":[[6,3,5,2.6],[14,3,8,2.6]],"exits":[{"rect":[8,13.2,12,14],"to":"quarters","at":[46,7.4],"face":[0,1]}],"onEnter":[{"if":{"all":[{"flag":"cab_safe"},{"not":{"has":"badge_captain"}}]},"then":[{"drop":"badge_captain","at":[3,10.6]}]},{"if":{"all":[{"flag":"cab_safe"},{"not":{"flag":"map_whole"}},{"not":{"has":"map_piece_4"}}]},"then":[{"drop":"map_piece_4","at":[5,10.6]}]}]}}},"chapter2/areas/cryo_bay.json":{"schema":1,"areas":{"cryo_bay":{"name":"area.cryo_bay","tod":"nave","flicker":true,"start":[16,5.2],"camNorth":1,"music":"ark","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"a":{"tile":"deck_plates"},"h":{"tile":"hazard"}},"map":["WWWWWWWWWWWWWW","WaaaaaaaaaaaaW","WaaaaaaaaaaaaW","WaaaaaaaaaaaaW","WaaaaaaaaaaaaW","WaaaaaaaaaaaaW","WhhhhhhhhhhhhW","WaaaaaaaaaaaaW","VVVVVVaaVVVVVV"],"things":[{"key":"cryo_pod","at":[4,2.9],"act":{"label":"act.read","name":"act.pod","run":[{"say":["ark.pod.hale"],"name":"act.pod"},{"if":{"has":"archivist_lens"},"then":[{"flag":"lens_pod"},{"say":["ark.lens.pod"],"name":"item.archivist_lens"}]}]}},{"key":"cryo_pod","at":[8,2.9],"look":{"label":"act.read","name":"act.pod","lines":["ark.pod.varga"]}},{"key":"cryo_pod","at":[12,2.9],"look":{"label":"act.read","name":"act.pod","lines":["ark.pod.okafor"]}},{"key":"cryo_pod_open","at":[16,2.9],"look":{"label":"act.read","name":"act.pod","lines":["ark.pod.cat"]}},{"key":"cryo_pod","at":[20,2.9],"look":{"label":"act.read","name":"act.pod","lines":["ark.pod.lind"]}},{"key":"cryo_pod","at":[24,2.9],"look":{"label":"act.read","name":"act.pod","lines":["ark.pod.sato"]}},{"key":"crew_locker","at":[5,9.4],"chest":{"id":"cryo_quill","item":"quill_sword","name":"act.locker","lines":["ark.cryo.locker1"]}},{"key":"crew_locker","at":[7,9.4],"chest":{"id":"cryo_suit","item":"ship_suit","name":"act.locker","lines":["ark.cryo.locker2"]}},{"key":"reading_desk","at":[23,9.6],"desk":true},{"key":"coolant_tank","at":[26.2,13.6]},{"key":"cable_coil","at":[20,13],"box":[0,0]},{"key":"floor_vent","at":[9,15.4],"box":[0,0]}],"lamps":[[8,3,6,3],[20,3,6,3],[14,3,13,3]],"exits":[{"rect":[12,17.2,16,18],"to":"spine","at":[8,11.6],"face":[0,-1]}]}}},"chapter2/areas/engine_room.json":{"schema":1,"areas":{"engine_room":{"name":"area.engine_room","tod":"emergenza","flicker":true,"start":[32,7.2],"camNorth":1,"music":"engine","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"c":{"tile":"grating"},"h":{"tile":"hazard"},"a":{"tile":"deck_plates"}},"map":["WWWWWWWWWWWWWWWWWW","WccccccccccccaaaaW","WccccccccccccaaaaW","WccccccccccccaaaaW","WhhhhhhhhhhhhaaaaW","WaaaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaaaW","VVVVVVVVVVVVVVVVVV"],"things":[{"key":"lift","at":[32,4.4],"act":{"label":"act.use","name":"act.lift","run":[{"call":"lift"}]}},{"key":"generator","at":[6,4.2],"look":{"label":"act.look","name":"act.generator","lines":["ark.en.gen"]}},{"key":"generator","at":[14,4.2]},{"key":"pipes","at":[22.6,2.1]},{"key":"wall_screen","at":[19,2.1],"act":{"label":"act.read","name":"diary.okafor","run":[{"flag":"diary_okafor_2"},{"say":["ark.d.okafor2.1","ark.d.okafor2.2","ark.d.okafor2.3"],"name":"diary.okafor","pic":"engineer"}]}},{"key":"coolant_tank","at":[3.4,12.6]},{"key":"coolant_tank","at":[6,12.6]},{"key":"power_switch","at":[11,12.4],"act":{"label":"act.use","name":"act.breaker_a","run":[{"if":{"flag":"power_on"},"then":[{"say":["ark.en.done"],"name":"act.breaker_a"}],"else":[{"if":{"flag":"sw_a"},"then":[{"unflag":"sw_a"},{"add":"load","n":-3}],"else":[{"flag":"sw_a"},{"add":"load","n":3}]},{"sfx":"move"},{"if":{"var":"load","is":[">",9]},"then":[{"unflag":"sw_a"},{"unflag":"sw_b"},{"unflag":"sw_c"},{"unflag":"sw_d"},{"set":"load","to":0},{"sfx":"no"},{"shake":0.3},{"toast":"ark.en.trip"}],"else":[{"if":{"all":[{"flag":"sw_d"},{"var":"load","is":["==",9]}]},"then":[{"flag":"power_on"},{"sfx":"quest"},{"toast":"ark.en.power"},{"reopen":true},{"wait":0.8},{"say":[["vesper","ark.en.vesper1"],["vesper_glitch","ark.en.vesper2"]]}],"else":[{"toast":"ark.en.load","vars":{"n":{"var":"load"}}}]}]}]}]}},{"key":"power_switch","at":[15,12.4],"act":{"label":"act.use","name":"act.breaker_b","run":[{"if":{"flag":"power_on"},"then":[{"say":["ark.en.done"],"name":"act.breaker_b"}],"else":[{"if":{"flag":"sw_b"},"then":[{"unflag":"sw_b"},{"add":"load","n":-4}],"else":[{"flag":"sw_b"},{"add":"load","n":4}]},{"sfx":"move"},{"if":{"var":"load","is":[">",9]},"then":[{"unflag":"sw_a"},{"unflag":"sw_b"},{"unflag":"sw_c"},{"unflag":"sw_d"},{"set":"load","to":0},{"sfx":"no"},{"shake":0.3},{"toast":"ark.en.trip"}],"else":[{"if":{"all":[{"flag":"sw_d"},{"var":"load","is":["==",9]}]},"then":[{"flag":"power_on"},{"sfx":"quest"},{"toast":"ark.en.power"},{"reopen":true},{"wait":0.8},{"say":[["vesper","ark.en.vesper1"],["vesper_glitch","ark.en.vesper2"]]}],"else":[{"toast":"ark.en.load","vars":{"n":{"var":"load"}}}]}]}]}]}},{"key":"power_switch","at":[19,12.4],"act":{"label":"act.use","name":"act.breaker_c","run":[{"if":{"flag":"power_on"},"then":[{"say":["ark.en.done"],"name":"act.breaker_c"}],"else":[{"if":{"flag":"sw_c"},"then":[{"unflag":"sw_c"},{"add":"load","n":-2}],"else":[{"flag":"sw_c"},{"add":"load","n":2}]},{"sfx":"move"},{"if":{"var":"load","is":[">",9]},"then":[{"unflag":"sw_a"},{"unflag":"sw_b"},{"unflag":"sw_c"},{"unflag":"sw_d"},{"set":"load","to":0},{"sfx":"no"},{"shake":0.3},{"toast":"ark.en.trip"}],"else":[{"if":{"all":[{"flag":"sw_d"},{"var":"load","is":["==",9]}]},"then":[{"flag":"power_on"},{"sfx":"quest"},{"toast":"ark.en.power"},{"reopen":true},{"wait":0.8},{"say":[["vesper","ark.en.vesper1"],["vesper_glitch","ark.en.vesper2"]]}],"else":[{"toast":"ark.en.load","vars":{"n":{"var":"load"}}}]}]}]}]}},{"key":"power_switch","at":[23,12.4],"act":{"label":"act.use","name":"act.breaker_d","run":[{"if":{"flag":"power_on"},"then":[{"say":["ark.en.done"],"name":"act.breaker_d"}],"else":[{"if":{"flag":"sw_d"},"then":[{"unflag":"sw_d"},{"add":"load","n":-5}],"else":[{"flag":"sw_d"},{"add":"load","n":5}]},{"sfx":"move"},{"if":{"var":"load","is":[">",9]},"then":[{"unflag":"sw_a"},{"unflag":"sw_b"},{"unflag":"sw_c"},{"unflag":"sw_d"},{"set":"load","to":0},{"sfx":"no"},{"shake":0.3},{"toast":"ark.en.trip"}],"else":[{"if":{"all":[{"flag":"sw_d"},{"var":"load","is":["==",9]}]},"then":[{"flag":"power_on"},{"sfx":"quest"},{"toast":"ark.en.power"},{"reopen":true},{"wait":0.8},{"say":[["vesper","ark.en.vesper1"],["vesper_glitch","ark.en.vesper2"]]}],"else":[{"toast":"ark.en.load","vars":{"n":{"var":"load"}}}]}]}]}]}},{"key":"ink_writing","at":[23,14.6],"box":[0,0],"scan":"en_hand","look":{"label":"act.read","name":"act.writing","lines":["ark.en.hand"]}},{"key":"crew_locker","at":[28.6,12.2],"when":{"flag":"power_on"},"chest":{"id":"en_piece","item":"map_piece_3","name":"act.locker","lines":["ark.en.piece"]}},{"key":"supply_crate","at":[33,15.4],"chest":{"id":"en_quill","item":"plasma_quill","name":"act.crate","lines":["ark.en.quill"]}},{"key":"cable_coil","at":[24,9],"box":[0,0]},{"key":"floor_vent","at":[10,16],"box":[0,0]}],"lamps":[[10,3,7,3],[26,3,7,3],[18,3,15,3]],"onEnter":[{"if":{"not":{"flag":"power_on"}},"then":[{"unflag":"sw_a"},{"unflag":"sw_b"},{"unflag":"sw_c"},{"unflag":"sw_d"},{"set":"load","to":0}]},{"if":{"not":{"flag":"engine_clear"}},"then":[{"wait":0.8},{"set":"engine_clear","to":0},{"spawn":"drone","at":[12,9],"onDefeat":[{"add":"engine_clear","n":1},{"if":{"var":"engine_clear","is":["==",2]},"then":[{"flag":"engine_clear"},{"toast":"ark.enc.engine"}]}],"hunt":true},{"spawn":"drone","at":[24,10],"onDefeat":[{"add":"engine_clear","n":1},{"if":{"var":"engine_clear","is":["==",2]},"then":[{"flag":"engine_clear"},{"toast":"ark.enc.engine"}]}],"hunt":true}]}]}}},"chapter2/areas/greenhouse.json":{"schema":1,"areas":{"greenhouse":{"name":"area.greenhouse","tod":"nave","start":[18,17.4],"camNorth":1,"music":"garden","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"w":{"tile":"deck_plates","h":52,"wall":"#d8dcd6"},"V":{"tile":"deck_plates","h":6,"wall":"#d8dcd6"},"a":{"tile":"deck_plates"},"e":{"tile":"soil"}},"map":["wwwwwwwwwwwwwwwwww","weeeeaaaaaaaaeeeew","weeeeaaaaaaaaeeeew","weeeeaaeeeeaaeeeew","weeeeaaeeeeaaeeeew","weeeeaaeeeeaaeeeew","weeeeaaeeeeaaeeeew","waaaaaaaaaaaaaaaaw","waaaaaaaaaaaaaaaaw","VVVVVVVVaaVVVVVVVV"],"things":[{"key":"olive","at":[18,9],"when":{"not":{"flag":"gh_bloom"}},"act":{"label":"act.look","name":"act.olive","run":[{"say":["ark.gh.olive1","ark.gh.olive2"],"name":"act.olive"},{"if":{"has":"archivist_lens"},"then":[{"flag":"lens_olive"},{"say":["ark.lens.olive"],"name":"item.archivist_lens"}]}]}},{"key":"olive","at":[18,9],"when":{"flag":"gh_bloom"},"look":{"label":"act.look","name":"act.olive","lines":["ark.gh.bloomed"]}},{"key":"bush","at":[15.4,12.6],"when":{"flag":"gh_bloom"},"box":[0,0]},{"key":"bush","at":[20.6,12.6],"when":{"flag":"gh_bloom"},"box":[0,0]},{"key":"plant_tank","at":[5,3.4],"act":{"label":"act.read","name":"diary.lind","run":[{"flag":"diary_lind_2"},{"say":["ark.d.lind2.1","ark.d.lind2.2","ark.d.lind2.3"],"name":"diary.lind","pic":"botanist"}]}},{"key":"plant_tank","at":[31,3.4]},{"key":"bush","at":[4.4,8.6]},{"key":"bush","at":[31.6,8.6]},{"key":"bush","at":[4.4,12.4]},{"key":"bush","at":[31.6,12.4]},{"key":"ink_steps","at":[18,15.2],"box":[0,0],"scan":"gh_steps","look":{"label":"act.read","name":"act.steps","lines":["ark.gh.steps"]}},{"key":"power_switch","at":[9,2.8],"act":{"label":"act.use","name":"act.lamp","run":[{"if":{"flag":"gh_lamp"},"then":[{"unflag":"gh_lamp"},{"sfx":"move"},{"toast":"ark.gh.lamp_off"}],"else":[{"flag":"gh_lamp"},{"sfx":"move"},{"toast":"ark.gh.lamp_on"}]},{"call":"gh_check"}]}},{"key":"lever","at":[11,15.4],"box":[0.3,0.3],"act":{"label":"act.turn","name":"act.valve_beds","run":[{"if":{"flag":"gh_w1"},"then":[{"unflag":"gh_w1"},{"sfx":"move"},{"toast":"ark.gh.w1_off"}],"else":[{"flag":"gh_w1"},{"sfx":"move"},{"toast":"ark.gh.w1_on"}]},{"call":"gh_check"}]}},{"key":"lever","at":[25,15.4],"box":[0.3,0.3],"act":{"label":"act.turn","name":"act.valve_olive","run":[{"if":{"flag":"gh_w2"},"then":[{"unflag":"gh_w2"},{"sfx":"move"},{"toast":"ark.gh.w2_off"}],"else":[{"flag":"gh_w2"},{"sfx":"move"},{"toast":"ark.gh.w2_on"}]},{"call":"gh_check"}]}}],"lamps":[[10,3,6,3],[26,3,6,3],[18,3,14,3]],"exits":[{"rect":[16,19.2,20,20],"to":"spine","at":[34,4.4],"face":[0,1]}],"onEnter":[{"if":{"not":{"flag":"gh_seen"}},"then":[{"flag":"gh_seen"},{"flag":"gh_w1"}]},{"if":{"all":[{"flag":"gh_bloom"},{"not":{"flag":"map_whole"}},{"not":{"has":"map_piece_1"}}]},"then":[{"drop":"map_piece_1","at":[18,15.6]}]}]}}},"chapter2/areas/infirmary.json":{"schema":1,"areas":{"infirmary":{"name":"area.infirmary","tod":"nave","flicker":true,"start":[12,11.4],"camNorth":1,"music":"ark","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"w":{"tile":"deck_plates","h":52,"wall":"#d8dcd6"},"V":{"tile":"deck_plates","h":6,"wall":"#d8dcd6"},"a":{"tile":"deck_plates"}},"map":["wwwwwwwwwwww","waaaaaaaaaaw","waaaaaaaaaaw","waaaaaaaaaaw","waaaaaaaaaaw","waaaaaaaaaaw","VVVVVaaVVVVV"],"things":[{"key":"med_bed","at":[6,4.2],"look":{"label":"act.look","name":"act.bed","lines":["ark.inf.bed1","ark.inf.bed2"]}},{"key":"med_bed","at":[16,4.2]},{"key":"wall_screen","at":[11,2.1],"act":{"label":"act.read","name":"diary.sato","run":[{"flag":"diary_sato_2"},{"say":["ark.d.sato2.1","ark.d.sato2.2","ark.d.sato2.3"],"name":"diary.sato","pic":"doctor"}]}},{"key":"med_cabinet","at":[21.6,2.8],"chest":{"id":"inf_cells","item":"ink_cell","n":2,"name":"act.cabinet"}},{"key":"ink_stain","at":[3,2.1],"when":{"flag":"photo_3"},"look":{"label":"act.read","name":"act.stain","lines":["ark.stain.inf"]}}],"lamps":[[6,3,5,2.6],[16,3,5,2.6]],"exits":[{"rect":[10,13.2,14,14],"to":"spine","at":[26,4.4],"face":[0,1]}]}}},"chapter2/areas/kit.json":{"schema":1,"areas":{"kit":{"name":"area.kit","tod":"nave","start":[16,16],"camNorth":1,"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"w":{"tile":"deck_plates","h":52,"wall":"#d8dcd6"},"a":{"tile":"deck_plates"},"b":{"tile":"deck_ink"},"c":{"tile":"grating"},"d":{"tile":"carpet"},"e":{"tile":"soil"},"f":{"tile":"parquet_old"},"g":{"tile":"star_glass"},"h":{"tile":"hazard"}},"map":["WWWWWWWWWWWWWWWW","WaaaabbbbccccddW","WaaaabbbbccccddW","WaaaabbbbccccddW","WeeeeffffgggghhW","WeeeeffffgggghhW","WeeeeffffgggghhW","WaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaW","wwwwwwwaawwwwwww"],"things":[{"key":"cryo_pod","at":[4,2.4]},{"key":"cryo_pod_open","at":[7,2.4]},{"key":"crew_locker","at":[10,2.2]},{"key":"archive_shelf","at":[15,2.2]},{"key":"console","at":[22,2.6]},{"key":"power_switch","at":[27,2.2]},{"key":"codex_case","at":[4,9]},{"key":"plant_tank","at":[9,9]},{"key":"telescope","at":[18,10]},{"key":"bunk","at":[24,9]},{"key":"supply_crate","at":[28,9]}],"lamps":[[8,3,6,3],[24,3,6,3],[16,3,14,3]]}}},"chapter2/areas/kit_b.json":{"schema":1,"areas":{"kit_b":{"name":"area.kit_b","tod":"nave","start":[16,16],"camNorth":1,"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"w":{"tile":"deck_plates","h":52,"wall":"#d8dcd6"},"a":{"tile":"deck_plates"},"d":{"tile":"carpet"},"c":{"tile":"grating"}},"map":["WWWWWWWWWWWWWWWW","WddddddddccccccW","WddddddddccccccW","WddddddddccccccW","WaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaW","wwwwwwwaawwwwwww"],"things":[{"key":"photo_frame","at":[4,2.1]},{"key":"wall_screen","at":[9,2.1]},{"key":"porthole","at":[13,2.1]},{"key":"pipes","at":[21,2.1]},{"key":"generator","at":[28,3.2]},{"key":"mess_table","at":[5,6]},{"key":"chair","at":[5,8.2]},{"key":"med_bed","at":[12,6.4]},{"key":"med_cabinet","at":[17,5.6]},{"key":"coolant_tank","at":[22,6.6]},{"key":"cable_coil","at":[25.5,6.4],"box":[0,0]},{"key":"safe","at":[4,12],"act":{"label":"act.use","name":"act.keypad","run":[{"keypad":"4071","name":"act.keypad","then":[{"flag":"kit_safe"},{"sfx":"chest"},{"toast":"toast.safe.open"}],"else":[{"sfx":"no"}]}]}},{"key":"chart_table","at":[9,12]},{"key":"toy_robot","at":[13,11.6]},{"key":"floor_vent","at":[16,11.6],"box":[0,0]},{"key":"door_frame","at":[21,12]},{"key":"lift","at":[28,12.4]},{"key":"crew_locker","at":[26,9],"chest":{"id":"kit_locker","item":"ration","n":1}},{"key":"toy_robot","at":[20,14.6],"scan":"kit_scan"}],"lamps":[[8,3,6,3],[24,3,6,3],[16,3,13,3]],"strata":["#5c6678","#4e5868","#6a7488","#454e5c"]}}},"chapter2/areas/mess.json":{"schema":1,"areas":{"mess":{"name":"area.mess","tod":"nave","start":[16,13.4],"camNorth":1,"music":"ark","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"w":{"tile":"deck_plates","h":52,"wall":"#d8dcd6"},"V":{"tile":"deck_plates","h":6,"wall":"#d8dcd6"},"a":{"tile":"deck_plates"},"d":{"tile":"carpet"}},"map":["wwwwwwwwwwwwwwww","waaaaaaaaaaaaaaw","waddddddddddddaw","waddddddddddddaw","waddddddddddddaw","waddddddddddddaw","waaaaaaaaaaaaaaw","VVVVVVVaaVVVVVVV"],"things":[{"key":"photo_frame","at":[16,2.1],"act":{"label":"act.look","name":"act.photo","run":[{"call":"photo"}]}},{"key":"porthole","at":[6,2.1]},{"key":"porthole","at":[26,2.1]},{"key":"ink_stain","at":[10,2.1],"when":{"flag":"photo_3"},"look":{"label":"act.read","name":"act.stain","lines":["ark.stain.mess"]}},{"key":"ink_stain","at":[22,2.1],"when":{"flag":"photo_5"},"look":{"label":"act.read","name":"act.stain","lines":["ark.stain.mess"]}},{"key":"mess_table","at":[10,6.6],"look":{"label":"act.look","name":"act.table","lines":["ark.mess.table1","ark.mess.table2"]}},{"key":"mess_table","at":[22,6.6]},{"key":"mess_table","at":[16,10.4]},{"key":"chair","at":[8,5]},{"key":"chair","at":[12,8.2],"rot":2},{"key":"chair","at":[20,5]},{"key":"chair","at":[24,8.2],"rot":2},{"key":"chair","at":[14,9.1]},{"key":"toy_robot","at":[26,10.6],"when":{"not":{"flag":"photo_2"}},"look":{"label":"act.look","name":"act.toy","lines":["ark.mess.toy"]}},{"key":"toy_robot","at":[5,12.4],"when":{"all":[{"flag":"photo_2"},{"not":{"flag":"photo_4"}}]},"look":{"label":"act.look","name":"act.toy","lines":["ark.mess.toy2"]}},{"key":"toy_robot","at":[17,3.4],"when":{"flag":"photo_4"},"look":{"label":"act.look","name":"act.toy","lines":["ark.mess.toy3"]}},{"key":"supply_crate","at":[28,12.4],"chest":{"id":"mess_crate","item":"ration","n":2,"name":"act.crate"}}],"lamps":[[10,3,6,3],[22,3,6,3]],"exits":[{"rect":[14,15.2,18,16],"to":"spine","at":[18,4.4],"face":[0,1]}],"onEnter":[{"if":{"flag":"photo_5"},"else":[{"if":{"flag":"photo_4"},"then":[{"flag":"photo_5"}],"else":[{"if":{"flag":"photo_3"},"then":[{"flag":"photo_4"}],"else":[{"if":{"flag":"photo_2"},"then":[{"flag":"photo_3"}],"else":[{"if":{"flag":"photo_1"},"then":[{"flag":"photo_2"}],"else":[{"if":{"flag":"mess_seen"},"then":[{"flag":"photo_1"}],"else":[{"flag":"mess_seen"}]}]}]}]}]}]}]}}},"chapter2/areas/observatory.json":{"schema":1,"areas":{"observatory":{"name":"area.observatory","tod":"nave","start":[14,13.4],"camNorth":1,"music":"stars","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"g":{"tile":"star_glass"}},"map":["WWWWWWWWWWWWWW","WggggggggggggW","WggggggggggggW","WggggggggggggW","WggggggggggggW","WggggggggggggW","WggggggggggggW","VVVVVVggVVVVVV"],"things":[{"key":"telescope","at":[14,5.4],"look":{"label":"act.look","name":"act.telescope","lines":["ark.ob.tele"]}},{"key":"porthole","at":[6,2.1]},{"key":"porthole","at":[22,2.1]}],"lamps":[[14,3,9,2.6]],"exits":[{"rect":[12,15.2,16,16],"to":"bridge","at":[4,4.4],"face":[0,1]}],"onEnter":[{"if":{"not":{"flag":"chapter2_done"}},"then":[{"wait":0.8},{"call":"last_scene"}]}]}}},"chapter2/areas/quarters.json":{"schema":1,"areas":{"quarters":{"name":"area.quarters","tod":"nave","start":[24,13.4],"camNorth":1,"music":"ark","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"a":{"tile":"deck_plates"},"d":{"tile":"carpet"}},"map":["WWWWWWWWWWWWWWWWWWWWWWWWWW","WddddWddddWddddWddddWddddW","WddddWddddWddddWddddWddddW","WddddWddddWddddWddddWddddW","WaaaaaaaaaaaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaaaaaaaaaaaW","VVVVVVVVVVVaaVVVVVVVVVVVVV"],"things":[{"key":"bunk","at":[4.6,3],"act":{"label":"act.read","name":"diary.varga","run":[{"flag":"diary_varga_1"},{"say":["ark.d.varga1.1","ark.d.varga1.2","ark.d.varga1.3"],"name":"diary.varga","pic":"navigator"}]}},{"key":"crew_locker","at":[8.6,2.9],"chest":{"id":"q_scanner","item":"scanner","flag":"skill_scan","name":"act.locker","lines":["ark.q.scanner1","ark.q.scanner2"]}},{"key":"supply_crate","at":[8.2,6.4],"chest":{"id":"q_badge_nav","item":"badge_navigator","name":"act.crate"}},{"key":"ink_writing","at":[6,10.6],"box":[0,0],"scan":"q_writing","look":{"label":"act.read","name":"act.writing","lines":["ark.q.writing"]}},{"key":"bunk","at":[14.6,3],"act":{"label":"act.read","name":"diary.lind","run":[{"flag":"diary_lind_1"},{"say":["ark.d.lind1.1","ark.d.lind1.2"],"name":"diary.lind","pic":"botanist"}]}},{"key":"crew_locker","at":[18.6,2.9],"chest":{"id":"q_badge_bot","item":"badge_botanist","name":"act.locker","lines":["ark.q.badge_bot"]}},{"key":"plant_tank","at":[16,6.6]},{"key":"bunk","at":[24.6,3],"act":{"label":"act.read","name":"diary.okafor","run":[{"flag":"diary_okafor_1"},{"say":["ark.d.okafor1.1","ark.d.okafor1.2"],"name":"diary.okafor","pic":"engineer"}]}},{"key":"crew_locker","at":[28.6,2.9],"when":{"not":{"flag":"q_eng_open"}},"act":{"label":"act.use","name":"act.keypad","run":[{"keypad":"3219","name":"act.keypad","then":[{"flag":"q_eng_open"},{"sfx":"door"},{"toast":"ark.toast.open"},{"reopen":true}],"else":[{"sfx":"no"}]}]}},{"key":"crew_locker","at":[28.6,2.9],"when":{"flag":"q_eng_open"},"chest":{"id":"q_badge_eng","item":"badge_engineer","name":"act.locker","lines":["ark.q.badge_eng"]}},{"key":"cable_coil","at":[26.4,6.8],"box":[0,0]},{"key":"bunk","at":[34.6,3],"act":{"label":"act.read","name":"diary.sato","run":[{"flag":"diary_sato_1"},{"say":["ark.d.sato1.1","ark.d.sato1.2"],"name":"diary.sato","pic":"doctor"}]}},{"key":"crew_locker","at":[38.6,2.9],"chest":{"id":"q_badge_doc","item":"badge_doctor","name":"act.locker","lines":["ark.q.badge_doc"]}},{"key":"med_cabinet","at":[36,6.8]},{"key":"door_frame","at":[46,2.3],"when":{"not":{"flag":"captain_door"}},"act":{"label":"act.use","name":"act.keypad","run":[{"keypad":"0611","name":"act.keypad","then":[{"flag":"captain_door"},{"sfx":"door"},{"toast":"ark.toast.door"},{"reopen":true}],"else":[{"sfx":"no"}]}]}},{"key":"door_frame","at":[46,2.3],"when":{"flag":"captain_door"},"door":{"to":"captain_cabin","at":[10,11.4],"face":[0,-1]}},{"key":"ink_stain","at":[42.6,2.1],"when":{"flag":"photo_2"},"look":{"label":"act.read","name":"act.stain","lines":["ark.stain.q"]}}],"lamps":[[6,3,5,2.6],[16,3,5,2.6],[26,3,5,2.6],[36,3,5,2.6],[46,3,5,2.6],[24,3,12,3]],"exits":[{"rect":[22,15.2,26,16],"to":"spine","at":[8,4.4],"face":[0,1]}]}}},"chapter2/areas/spine.json":{"schema":1,"areas":{"spine":{"name":"area.spine","tod":"emergenza","start":[8,11.6],"camNorth":1,"music":"ark","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"a":{"tile":"deck_plates"},"c":{"tile":"grating"},"h":{"tile":"hazard"}},"map":["WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW","WaaaaaaaaaaaaaaaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaaaaaaaaaaaaaaaW","WccccccccccccccccccccccccchhhW","WaaaaaaaaaaaaaaaaaaaaaaaaaaaaW","WaaaaaaaaaaaaaaaaaaaaaaaaaaaaW","VVVaaVVVVVVVVVVVVVVVVVVVVVVVVV"],"things":[{"key":"door_frame","at":[8,2.3],"door":{"to":"quarters","at":[24,13.4],"face":[0,-1]}},{"key":"wall_screen","at":[13,2.1],"act":{"label":"act.read","name":"diary.vesper","run":[{"call":"vlog1"}]}},{"key":"door_frame","at":[18,2.3],"door":{"to":"mess","at":[16,13.4],"face":[0,-1]}},{"key":"ink_stain","at":[22,2.1],"when":{"any":[{"has":"map_piece_1"},{"has":"map_piece_2"},{"has":"map_piece_3"},{"has":"map_piece_4"}]},"look":{"label":"act.read","name":"act.stain","lines":["ark.stain.1"]}},{"key":"door_frame","at":[26,2.3],"door":{"to":"infirmary","at":[12,11.4],"face":[0,-1],"need":"badge_doctor"}},{"key":"ink_stain","at":[30,2.1],"when":{"flag":"power_on"},"look":{"label":"act.read","name":"act.stain","lines":["ark.stain.2"]}},{"key":"door_frame","at":[34,2.3],"door":{"to":"greenhouse","at":[18,17.4],"face":[0,-1],"need":"badge_botanist"}},{"key":"ink_stain","at":[38,2.1],"when":{"flag":"map_whole"},"look":{"label":"act.read","name":"act.stain","lines":["ark.stain.3"]}},{"key":"door_frame","at":[42,2.3],"door":{"to":"archive","at":[18,19.4],"face":[0,-1]}},{"key":"door_frame","at":[50,2.3],"door":{"to":"storeroom","at":[12,11.4],"face":[0,-1],"need":"badge_navigator"}},{"key":"lift","at":[56,4.4],"act":{"label":"act.use","name":"act.lift","run":[{"call":"lift"}]}},{"key":"crew_locker","at":[53.4,10.4],"when":{"flag":"power_on"},"chest":{"id":"vesper_locker","item":"vesper_badge","name":"act.locker","lines":["ark.vbadge"]}},{"key":"reading_desk","at":[30,10.8],"desk":true},{"key":"ink_steps","at":[44,8.2],"box":[0,0],"scan":"spine_steps","look":{"label":"act.read","name":"act.steps","lines":["ark.steps.1"]}},{"key":"ink_steps","at":[50,7.4],"box":[0,0],"scan":"spine_steps","look":{"label":"act.read","name":"act.steps","lines":["ark.steps.2"]}},{"key":"pipes","at":[3.6,2.1]},{"key":"floor_vent","at":[36,11.4],"box":[0,0]}],"lamps":[[8,3,7,3],[22,3,7,3],[38,3,7,3],[52,3,7,3]],"exits":[{"rect":[6,13.2,10,14],"to":"cryo_bay","at":[14,15.4],"face":[0,-1]}],"onEnter":[{"if":{"all":[{"flag":"power_on"},{"not":{"flag":"spine_power_said"}}]},"then":[{"flag":"spine_power_said"},{"wait":0.6},{"say":[["vesper","ark.sp.power"]]}]},{"if":{"all":[{"flag":"spine_power_said"},{"not":{"flag":"spine_clear"}}]},"then":[{"wait":0.8},{"set":"spine_clear","to":0},{"spawn":"shadow","at":[40,8],"onDefeat":[{"add":"spine_clear","n":1},{"if":{"var":"spine_clear","is":["==",2]},"then":[{"flag":"spine_clear"},{"toast":"ark.enc.spine"}]}],"hunt":true},{"spawn":"drone","at":[24,9],"onDefeat":[{"add":"spine_clear","n":1},{"if":{"var":"spine_clear","is":["==",2]},"then":[{"flag":"spine_clear"},{"toast":"ark.enc.spine"}]}],"hunt":true}]}]}}},"chapter2/areas/storeroom.json":{"schema":1,"areas":{"storeroom":{"name":"area.storeroom","tod":"emergenza","start":[12,11.4],"camNorth":1,"music":"ark","strata":["#5c6678","#4e5868","#6a7488","#454e5c"],"legend":{"W":{"tile":"deck_plates","h":52,"wall":"#8a96a8"},"V":{"tile":"deck_plates","h":6,"wall":"#8a96a8"},"a":{"tile":"deck_plates"}},"map":["WWWWWWWWWWWW","WaaaaaaaaaaW","WaaaaaaaaaaW","WaaaaaaaaaaW","WaaaaaaaaaaW","WaaaaaaaaaaW","VVVVVaaVVVVV"],"things":[{"key":"supply_crate","at":[4,3.4],"chest":{"id":"st_rations","item":"ration","n":2,"name":"act.crate"}},{"key":"supply_crate","at":[6.6,3.4],"look":{"label":"act.look","name":"act.crate","lines":["ark.st.seeds"]}},{"key":"supply_crate","at":[4,6.2],"chest":{"id":"st_cells","item":"ink_cell","n":2,"name":"act.crate"}},{"key":"safe","at":[19.4,3.2],"act":{"label":"act.use","name":"act.safe","run":[{"if":{"flag":"st_safe"},"then":[{"say":["ark.cab.safe_empty"],"name":"act.safe"}],"else":[{"keypad":"1874","name":"act.keypad","then":[{"flag":"st_safe"},{"sfx":"chest"},{"toast":"ark.toast.safe"},{"drop":"star_compass","at":[19.4,5.4]}],"else":[{"sfx":"no"}]}]}]}},{"key":"coolant_tank","at":[21.6,9.6]},{"key":"ink_writing","at":[9,8.6],"box":[0,0],"scan":"st_writing","look":{"label":"act.read","name":"act.writing","lines":["ark.st.writing"]}}],"lamps":[[6,3,5,2.6],[18,3,5,2.6]],"exits":[{"rect":[10,13.2,14,14],"to":"spine","at":[50,4.4],"face":[0,1]}],"onEnter":[{"if":{"all":[{"flag":"st_safe"},{"not":{"has":"star_compass"}}]},"then":[{"drop":"star_compass","at":[19.4,5.4]}]}]}}},"chapter2/enemies.json":{"schema":1,"enemies":{"shadow":{"sheet":"enemies-3","row":"shadow","hp":52,"atk":11,"def":2,"speed":1.4,"sight":9,"reach":1.9,"windup":0.7,"strike":0.45,"recover":1.2,"xp":10,"coins":[0,0],"r":0.55,"move":"smash","drops":[{"item":"ration","chance":0.2}]},"drone":{"sheet":"enemies-3","row":"drone","hp":30,"atk":10,"def":0,"speed":3.6,"sight":10,"reach":4.6,"windup":0.5,"strike":0.4,"recover":1.1,"xp":8,"coins":[0,0],"r":0.45,"move":"lunge","fly":0.6,"drops":[{"item":"ink_cell","chance":0.2}]},"what_remains":{"sheet":"boss-2","row":"what_remains","hp":700,"atk":12,"def":3,"speed":1.3,"sight":30,"reach":3.6,"xp":60,"coins":[0,0],"r":1.1,"poise":true,"size":1,"boss":"who.what_remains","anims":{"idle":["idle1","idle2"],"walk":["idle1","idle2"],"windup":["reach_windup"],"attack":["reach"],"summon":["what_remains_b.summon"],"pulse":["what_remains_b.pulse"],"hurt":["what_remains_b.hurt"],"defeat":["what_remains_b.defeat"]},"behaviour":"what_remains"}}},"chapter2/game.json":{"schema":1,"game":{"start":{"area":"cryo_bay"},"hero":{"sheet":"cat","views":{"down":"cat_down","up":"cat_up","side":"cat_side"},"anims":{"idle":["idle"],"walk":["walk1","walk2","walk3","walk4","walk5"],"attack1":["attack1"],"attack2":["attack2"],"attack3":["attack3"],"hurt":{"down":["cat_extra.hurt_down"],"up":["cat_extra.hurt_up"],"side":["cat_extra.hurt_side"]},"dodge":{"down":["cat_extra.dodge_down"],"up":["cat_extra.dodge_up"],"side":["cat_extra.dodge_side"]}},"equip":{"weapon":null,"armour":null,"charm":null},"start":{"level":3,"flags":["skill_dash","skill_well"]}},"levels":{"xp":[0,0,20,50,95,160],"base":{"hp":[24,6],"ink":[30,0],"atk":[5,2],"def":[1,1]}},"sheets":{"portraits":["portraits-1","portraits-2"],"items":["items-2","items-1"],"people":"villagers"},"titleArt":["title","title"],"chapter":{"title":"chapter2.title","blurb":"chapter2.blurb","minutes":35,"order":2,"save":"mdv-rpg-cat-save-ch2","styles":["lowpoly"],"card":["title-2","title-2"],"doneFlag":"chapter2_done"},"intro":"intro"}},"chapter2/items.json":{"schema":1,"items":{"quill_sword":{"slot":"weapon","atk":0,"price":0},"plasma_quill":{"slot":"weapon","atk":4,"price":0},"star_compass":{"slot":"weapon","atk":6,"price":0},"ship_suit":{"slot":"armour","def":1,"hp":4,"price":0},"eva_suit":{"slot":"armour","def":3,"hp":8,"price":0},"vesper_badge":{"slot":"charm","ink":15,"price":0},"archivist_lens":{"slot":"charm","def":1,"price":0},"dark_shard":{"slot":"charm","atk":4,"price":0},"ration":{"use":{"hp":12},"price":0},"ink_cell":{"use":{"ink":20},"price":0},"scanner":{"key":true},"map_piece_1":{"key":true},"map_piece_2":{"key":true},"map_piece_3":{"key":true},"map_piece_4":{"key":true},"badge_captain":{"key":true},"badge_navigator":{"key":true},"badge_engineer":{"key":true},"badge_botanist":{"key":true},"badge_doctor":{"key":true}}},"chapter2/music.json":{"schema":1,"music":{"ark":{"bpm":60,"voices":{"tri":["c2 - - - - - - - - - - - - - - -","c2 - - - - - - - - - - - - - - -","a#1 - - - - - - - - - - - - - - -","g1 - - - - - - - - - - - - - - -"],"p3":[". . . . g4 - - - . . . . . . . .",". . . . . . . . d#4 - - - c4 - - -",". . . . f4 - - - . . . . . . . .",". . d4 - - - . . . . . . . . . ."],"p2":["c3 . . . . . . . g3 . . . . . . .","c3 . . . . . . . g3 . . . . . . .","a#2 . . . . . . . f3 . . . . . . .","g2 . . . . . . . d3 . . . . . . ."]}},"garden":{"bpm":72,"voices":{"tri":["f2 - - - - - - - c3 - - - - - - -","d2 - - - - - - - a2 - - - - - - -","a#1 - - - - - - - f2 - - - - - - -","c2 - - - - - - - g2 - - - - - - -"],"p3":["a4 - - - c5 - - - . . f5 - e5 - - -","d5 - - - . . a4 - . . . . . . . .","a#4 - - - d5 - - - f5 - - - d5 - - -","c5 - - - . . . . e4 - - - . . . ."],"p2":["f3 . a3 . c4 . . . f3 . a3 . c4 . . .","d3 . f3 . a3 . . . d3 . f3 . a3 . . .","a#2 . d3 . f3 . . . a#2 . d3 . f3 . . .","c3 . e3 . g3 . . . c3 . e3 . g3 . . ."]}},"stacks":{"bpm":66,"voices":{"tri":["d2 - - - - - - - - - - - - - - -","a#1 - - - - - - - - - - - - - - -","g1 - - - - - - - - - - - - - - -","a1 - - - - - - - - - - - - - - -"],"p3":["d5 - - - . . f5 - e5 - - - d5 - - -",". . . . a4 - - - . . . . . . . .","g4 - - - a#4 - d5 - c5 - - - a#4 - - -","a4 - - - . . . . c#5 - - - . . . ."],"p2":["d3 . . . f3 . . . a3 . . . f3 . . .","a#2 . . . d3 . . . f3 . . . d3 . . .","g2 . . . a#2 . . . d3 . . . a#2 . . .","a2 . . . c#3 . . . e3 . . . c#3 . . ."]}},"engine":{"bpm":84,"voices":{"tri":["e1 . e1 . e1 . e1 . e1 . e1 . e1 . e1 .","e1 . e1 . e1 . e1 . e1 . e1 . e1 . e1 .","c2 . c2 . c2 . c2 . c2 . c2 . c2 . c2 .","d2 . d2 . d2 . d2 . b1 . b1 . b1 . b1 ."],"p3":[". . . . . . . . b3 - - - . . . .",". . . . . . . . a#3 - - - g3 - - -",". . . . . . . . c4 - - - . . . .",". . . . d4 - - - . . . . b3 - - -"],"drums":["k . . . h . . . k . . . h . . .","k . . . h . . . k . k . h . . ."]}},"stars":{"bpm":54,"voices":{"tri":["a1 - - - - - - - - - - - - - - -","f1 - - - - - - - - - - - - - - -","c2 - - - - - - - - - - - - - - -","g1 - - - - - - - - - - - - - - -"],"p3":["e5 - - - - - - - . . . . a4 - - -","c5 - - - - - - - . . . . . . . .","g5 - - - - - - - e5 - - - . . . .","d5 - - - - - - - b4 - - - - - - -"],"p2":[". . a3 . . . e4 . . . a3 . . . c4 .",". . f3 . . . c4 . . . f3 . . . a3 .",". . c4 . . . g4 . . . c4 . . . e4 .",". . g3 . . . d4 . . . g3 . . . b3 ."]}},"battle":{"bpm":132,"voices":{"tri":["c2 . c2 . c2 . d#2 . c2 . c2 . f2 . d#2 .","c2 . c2 . c2 . d#2 . c2 . c2 . g1 . a#1 ."],"p1":["c5 . . . d#5 . . . d5 . . . c5 . a#4 .","g4 . . . c5 . . . d#5 . d5 . c5 . . ."],"drums":["k . h . s . h . k . h . s . h h","k . h . s . h . k k h . s . h ."]}},"boss":{"bpm":144,"voices":{"tri":["d2 . d2 . d2 . d2 . a#1 . a#1 . a#1 . a#1 .","g1 . g1 . g1 . g1 . a1 . a1 . a1 . c#2 .","d2 . d2 . d2 . d2 . a#1 . a#1 . a#1 . a#1 .","g1 . g1 . a1 . a1 . d2 . . . . . . ."],"p1":["d5 . . f5 . . a5 . g5 . f5 . e5 . . .","d5 . . f5 . . a#5 . a5 . g5 . f5 . e5 .","d5 . . f5 . . a5 . c6 . a#5 . a5 . . .","g5 . f5 . e5 . c#5 . d5 - - - . . . ."],"p2":["d4 . a3 . d4 . a3 . a#3 . f3 . a#3 . f3 .","g3 . d3 . g3 . d3 . a3 . e3 . a3 . c#4 .","d4 . a3 . d4 . a3 . a#3 . f3 . a#3 . f3 .","g3 . d3 . a3 . e3 . d4 . . . . . . ."],"drums":["k . h . s . h . k . h k s . h h","k . h . s . h . k k h . s . s s"]}}}},"chapter2/people.json":{"schema":1,"speakers":{"cat":{"name":"who.cat","pic":"cat_neutral"},"cat_happy":{"name":"who.cat","pic":"cat_happy"},"cat_worried":{"name":"who.cat","pic":"cat_worried"},"vesper":{"name":"who.vesper","pic":"vesper"},"vesper_glitch":{"name":"who.vesper","pic":"vesper_glitch"},"what_remains":{"name":"who.what_remains","pic":"what_remains"}}},"chapter2/story.json":{"schema":1,"quests":{"ark":{"name":"q.ark","main":true,"steps":[{"text":"q.ark.0","on":{"collect":"quill_sword"}},{"text":"q.ark.1","on":{"reach":"quarters"}},{"text":"q.ark.2","on":{"check":{"all":[{"has":"map_piece_1"},{"has":"map_piece_2"},{"has":"map_piece_3"},{"has":"map_piece_4"}]}}},{"text":"q.ark.3","on":{"flag":"map_whole"}},{"text":"q.ark.4","on":{"reach":"observatory"}}],"reward":{"xp":40}}},"events":{"intro":[{"say":[["vesper_glitch","ark.in.1"],["cat_worried","ark.in.2"],["vesper","ark.in.3"],["cat","ark.in.4"],["vesper_glitch","ark.in.5"],["vesper","ark.in.6"]]},{"quest":"ark"}],"lift":[{"say":[["vesper","ark.lift.ask"]],"choices":[["ark.lift.main",[{"go":"spine","at":[56,7.2],"face":[0,1]}]],["ark.lift.engine",[{"if":{"has":"badge_engineer"},"then":[{"go":"engine_room","at":[32,7.2],"face":[0,1]}],"else":[{"say":[["vesper","ark.lift.noeng"]]}]}]],["ark.lift.bridge",[{"if":{"not":{"flag":"power_on"}},"then":[{"say":[["vesper","ark.lift.nopower"]]}],"else":[{"if":{"has":"badge_captain"},"then":[{"go":"bridge","at":[32,7.2],"face":[0,1]}],"else":[{"say":[["vesper","ark.lift.nocap"]]}]}]}]]]}],"vlog1":[{"flag":"diary_vesper_1"},{"say":["ark.vlog1.1","ark.vlog1.2","ark.vlog1.3"],"name":"diary.vesper","pic":"vesper"}],"photo":[{"say":["ark.ph.0"],"name":"act.photo"},{"if":{"flag":"photo_1"},"then":[{"say":["ark.ph.varga.ink"],"name":"who.varga","pic":"ink_crew"}],"else":[{"say":["ark.ph.varga"],"name":"who.varga","pic":"navigator"}]},{"if":{"flag":"photo_2"},"then":[{"say":["ark.ph.okafor.ink"],"name":"who.okafor","pic":"ink_crew"}],"else":[{"say":["ark.ph.okafor"],"name":"who.okafor","pic":"engineer"}]},{"if":{"flag":"photo_3"},"then":[{"say":["ark.ph.lind.ink"],"name":"who.lind","pic":"ink_crew"}],"else":[{"say":["ark.ph.lind"],"name":"who.lind","pic":"botanist"}]},{"if":{"flag":"photo_4"},"then":[{"say":["ark.ph.sato.ink"],"name":"who.sato","pic":"ink_crew"}],"else":[{"say":["ark.ph.sato"],"name":"who.sato","pic":"doctor"}]},{"if":{"flag":"photo_5"},"then":[{"say":["ark.ph.hale.ink"],"name":"who.hale","pic":"ink_crew"}],"else":[{"say":["ark.ph.hale"],"name":"who.hale","pic":"captain"}]},{"if":{"flag":"photo_1"},"then":[{"say":[["cat_worried","ark.ph.cat1"]]}],"else":[{"say":[["cat","ark.ph.cat0"]]}]},{"if":{"has":"archivist_lens"},"then":[{"flag":"lens_photo"},{"say":["ark.lens.photo"],"name":"item.archivist_lens"}]}],"gh_check":[{"if":{"all":[{"flag":"gh_w2"},{"flag":"gh_lamp"},{"not":{"flag":"gh_w1"}},{"not":{"flag":"gh_bloom"}}]},"then":[{"flag":"gh_bloom"},{"sfx":"quest"},{"drop":"map_piece_1","at":[18,15.6]},{"reopen":true},{"wait":1.2},{"say":[["cat_happy","ark.gh.bloom1"],["vesper","ark.gh.bloom2"]]}]}],"atlas":[{"if":{"flag":"ar_done"},"then":[{"say":["ark.ar.done"],"name":"act.atlas"}],"else":[{"if":{"var":"atlas","is":["==",{"arg":"i"}]},"then":[{"add":"atlas","n":1},{"sfx":"door"},{"toast":"ark.ar.right","vars":{"n":{"var":"atlas"}}},{"if":{"var":"atlas","is":["==",4]},"then":[{"flag":"ar_done"},{"sfx":"quest"},{"drop":"map_piece_2","at":[18,6.2]},{"wait":0.6},{"say":[["cat_happy","ark.ar.piece1"],["vesper","ark.ar.piece2"]]},{"wait":0.4},{"say":[["cat_worried","ark.enc.archive0"]]},{"set":"archive_clear","to":0},{"spawn":"shadow","at":[8,6],"onDefeat":[{"add":"archive_clear","n":1},{"if":{"var":"archive_clear","is":["==",2]},"then":[{"flag":"archive_clear"},{"toast":"ark.enc.archive"}]}],"hunt":true},{"spawn":"shadow","at":[28,6],"onDefeat":[{"add":"archive_clear","n":1},{"if":{"var":"archive_clear","is":["==",2]},"then":[{"flag":"archive_clear"},{"toast":"ark.enc.archive"}]}],"hunt":true}]}],"else":[{"set":"atlas","to":0},{"sfx":"no"},{"shake":0.2},{"toast":"ark.ar.wrong"}]}]}],"restore":[{"if":{"all":[{"has":"map_piece_1"},{"has":"map_piece_2"},{"has":"map_piece_3"},{"has":"map_piece_4"}]},"then":[{"take":"map_piece_1"},{"take":"map_piece_2"},{"take":"map_piece_3"},{"take":"map_piece_4"},{"flag":"map_whole"},{"sfx":"quest"},{"say":[["vesper","ark.br.whole1"],["cat_happy","ark.br.whole2"],["vesper_glitch","ark.br.whole3"]]},{"reopen":true}],"else":[{"say":["ark.br.torn"],"name":"act.starmap"},{"toast":"ark.br.pieces","vars":{"n":{"count":["map_piece_1","map_piece_2","map_piece_3","map_piece_4"]}}}]}],"vesper_claim":[{"if":{"flag":"claim_done"},"then":[{"say":[["vesper","ark.br.after"]]}],"else":[{"say":[["vesper","ark.br.v1"],["cat_worried","ark.br.c1"],["vesper_glitch","ark.br.v2"]],"choices":[["ark.br.ch_vesper",[{"flag":"trust_vesper"},{"say":[["cat","ark.br.c_vesper"]]}]],["ark.br.ch_diary",[{"flag":"trust_diary"},{"say":[["cat","ark.br.c_diary"]]}]]]},{"flag":"claim_done"}]}],"last_scene":[{"say":[["vesper","ark.ob.1"],["cat","ark.ob.2"],["vesper","ark.ob.3"],["vesper_glitch","ark.ob.4"]]},{"if":{"flag":"trust_vesper"},"then":[{"say":[["vesper","ark.ob.5v"]]}],"else":[{"if":{"flag":"trust_diary"},"then":[{"say":[["vesper","ark.ob.5d"]]}],"else":[{"say":[["vesper","ark.ob.5n"]]}]}]},{"say":[["cat","ark.ob.6"]]},{"shake":0.4},{"say":["ark.ob.7"],"name":"act.telescope"},{"say":[["cat_worried","ark.ob.8"]]},{"flag":"chapter2_done"},{"save":true},{"sfx":"quest"},{"end":true}],"boss":[{"spawn":"what_remains","at":[18,9],"onDefeat":[{"flag":"boss_done"},{"toast":"ark.wr.done"},{"reopen":true},{"wait":1},{"say":[["vesper","ark.wr.after"]]}],"hunt":true},{"wait":0.7},{"if":{"all":[{"area":"bridge"},{"dialogue":false}]},"then":[{"say":[["what_remains","ark.wr.1"],["cat_worried","ark.wr.2"],["what_remains","ark.wr.3"]]}]}]}},"curate.json":{"schema":1,"curate":{"library":{"back":{"wall":"stone"}},"signpost":{"depth":{"rules":[{"box":[0,0,23,26],"half":2},{"box":[0,26,23,33],"half":5}]}}}}}};
+
 // ---- engine/90-boot.js
 /* ---------- boot: art, atlas, materials, title screen; play starts from New game, Continue or a save code ---------- */
-const START = { area: 'library_in', at: null };
-
-const CAT_ANIMS = {
-  idle: ['idle'], walk: ['walk1', 'walk2', 'walk3', 'walk4', 'walk5'], attack1: ['attack1'], attack2: ['attack2'], attack3: ['attack3'],
-  hurt: { down: ['cat_extra.hurt_down'], up: ['cat_extra.hurt_up'], side: ['cat_extra.hurt_side'] },
-  dodge: { down: ['cat_extra.dodge_down'], up: ['cat_extra.dodge_up'], side: ['cat_extra.dodge_side'] },
-};
+// the start, the hero and the title picture come from game.json (GAME, engine/65-data.js)
+const STYLE = LP ? 'lowpoly' : 'diorama';   // the page's style, as game.json "chapter.styles" names it
 function beginPlay() {
   ui.screen = 'game'; showScreen(null); $('hud').hidden = false; $('touch').hidden = false;
-  if (!player) player = sheetActor('cat', { down: 'cat_down', up: 'cat_up', side: 'cat_side' }, CAT_ANIMS);
+  if (!player) player = sheetActor(GAME.hero.sheet, GAME.hero.views, GAME.hero.anims);
   if (G.hp <= 0) G.hp = stats().hp;
-  resetHero(); hudKey = ''; audioInit();
+  resetHero(); hudKey = ''; audioInit(); markPlayed();
   enterArea(G.area, G.x !== null && G.x !== undefined ? [G.x, G.z] : null);
   intro = reduceMotion ? 1 : 0;
   canvas.focus({ preventScroll: true });
@@ -4391,11 +5052,18 @@ function startGame() { newGame(); beginPlay(); }
 function continueGame() { const s = loadSave(); if (!s) { refreshTitle(); return; } G = s; beginPlay(); }
 function gameOver() { ui.screen = 'over'; showScreen('over'); }
 function toTitle() { clearTimeout(introT); ui.screen = 'title'; clearEnemies(); clearNpcs(); refreshTitle(); showScreen('title'); $('hud').hidden = true; $('touch').hidden = true; }
-function refreshTitle() { $('bContinue').hidden = !hasSave(); }
+// Continue resumes this page's chapter (the last played: engine/66-chapters.js); a slot that cannot be read says so
+function refreshTitle() { $('bContinue').hidden = !hasSave(); $('titleNote').hidden = saveState() !== 'broken'; delete $('bStart').dataset.armed; $('bStart').textContent = t('menu.new'); }
 function closeShop() { ui.screen = 'game'; showScreen(null); }
 
 (async function boot() {
   applyLang(); syncStyle();
+  // the game's data (content/**/*.json, compiled into the registries after the plugins): a problem the build let
+  // through stops here, listed on the page instead of a half-loaded game
+  // the chapter this page plays (engine/66-chapters.js): the title's choice from the address, else the last played
+  const next = takeNext(location, history, window);
+  CHAPTER_ID = pickChapter(next, STYLE);
+  try { loadGameData(chapterFiles(GAME_DATA, CHAPTER_ID)); } catch (e) { $('fallback').textContent = e.message; $('fallback').hidden = false; return; }
   $('styleBtn').onclick = () => setStyle(!settings.flat);
   if (LP) { settings.flat = false; $('styleBtn').hidden = true; for (const e of [$('optStyle'), $('optStyle').previousElementSibling]) e.hidden = true; }   // the low-poly page: no 2D style
   if (!renderer) { $('fallback').hidden = false; return; }
@@ -4403,12 +5071,19 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   try { await loadArt(); } catch (e) { $('fallback').textContent = e.message; $('fallback').hidden = false; return; }
   buildSprites(); makeAtlasTextures(); makeMaterials();
   new ResizeObserver(resize).observe(canvas); resize();
-  drawPic($('titleArt'), 'title', 'title');
-  $('bStart').onclick = () => { sfx('ok'); startGame(); };
+  drawPic($('titleArt'), ...GAME.titleArt);
+  document.querySelector('#title .sub').setAttribute('data-t', GAME.chapter.title); applyLang();
+  // New game starts this page's chapter again (asked twice over a saved game); Chapters goes to any chapter, a saved one
+  // by its Continue
+  $('bStart').onclick = () => confirmNew($('bStart'), newGameNeedsConfirm(CHAPTER_ID), () => { sfx('ok'); startGame(); });
+  $('bChapters').onclick = () => { sfx('ok'); openChapters(); };
+  // the pause menu's way back to the title: the game is saved first, where the cat stands (Continue resumes there)
+  $('bMenuTitle').onclick = () => { saveGame(); toTitle(); };
   $('bContinue').onclick = () => { sfx('ok'); continueGame(); };
   $('bLoad').onclick = () => { sfx('ok'); openCodeBox(); };
   $('bOptions').onclick = () => openMenu(true, true);
   $('bCodeOk').onclick = submitCode; $('bCodeCancel').onclick = () => { ui.screen = 'title'; showScreen('title'); };
+  $('bChBack').onclick = () => { ui.screen = 'title'; showScreen('title'); };
   $('codeIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitCode(); } });
   $('bShopClose').onclick = closeShop;
   $('bRetry').onclick = () => { const s = loadSave(); if (s) G = s; else newGame(); G.hp = stats().hp; beginPlay(); };
@@ -4436,11 +5111,14 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   window.__game = {
     state: () => ({ screen: ui.screen, area: A && A.def.id, x: player && player.x, z: player && player.z, fps, tris: A && A.tris, buildMs: A && A.buildMs, sprites: SPRITES.length,
       calls, chunkMs: A && Math.round(A.chunkMs), hp: G && G.hp, ink: G && Math.floor(G.ink), xp: G && G.xp, level: G && G.level, coins: G && G.coins, enemies: enemies.map((e) => [e.type, e.state, e.hp, +e.x.toFixed(1), +e.z.toFixed(1)]), dlg: !!dlg, near: nearAct && nearAct.label, quests: G && G.quests }),
+    chapter: () => CHAPTER_ID, showHidden: (on) => { SHOW_HIDDEN = !!on; },
     start: () => startGame(),
     place: (x, z) => { player.x = x; player.z = z; },
     walk: (x, y) => { input.stickX = x; input.stickY = y; },
     act: (a) => input.queue.push(a),
     spawn: (type, x, z) => spawnEnemy(type, x, z),
+    drop: (id, x, z) => drop(id, x, z), combat: (s) => { combatT = s; },   // (for the checks: an item on the floor; the fight's timer)
+    defeatAll: () => { for (const e of enemies) if (e.hp > 0) hitEnemy(e, e.hp + 999, 0, false); },   // (for the play checks: every fight won at once, its onDefeat run)
     flag: (f) => setFlag(f),
     spriteTris: () => Object.fromEntries(SPRITES.map((s) => [s.key, (s.pixel ? 2 * (s.layF.length + s.layB.length + s.strips.length) : 0) + 2 * s.low.length])),
     G: () => G, code: () => saveCode(), read: (c) => readCode(c), enter: (n, at) => enterArea(n, at),
@@ -4485,5 +5163,8 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     clock: () => time, drawn: () => drawCount, busy: () => transitioning, shadowDraws: () => shadowDraws, talk: () => openDialogue({ name: 'who.cat', lines: [['cat', 'i.2']] }),
     save: () => saveGame(), saved: () => loadSave(), resume: () => continueGame(), checkSave: (o) => checkSave(o), importCode: (c) => { $('codeIn').value = c; submitCode(); },
   };
+  // a choice handed over by the last page load (goChapter), now its chapter is loaded, the frame loop runs and the hooks
+  // exist (engine/66-chapters.js handOver)
+  handOver(next);
 })();
 })();

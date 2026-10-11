@@ -49,11 +49,17 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 #dialog p{margin:0;font-size:13px;line-height:1.5;min-height:3em}
 #dMore{position:absolute;right:10px;bottom:6px;color:var(--amber)}
 #dChoices{margin-top:8px}
+#dChoices.keypad{display:grid;grid-template-columns:repeat(3,3.4em);gap:6px}
+#dChoices.keypad button{padding:8px 0;font-size:16px}
 .screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(23,18,28,.86);padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));box-sizing:border-box;text-align:center;overflow:auto}
 .screen h1{margin:0;font-family:var(--display);font-size:clamp(28px,7vw,56px);line-height:1;text-shadow:0 3px 0 rgba(0,0,0,.6)}
 .screen .sub{margin:0 0 10px;color:var(--dim);font-size:13px}
 .screen .col{display:flex;flex-direction:column;gap:8px;min-width:220px}
 #titleArt{width:min(560px,92vw);height:auto;image-rendering:pixelated}
+.chlist{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;max-width:min(760px,100%)}
+.chcard{display:flex;flex-direction:column;gap:6px;width:min(340px,100%);text-align:left;padding:10px;box-sizing:border-box;background:var(--panel);border:1px solid var(--line)}
+.chcard .row{display:flex;gap:8px;flex-wrap:wrap}
+.chcard canvas{width:100%;height:auto;image-rendering:pixelated}
 .panel{width:min(640px,100%);text-align:left;background:var(--panel);border:1px solid var(--line);padding:12px;box-sizing:border-box}
 #tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
 #tabs button{flex:1 1 auto;min-width:72px}
@@ -65,6 +71,7 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 .icon{width:32px;height:auto;image-rendering:pixelated;vertical-align:middle}
 .info{border-top:1px solid var(--line);padding-top:8px;min-height:4em}
 .info b{font-family:var(--display);font-size:14px;color:var(--amber)}
+.info .up{color:#7fe08a}.info .down{color:#ff8a7a}
 .row{display:flex;gap:6px;flex-wrap:wrap}
 .slot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
 .slot .dim:first-child{min-width:70px}
@@ -77,7 +84,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
 #diag{color:var(--dim);font-size:11px;min-height:2.6em;font-variant-numeric:tabular-nums;margin-top:10px}
 #codeErr{color:#ff7a6e;min-height:1.2em}
 #fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .25s}
-#fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;font-size:14px;background:var(--void)}
+#fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;font-size:14px;white-space:pre-line;background:var(--void)}
 .touch{display:none}
 @media (pointer:coarse){
   .touch{display:block}
@@ -89,6 +96,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
   #bDodge{right:86px;bottom:0;width:56px;height:56px}
   #bDash{right:84px;bottom:66px;width:52px;height:52px}
   #bWell{right:22px;bottom:110px;width:48px;height:48px}
+  #bScan{right:150px;bottom:22px;width:48px;height:48px}
   #hint{display:none}
   #dialog{bottom:calc(196px + env(safe-area-inset-bottom))}
 }
@@ -121,6 +129,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
       <button type="button" id="bDodge" data-action="dodge" data-t="btn.dodge">Dodge</button>
       <button type="button" id="bDash" data-action="skill1" data-t="btn.dash" hidden>Dash</button>
       <button type="button" id="bWell" data-action="skill2" data-t="btn.well" hidden>Well</button>
+      <button type="button" id="bScan" data-action="skill3" data-t="btn.scan" hidden>Scan</button>
     </div>
   </div>
   <div id="title" class="screen" hidden>
@@ -129,9 +138,16 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
     <div class="col">
       <button type="button" id="bContinue" data-t="menu.continue" hidden>Continue</button>
       <button type="button" id="bStart" data-t="menu.new">New game</button>
+      <button type="button" id="bChapters" data-t="menu.chapters">Chapters</button>
       <button type="button" id="bLoad" data-t="menu.load">Load code</button>
       <button type="button" id="bOptions" data-t="menu.options">Options</button>
     </div>
+    <p id="titleNote" class="dim" role="status" hidden data-t="save.broken">This chapter's save could not be read: New game starts it afresh.</p>
+  </div>
+  <div id="chapters" class="screen" hidden role="dialog" aria-labelledby="chTitle">
+    <h1 id="chTitle" data-t="chapters.title">Chapters</h1>
+    <div id="chList" class="chlist"></div>
+    <div class="col"><button type="button" id="bChBack" data-t="menu.resume">Back</button></div>
   </div>
   <div id="menu" class="screen" hidden role="dialog" aria-labelledby="menuTitle">
     <div class="panel">
@@ -163,7 +179,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
       </section>
       <section id="tab-code" role="tabpanel" hidden></section>
     </div>
-    <div class="col"><button type="button" id="bResume" data-t="menu.resume">Back</button></div>
+    <div class="col"><button type="button" id="bResume" data-t="menu.resume">Back</button><button type="button" id="bMenuTitle" data-t="over.title2">Title screen</button></div>
   </div>
   <div id="shop" class="screen" hidden role="dialog" aria-labelledby="shopTitle">
     <div class="panel"><h1 id="shopTitle" data-t="shop.title" style="font-size:24px;margin-bottom:6px">Shop</h1><p class="line" id="shopCoins"></p><div id="shopList"></div></div>
