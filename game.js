@@ -719,7 +719,7 @@ function roofQuads(s) {
     }
   }
   // cards (thin pieces of a building shaped from a spec: a cross, the sails, a vine): a plane at z with a face each way,
-  // drawing only its own pixels (layer 500 + its number, see LAYER_TEST)
+  // drawing only its own pixels (layer 500 + its number, see layerTest)
   for (const C of s.pic.cards || []) {
     const uvs = [fuv(C.x0, C.r0), fuv(C.x1, C.r0), fuv(C.x1, C.r1), fuv(C.x0, C.r1)].map(([u, v]) => [u, v]), lay = 500 + C.k;
     out.push({ p: [[C.x0, C.r0, C.z], [C.x1, C.r0, C.z], [C.x1, C.r1, C.z], [C.x0, C.r1, C.z]].map(([x, y, z]) => [x - s.px, y, z]), n: [0, 0, 1], uv: uvs.flat(), layer: lay });
@@ -1312,22 +1312,41 @@ function lpSettle(m) {
 
 // ---- engine/30-render.js
 /* ---------- render: renderer, lights, materials, post pass, camera, time of day (from the diorama kit) ---------- */
+// three.js r186: colours as written, unconverted, before any is made (since r152 three converts hex colours from sRGB to
+// linear; the game's colours and lights were tuned without it, and lin() below squares the ones it wants linear)
+THREE.ColorManagement.enabled = false;
 const canvas = $('gl');
 let renderer = null;
 try { renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, powerPreference: 'high-performance' }); } catch (e) { renderer = null; }
 const scene = new THREE.Scene();
-const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, .6); scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffffff, 1); sun.castShadow = settings.shadows;
+// three r155 dropped the old light units: the same intensity now lights a surface 1/π as bright
+const LIGHT_UNIT = Math.PI;
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, .6 * LIGHT_UNIT); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, LIGHT_UNIT); sun.castShadow = settings.shadows;
 const SHADOW_MAP = window.__shadowMap || (LP ? 2048 : 1024);   // the low-poly page: finer, its picture is finer than an art pixel
 //   // a texel about one art pixel: 2048 looked the same at 4 times the cost
 sun.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP); sun.shadow.autoUpdate = false; sun.shadow.bias = -0.0004;
+// (radius 0: PCF's taps all on the shadow's own point, the hardware's 2×2 filter; above 0 they turn by a screen-space
+// noise, which would crawl as the camera moves)
+sun.shadow.radius = 0;
 scene.add(sun); scene.add(sun.target);
-if (renderer) { renderer.setPixelRatio(1); renderer.shadowMap.enabled = true; renderer.shadowMap.type = LP ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap; renderer.info.autoReset = false; }
+// the low-poly page's shadows: PCF (three r186 removed PCFSoft, which it had)
+if (renderer) { renderer.setPixelRatio(1); renderer.outputColorSpace = THREE.LinearSRGBColorSpace; renderer.shadowMap.enabled = true; renderer.shadowMap.type = LP ? THREE.PCFShadowMap : THREE.BasicShadowMap; renderer.info.autoReset = false; }
+
+// r128's colour path, on which the game's look was tuned: textures stored as they are, decoded from sRGB after the
+// filter, and each material's colour encoded to sRGB as it is written, so the picture blends and filters as stored.
+// r186 does both in hardware instead (sRGB textures and targets), which filters and blends in linear light: texel
+// borders and the lamps' halos came out different. legacy() sets it on the game's own colour materials: VX_SRGB_OUT
+// encodes what the material writes, VX_SRGB_IN decodes its map (not for a map drawn linear, the halo's gradient).
+// r186's two formulas are r128's (tools/test/vendor-three.test.mjs holds the chunks' text this patches)
+THREE.ShaderChunk.map_fragment = THREE.ShaderChunk.map_fragment.replace('diffuseColor *= sampledDiffuseColor;', '#ifdef VX_SRGB_IN\n\tsampledDiffuseColor = sRGBTransferEOTF( sampledDiffuseColor );\n#endif\n\tdiffuseColor *= sampledDiffuseColor;');
+THREE.ShaderChunk.colorspace_fragment = '#ifdef VX_SRGB_OUT\ngl_FragColor = sRGBTransferOETF( gl_FragColor );\n#else\n' + THREE.ShaderChunk.colorspace_fragment + '\n#endif';
+const legacy = (m, mapIsSRGB = true) => { m.defines = Object.assign(m.defines || {}, { VX_SRGB_OUT: '' }, mapIsSRGB ? { VX_SRGB_IN: '' } : {}); return m; };
 
 const nearest = (t) => { t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; };
 let groundTex = null, heightTex = null, atlasTex = null, auxTex = null;   // ground: per area; atlas: once at boot
 function makeAtlasTextures() {
-  atlasTex = new THREE.DataTexture(atlasPx, AW2, AH, THREE.RGBAFormat, THREE.UnsignedByteType); atlasTex.encoding = THREE.sRGBEncoding; atlasFilter();
+  atlasTex = new THREE.DataTexture(atlasPx, AW2, AH, THREE.RGBAFormat, THREE.UnsignedByteType); atlasFilter();   // (sRGB, decoded in the shader: legacy())
   auxTex = nearest(new THREE.DataTexture(auxPx, AW2, AH, THREE.RGBAFormat, THREE.UnsignedByteType)); auxTex.needsUpdate = true;
 }
 
@@ -1337,16 +1356,16 @@ const uGlow = { value: 0 }, uLampCol = { value: new THREE.Vector3() }, diag = { 
 // of its border, where the filter blends the two. Slopes, curves and 45° views drew stair-stepped texel borders that
 // crawled as the view turned; far away, where a texel is under a pixel, it is plain bilinear instead of a flicker.
 // The cut-out (the layer test) still reads the exact texel, so outlines stay hard
-const AA_MAP = '#ifdef USE_MAP\nvec2 vxT = vUv * uAtlas, vxS = floor(vxT + 0.5);\nvxT = vxS + clamp((vxT - vxS) / max(fwidth(vxT), vec2(1e-4)), -0.5, 0.5);\nvec4 texelColor = mapTexelToLinear(texture2D(map, vxT / uAtlas));\ndiffuseColor *= texelColor;\n#endif\n';
+const AA_MAP = '#ifdef USE_MAP\nvec2 vxT = vMapUv * uAtlas, vxS = floor(vxT + 0.5);\nvxT = vxS + clamp((vxT - vxS) / max(fwidth(vxT), vec2(1e-4)), -0.5, 0.5);\nvec4 texelColor = sRGBTransferEOTF(texture2D(map, vxT / uAtlas));\ndiffuseColor *= texelColor;\n#endif\n';
 const aaFilter = (t) => { if (!t) return t; t.magFilter = t.minFilter = diag.aa ? THREE.LinearFilter : THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true; return t; };
 function atlasFilter() { aaFilter(atlasTex); }
 function setAA(on) { diag.aa = !!on; atlasFilter(); for (const m of allMats) { if (m.userData.aa) aaFilter(m.map); m.needsUpdate = true; } }
 const LIGHTS = THREE.ShaderChunk.lights_fragment_begin.split('vDirectionalShadowCoord[ i ]').join('vxShadowCoord');
 // layer CUT (300): discard the pixels the art left empty (aux r is 0 there); other layers: the old depth-layer test
-const LAYER_TEST = 'vec4 vxA = texture2D(uAux, vUv); if (vLayer > 499.5) { if (abs(vxA.a * 255.0 - (754.0 - vLayer)) > 0.5) discard; } else if (vLayer > 399.5) { if (vxA.a < 0.5 / 255.0) discard; } else if (vLayer > 299.5) { if (vxA.r < 0.5 / 255.0) discard; } else if (abs(vLayer) > 0.5 && abs((vLayer < 0.0 ? vxA.g : vxA.r) * 255.0 - abs(vLayer)) > 0.5) discard;';
+const layerTest = (uv) => `vec4 vxA = texture2D(uAux, ${uv}); if (vLayer > 499.5) { if (abs(vxA.a * 255.0 - (754.0 - vLayer)) > 0.5) discard; } else if (vLayer > 399.5) { if (vxA.a < 0.5 / 255.0) discard; } else if (vLayer > 299.5) { if (vxA.r < 0.5 / 255.0) discard; } else if (abs(vLayer) > 0.5 && abs((vLayer < 0.0 ? vxA.g : vxA.r) * 255.0 - abs(vLayer)) > 0.5) discard;`;
 // 'card': the 2D style's cards (engine/34-bake.js), a slab whose texture is the pictures: cut out where their alpha is
 // low, lit at night where it is 200 (a window)
-const CARD_TEST = 'vec4 vxT = texture2D(map, vUv); if (vxT.a < 0.4) discard; vec4 vxA = vec4(0.0, 0.0, vxT.a < 0.9 ? 1.0 : 0.0, 0.0);';
+const cardTest = (uv) => `vec4 vxT = texture2D(map, ${uv}); if (vxT.a < 0.4) discard; vec4 vxA = vec4(0.0, 0.0, vxT.a < 0.9 ? 1.0 : 0.0, 0.0);`;
 function voxelMaterial(kind, o) {
   const ground = kind === 'ground', sprite = kind === 'sprite', card = kind === 'card', slab = kind === 'slab' || card;
   const m = new THREE.MeshPhongMaterial({ color: 0xffffff, specular: 0x000000, shininess: 0, map: ground ? groundTex : sprite ? o.map : card ? cardTexture() : slab ? atlasTex : null, alphaTest: sprite ? .5 : 0 });
@@ -1366,10 +1385,10 @@ function voxelMaterial(kind, o) {
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm;\n' + (ground || sprite ? '' : slab ? 'attribute float aLayer; varying float vLayer; attribute float aLamp; varying float vLamp;' : 'attribute vec4 aCol; varying vec4 vCol; attribute float aLamp; varying float vLamp;'))
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWNrm = normalize(mat3(modelMatrix) * normal);\n' + (ground || sprite ? '' : slab ? 'vLayer = aLayer; vLamp = aLamp;' : 'vCol = aCol; vLamp = aLamp;'));
     let f = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos; varying vec3 vWNrm; uniform mat4 uShadowMat; uniform float uGlow; uniform vec3 uLampCol;\n' + (ground ? 'uniform sampler2D uHeightTex; uniform vec2 uAtlas;' : sprite ? 'uniform vec3 uProbe; uniform vec2 uRow; uniform float uLampL;' : slab ? 'uniform sampler2D uAux; uniform vec2 uAtlas; varying float vLayer; varying float vLamp;' : 'varying vec4 vCol; varying float vLamp;'));
-    f = f.replace('void main() {', 'void main() {\n' + (ground ? 'float vxLamp = texture2D(uHeightTex, vUv).a * 2.0;' : sprite ? 'float vxLamp = uLampL;' : slab ? (card ? CARD_TEST : LAYER_TEST) + ' float vxLamp = vLamp * 2.0;' : 'float vxLamp = vLamp * 2.0;'));
+    f = f.replace('void main() {', 'void main() {\n' + (ground ? 'float vxLamp = texture2D(uHeightTex, vMapUv).g * 2.0;' : sprite ? 'float vxLamp = uLampL;' : slab ? (card ? cardTest('vMapUv') : layerTest('vMapUv')) + ' float vxLamp = vLamp * 2.0;' : 'float vxLamp = vLamp * 2.0;'));
     // a solid surface is opaque even where its texel is not: the post pass shows the sky through any alpha below 1
     if (slab) f = f.replace('#include <map_fragment>', (diag.aa && !card ? AA_MAP : '#include <map_fragment>') + '\ndiffuseColor.a = 1.0;').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vxA.b * uGlow * 1.5;');
-    else if (ground) f = f.replace('#include <map_fragment>', diag.aa ? AA_MAP : '#include <map_fragment>').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * texture2D(uHeightTex, vUv).r * uGlow * 1.6;');
+    else if (ground) f = f.replace('#include <map_fragment>', diag.aa ? AA_MAP : '#include <map_fragment>').replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * texture2D(uHeightTex, vMapUv).r * uGlow * 1.6;');
     else if (!ground && !sprite) f = f.replace('#include <color_fragment>', '#include <color_fragment>\nvec3 vxBase = pow(vCol.rgb, vec3(2.2)); diffuseColor.rgb *= vxBase;')
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vxBase * vCol.a * uGlow * 1.5;');
     // things (slab) cast shadows on the ground but receive none: their shadow lookup falls outside the map, which reads
@@ -1381,26 +1400,30 @@ function voxelMaterial(kind, o) {
       ? f.replace('#include <lights_fragment_begin>', '').replace('#include <lights_fragment_maps>', '').replace('#include <lights_fragment_end>', '').replace(/vec3 outgoingLight = [^;]+;/, 'vec3 outgoingLight = diffuseColor.rgb * 0.8 + totalEmissiveRadiance;')
       : f.replace('#include <lights_fragment_begin>', coord + LIGHTS).replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.directDiffuse += material.diffuseColor * uLampCol * vxLamp;');
   };
-  if ((slab && !card) || ground) { m.extensions = { derivatives: true }; m.userData.aa = true; }   // fwidth, for AA_MAP (WebGL1: OES_standard_derivatives)
+  if ((slab && !card) || ground) m.userData.aa = true;   // fwidth, for AA_MAP (built into WebGL2)
   m.customProgramCacheKey = () => 'vx-' + kind + (diag.flat ? '-flat' : '') + (m.userData.aa && diag.aa ? '-aa' : '');
-  allMats.push(m); m.addEventListener('dispose', () => { const i = allMats.indexOf(m); if (i >= 0) allMats.splice(i, 1); });   // the list for the AA switch, not a hold on freed ones
+  legacy(m); allMats.push(m); m.addEventListener('dispose', () => { const i = allMats.indexOf(m); if (i >= 0) allMats.splice(i, 1); });   // the list for the AA switch, not a hold on freed ones
   return m;
 }
 let matStatic = null, matSlab = null, slabDepth = null, matCard = null, cardDepth = null;
 function makeMaterials() {
   matStatic = voxelMaterial('static'); matSlab = voxelMaterial('slab'); matCard = voxelMaterial('card');
   cardDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: cardTexture(), alphaTest: .5 });
+  // three r186 gives a custom depth material the drawn material's map and alpha test before each shadow draw: the drawn
+  // ones carry what their shadow needs (the card's cut-out, which its alpha set to 1 after the map never shows; the
+  // atlas the 2D style's hidden 3D casters are cut by)
+  matCard.alphaTest = .5; shadowOnly.map = atlasTex;
   slabDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: atlasTex });
   slabDepth.onBeforeCompile = (sh) => {
     sh.uniforms.uAux = { value: auxTex };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aLayer; varying float vLayer;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvLayer = aLayer;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uAux; varying float vLayer;').replace('void main() {', 'void main() {\n' + LAYER_TEST);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uAux; varying float vLayer;').replace('void main() {', 'void main() {\n' + layerTest('vMapUv'));
   };
 }
 
 /* ---------- passata finale: sfondo, antialias leggero, vignettatura ---------- */
 const rt = new THREE.WebGLRenderTarget(4, 4, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, stencilBuffer: false });
-rt.texture.encoding = THREE.sRGBEncoding; rt.texture.generateMipmaps = false;
+rt.texture.generateMipmaps = false;   // (sRGB as the materials wrote it: legacy())
 if (LP) rt.texture.minFilter = rt.texture.magFilter = THREE.NearestFilter;   // the low-poly page: hard pixels
 const postU = { tColor: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uShift: { value: new THREE.Vector2() }, uK: { value: 0 }, uSpread: { value: 1 }, uAspect: { value: 1 }, uTime: { value: 0 }, uStars: { value: 0 }, uAur: { value: 0 }, uAurT: { value: 0 }, uBgTop: { value: new THREE.Vector3() }, uBgBot: { value: new THREE.Vector3() } };
 const postMat = new THREE.ShaderMaterial({
@@ -1456,9 +1479,9 @@ function applyTod(k) {
   const T = TODS[tod];
   for (const key of ['sunI', 'az', 'el', 'hemiI', 'glow', 'lamp', 'stars', 'aur']) cur[key] = lerp(cur[key], T[key], k);
   for (const key of ['sun', 'sky', 'gnd', 'top', 'bot']) for (let i = 0; i < 3; i++) cur[key][i] = lerp(cur[key][i], T[key][i], k);
-  sun.color.setRGB(cur.sun[0], cur.sun[1], cur.sun[2]); sun.intensity = cur.sunI;
+  sun.color.setRGB(cur.sun[0], cur.sun[1], cur.sun[2]); sun.intensity = cur.sunI * LIGHT_UNIT;
   const ce = Math.cos(cur.el); sun.position.set(A.sunX + Math.sin(cur.az) * ce * 48, (A.sunY || 0) + Math.sin(cur.el) * 48, A.sunZ + Math.cos(cur.az) * ce * 48);
-  hemi.color.setRGB(cur.sky[0], cur.sky[1], cur.sky[2]); hemi.groundColor.setRGB(cur.gnd[0], cur.gnd[1], cur.gnd[2]); hemi.intensity = cur.hemiI;
+  hemi.color.setRGB(cur.sky[0], cur.sky[1], cur.sky[2]); hemi.groundColor.setRGB(cur.gnd[0], cur.gnd[1], cur.gnd[2]); hemi.intensity = cur.hemiI * LIGHT_UNIT;
   uGlow.value = cur.glow;
   uLampCol.value.set(cur.lamp, cur.lamp * .663, cur.lamp * .353);
   for (const h of lamps) h.material.opacity = Math.min(1, cur.lamp * .3);
@@ -1535,7 +1558,7 @@ function inView(box, side, far, near) {
 }
 // wireframe (an option): the triangle edges of every 3D thing drawn over it, also those whose pixels the material
 // discards, since they cost the same. Applied to meshes as they are built (chunks, chests) and when the option changes
-const wireMat = new THREE.MeshBasicMaterial({ color: 0xffe14a, wireframe: true, transparent: true, opacity: .85 });
+const wireMat = legacy(new THREE.MeshBasicMaterial({ color: 0xffe14a, wireframe: true, transparent: true, opacity: .85 }));
 function applyWire() {
   scene.traverse((m) => {
     if (!m.isMesh || m.material !== matSlab) return;
@@ -1623,7 +1646,7 @@ const CARD_W = 1024, CARD_H = 1024, cardPx = new Uint8Array(CARD_W * CARD_H * 4)
 let cardTex = null, cardDirty = false;
 // the 2D style's shadow casters: the 3D models, drawn into the shadow map only
 const shadowOnly = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
-const cardTexture = () => { if (!cardTex) { cardTex = nearest(new THREE.DataTexture(cardPx, CARD_W, CARD_H, THREE.RGBAFormat, THREE.UnsignedByteType)); cardTex.encoding = THREE.sRGBEncoding; } return cardTex; };
+const cardTexture = () => { if (!cardTex) { cardTex = nearest(new THREE.DataTexture(cardPx, CARD_W, CARD_H, THREE.RGBAFormat, THREE.UnsignedByteType)); } return cardTex; };   // (sRGB, decoded in the shader: legacy())
 
 const lumOf = (c) => (c >> 16 & 255) * .3 + (c >> 8 & 255) * .59 + (c & 255) * .11;
 const modp = (a, n) => ((Math.floor(a) % n) + n) % n;
@@ -1909,8 +1932,8 @@ function openArea(def) {
     B.bakeLamps(chunkLight); S.bakeLamps(chunkLight);
     const gPack = new Uint8Array(w * h * 2);
     if (near.length) for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) gPack[(z * w + x) * 2 + 1] = Math.min(255, Math.round(chunkLight((x0 + x + .5) * P, hPx(x0 + x, z0 + z) * P, (z0 + z + .5) * P, 0, 1, 0) * 127.5));
-    const gTex = aaFilter(new THREE.CanvasTexture(gCan)); gTex.flipY = false; gTex.encoding = THREE.sRGBEncoding;
-    const hTex = nearest(new THREE.DataTexture(gPack, w, h, THREE.LuminanceAlphaFormat, THREE.UnsignedByteType)); hTex.unpackAlignment = 1; hTex.needsUpdate = true;
+    const gTex = aaFilter(new THREE.CanvasTexture(gCan)); gTex.flipY = false;   // (sRGB, decoded in the shader: legacy())
+    const hTex = nearest(new THREE.DataTexture(gPack, w, h, THREE.RGFormat, THREE.UnsignedByteType)); hTex.unpackAlignment = 1; hTex.needsUpdate = true;   // (red: glow, green: lamps)
     groundTex = gTex; heightTex = hTex; const matGround = voxelMaterial('ground');
     // chunks are culled against the view (one kept off screen costs nothing); the bounds are padded a little
     const cull = (m) => { const g = m.geometry; if (!g.attributes.position || !g.attributes.position.count) { m.visible = false; return m; } g.computeBoundingSphere(); g.boundingSphere.radius += 1; return m; };
@@ -1930,7 +1953,7 @@ function openArea(def) {
     const gg = new THREE.BufferGeometry(), nrm = new Float32Array(pos.length); for (let i = 1; i < nrm.length; i += 3) nrm[i] = 1;
     gg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); gg.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); gg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); gg.setIndex(idx);
     const gm = cull(new THREE.Mesh(gg, matGround)); gm.receiveShadow = true; group.add(gm);
-    const halos = lampSpots.filter((p) => p.x * PPU >= x0 && p.x * PPU < x0 + w && p.z * PPU >= z0 && p.z * PPU < z0 + h).map((p) => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, color: def.halo || 0xff9440, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0 })); s.position.set(p.x, p.y, p.z); s.scale.setScalar(p.r); group.add(s); return s; });
+    const halos = lampSpots.filter((p) => p.x * PPU >= x0 && p.x * PPU < x0 + w && p.z * PPU >= z0 && p.z * PPU < z0 + h).map((p) => { const s = new THREE.Sprite(haloMat(def.halo)); s.position.set(p.x, p.y, p.z); s.scale.setScalar(p.r); group.add(s); return s; });
     const tris = B.tris + S.tris + idx.length / 3;
     S = prevS; B = prevB;
     return {
@@ -2026,6 +2049,9 @@ function propMesh(items) {
 
 // halo texture for lamps: built once
 const haloTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'), g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(.25, 'rgba(255,255,255,.45)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
+// a lamp's halo, added to the picture as r128 added it: alpha too by its own alpha (r186's additive adds alpha whole,
+// and the post pass reads alpha), its gradient drawn as stored and encoded on the way out like the rest (legacy)
+const haloMat = (c) => legacy(new THREE.SpriteMaterial({ map: haloTex, color: c || 0xff9440, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.SrcAlphaFactor, blendDstAlpha: THREE.OneFactor, depthWrite: false, transparent: true, opacity: 0 }), false);
 
 // ---- engine/50-actors.js
 /* ---------- actors: flat figures from a frame atlas, always facing the camera, feet on the ground ---------- */
@@ -2033,12 +2059,15 @@ const haloTex = (() => { const c = document.createElement('canvas'); c.width = c
 // anims: { name: [frames] or { down: [..], up: [..], side: [..] } }; a frame is a name inside the view's row or a full
 // 'row.frame'. idle and walk are required; a.anim (with a.at, seconds into it, and a.fps) plays any other one.
 const actors = [];
-const casterMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide });
+// a figure's shadow caster, drawn invisible: it carries its sheet and cut-out because three r186 gives the caster's
+// depth material the drawn material's map and alpha test before each shadow draw (one per sheet, as the textures)
+const casterMats = {};
+const casterMat = (sheet, tex) => casterMats[sheet] || (casterMats[sheet] = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide, map: tex, alphaTest: .5 }));
 
 // one texture per sheet for all its figures (each figure once uploaded its own copy of the whole sheet)
 const sheetTexs = {};
 function sheetTex(sheet) {
-  if (!sheetTexs[sheet]) { const t = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet))); t.encoding = THREE.sRGBEncoding; sheetTexs[sheet] = t; }
+  if (!sheetTexs[sheet]) { const t = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet))); sheetTexs[sheet] = t; }   // (sRGB, decoded in the shader)
   return sheetTexs[sheet];
 }
 // a frame of the sheet on a figure's plane (PlaneGeometry's corners: top left, top right, bottom left, bottom right)
@@ -2057,7 +2086,7 @@ function sheetActor(sheet, views, anims, o) {
   const gl = g.clone(), n = gl.attributes.normal; for (let i = 0; i < n.count; i++) n.setXYZ(i, 0, 1, 0);   // normal up: light does not change when the view turns
   a.mesh = new THREE.Mesh(gl, voxelMaterial('sprite', { map: a.tex, probe: a.probe, lampL: a.lampL, row: new THREE.Vector2(SPR_Y * P, P) }));
   a.mesh.material.side = THREE.DoubleSide; a.mesh.receiveShadow = true;
-  a.caster = new THREE.Mesh(g, casterMat); a.caster.castShadow = true;
+  a.caster = new THREE.Mesh(g, casterMat(sheet, a.tex)); a.caster.castShadow = true;
   a.caster.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: a.tex, alphaTest: .5, side: THREE.DoubleSide });
   scene.add(a.mesh); scene.add(a.caster);
 
@@ -2092,8 +2121,8 @@ function sheetActor(sheet, views, anims, o) {
 const flats = [], flatTex = {};
 const flatMat = (sheet) => {
   if (flatTex[sheet]) return flatTex[sheet];
-  const t = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet))); t.encoding = THREE.sRGBEncoding;
-  return (flatTex[sheet] = new THREE.MeshBasicMaterial({ map: t, alphaTest: .5, side: THREE.DoubleSide }));
+  const t = nearest(new THREE.CanvasTexture(lpSheetCanvas(sheet)));   // (sRGB, decoded in the shader: legacy())
+  return (flatTex[sheet] = legacy(new THREE.MeshBasicMaterial({ map: t, alphaTest: .5, side: THREE.DoubleSide })));
 };
 
 function flat(sheet, frames, x, z, o) {
@@ -3684,7 +3713,7 @@ function draw(dt) {
   applyTod(1 - Math.exp(-dt * 2.2)); if (G && ui.screen === 'game') playTrack(areaTrack()); flatsDraw(dt); chestsTick(dt); floatsDraw(dt); hudDraw(); bossDraw(); toastTick(dt); musicTick();
   // a failing ship's lights (an area's "flicker"): the sun, the lamps and their halos dimmed together by lampFlicker;
   // none for a player who asked for less motion (the system's setting, or screen shake turned off)
-  if (A && A.def.flicker && !reduceMotion && settings.shake !== false) { const f = lampFlicker(time); sun.intensity = cur.sunI * f; uLampCol.value.set(cur.lamp * f, cur.lamp * .663 * f, cur.lamp * .353 * f); for (const h of lamps) h.material.opacity = Math.min(1, cur.lamp * f * .3); }
+  if (A && A.def.flicker && !reduceMotion && settings.shake !== false) { const f = lampFlicker(time); sun.intensity = cur.sunI * f * LIGHT_UNIT; uLampCol.value.set(cur.lamp * f, cur.lamp * .663 * f, cur.lamp * .353 * f); for (const h of lamps) h.material.opacity = Math.min(1, cur.lamp * f * .3); }
   // the shadow map is redrawn when what casts a shadow changed: a figure moved or showed another frame (castersSig), the
   // view turned, the sun moved, a chest's lid swung (chestsTick). It was redrawn every frame while any enemy, pickup or
   // dialogue existed, still or not
@@ -3739,7 +3768,7 @@ const qaFlat = (c) => new THREE.MeshBasicMaterial({ color: c });
 const qaId = (c) => new THREE.ShaderMaterial({
   uniforms: { uCol: { value: new THREE.Color(c) }, uAux: { value: auxTex } },
   vertexShader: 'attribute float aLayer; varying float vLayer; varying vec2 vUv; void main(){ vLayer = aLayer; vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: 'uniform vec3 uCol; uniform sampler2D uAux; varying float vLayer; varying vec2 vUv; void main(){ ' + LAYER_TEST + ' gl_FragColor = vec4(uCol, 1.0); }',
+  fragmentShader: 'uniform vec3 uCol; uniform sampler2D uAux; varying float vLayer; varying vec2 vUv; void main(){ ' + layerTest('vUv') + ' gl_FragColor = vec4(uCol, 1.0); }',
 });
 const qaHole = new THREE.ShaderMaterial({
   side: THREE.DoubleSide,
@@ -3751,7 +3780,7 @@ const qaHole = new THREE.ShaderMaterial({
   // A face seen from behind is red at full, its world x and z (around the camera's target, ±32) in green and blue: the
   // check names the thing nearest to the hole in the world, not on screen
   vertexShader: 'attribute float aLayer; varying float vLayer; varying vec2 vUv; varying vec3 vN; varying vec3 vW; void main(){ vLayer = aLayer; vUv = uv; vN = normalize(mat3(modelMatrix) * normal); vW = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: 'uniform vec3 uView; uniform vec2 uC; uniform sampler2D uAux; varying float vLayer; varying vec2 vUv; varying vec3 vN; varying vec3 vW; void main(){ ' + LAYER_TEST + ' gl_FragColor = (dot(vN, uView) > -0.05 || vLayer > 299.5) ? vec4(0.5, 0.5, 0.5, 1.0) : vec4(1.0, clamp((vW.x - uC.x) / 64.0 + 0.5, 0.0, 1.0), clamp((vW.z - uC.y) / 64.0 + 0.5, 0.0, 1.0), 1.0); }',
+  fragmentShader: 'uniform vec3 uView; uniform vec2 uC; uniform sampler2D uAux; varying float vLayer; varying vec2 vUv; varying vec3 vN; varying vec3 vW; void main(){ ' + layerTest('vUv') + ' gl_FragColor = (dot(vN, uView) > -0.05 || vLayer > 299.5) ? vec4(0.5, 0.5, 0.5, 1.0) : vec4(1.0, clamp((vW.x - uC.x) / 64.0 + 0.5, 0.0, 1.0), clamp((vW.z - uC.y) / 64.0 + 0.5, 0.0, 1.0), 1.0); }',
 });
 function qaRender(assign) {
   const swaps = [], hidden = [];
