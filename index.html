@@ -41,7 +41,7 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 @media (pointer:coarse){#bossBar{bottom:auto;top:calc(96px + env(safe-area-inset-top))}}
 #floats{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .float{position:absolute;left:0;top:0;font-family:var(--display);font-size:16px;font-weight:600;color:#fff;text-shadow:0 2px 0 #000,1px 0 0 #000,-1px 0 0 #000;white-space:nowrap}
-.float.bad{color:#ff7a6e}.float.gold{color:var(--amber)}.float.heal{color:#8be08b}.float.ink{color:#9bb5ff}.float.dim{color:var(--dim);font-size:13px}
+.float.bad{color:#ff7a6e}.float.gold{color:var(--amber)}.float.heal{color:#8be08b}.float.ink{color:#9bb5ff}.float.dim{color:var(--dim);font-size:13px}.float.crit{color:#ffd75e;font-size:24px}#hAmmo{letter-spacing:1px;color:var(--amber)}
 #dialog{position:absolute;left:50%;bottom:calc(52px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(600px,calc(100% - 24px));box-sizing:border-box;padding:12px 14px;background:var(--panel);border:1px solid var(--line);cursor:pointer;display:flex;gap:12px;align-items:flex-start}
 #dPic{width:72px;height:auto;image-rendering:pixelated;border:1px solid var(--line);background:#0c0a12;flex:none}
 #dialog div{flex:1;min-width:0}
@@ -51,7 +51,9 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 #dChoices{margin-top:8px}
 #dChoices.keypad{display:grid;grid-template-columns:repeat(3,3.4em);gap:6px}
 #dChoices.keypad button{padding:8px 0;font-size:16px}
-.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(23,18,28,.86);padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));box-sizing:border-box;text-align:center;overflow:auto}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;background:rgba(23,18,28,.86);padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));box-sizing:border-box;text-align:center;overflow:auto}
+/* centred while it fits, scrolled from its top when it does not (justify-content:center cut a tall screen's top off, out of the scroll's reach): two empty ends share the free space, their gaps taken back */
+.screen::before,.screen::after{content:'';flex:1 0 0}.screen::before{margin-bottom:-12px}.screen::after{margin-top:-12px}
 .screen h1{margin:0;font-family:var(--display);font-size:clamp(28px,7vw,56px);line-height:1;text-shadow:0 3px 0 rgba(0,0,0,.6)}
 .screen .sub{margin:0 0 10px;color:var(--dim);font-size:13px}
 .screen .col{display:flex;flex-direction:column;gap:8px;min-width:220px}
@@ -97,6 +99,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
   #bDash{right:84px;bottom:66px;width:52px;height:52px}
   #bWell{right:22px;bottom:110px;width:48px;height:48px}
   #bScan{right:150px;bottom:22px;width:48px;height:48px}
+  #bQuill{right:150px;bottom:22px;width:48px;height:48px}
   #hint{display:none}
   #dialog{bottom:calc(196px + env(safe-area-inset-bottom))}
 }
@@ -114,7 +117,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
       <div id="hud" hidden>
         <span data-t="hud.hp">Health</span><span class="bar"><i id="hpBar"></i></span><span id="hpNum"></span>
         <span data-t="hud.ink">Ink</span><span class="bar"><i id="inkBar"></i></span><span id="inkNum"></span>
-        <span class="tags"><span id="hLv"></span><span id="hCoins"></span></span>
+        <span class="tags"><span id="hLv"></span><span id="hCoins"></span><span id="hAmmo" hidden></span></span>
       </div>
     </div>
     <div class="topBtns"><button type="button" id="styleBtn">3D</button><button type="button" data-action="menu" data-t="btn.menu">Menu</button></div>
@@ -130,6 +133,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
       <button type="button" id="bDash" data-action="skill1" data-t="btn.dash" hidden>Dash</button>
       <button type="button" id="bWell" data-action="skill2" data-t="btn.well" hidden>Well</button>
       <button type="button" id="bScan" data-action="skill3" data-t="btn.scan" hidden>Scan</button>
+      <button type="button" id="bQuill" data-action="quill" data-t="btn.quill" hidden>Quill</button>
     </div>
   </div>
   <div id="title" class="screen" hidden>
@@ -171,6 +175,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
           <span data-t="opt.music">Music</span><div class="seg" id="optMusic"><button type="button" data-v="0" data-t="opt.off">Off</button><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button></div>
           <span data-t="opt.sound">Effects</span><div class="seg" id="optSound"><button type="button" data-v="0" data-t="opt.off">Off</button><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button></div>
           <span data-t="opt.shake">Screen shake</span><div class="seg" id="optShake"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+          <span data-t="opt.atmos">Atmosphere</span><div class="seg" id="optAtmos"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
           <span data-t="opt.shadows">Shadows</span><div class="seg" id="optShadows"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
           <span data-t="opt.style">Style</span><div class="seg" id="optStyle"><button type="button" data-v="diorama">3D</button><button type="button" data-v="flat">2D</button></div>
           <span data-t="opt.wire">Wireframe</span><div class="seg" id="optWire"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
