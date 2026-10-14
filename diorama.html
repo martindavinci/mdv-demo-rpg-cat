@@ -30,7 +30,7 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 #hud .bar{height:9px;background:rgba(0,0,0,.55);border:1px solid var(--line)}
 #hud .bar i{display:block;height:100%;transition:width .15s}
 #hpBar{background:var(--hp)}#inkBar{background:var(--inkc)}
-#hud .tags{grid-column:1/4;display:flex;gap:10px;color:var(--amber)}
+#hud .tags{grid-column:1/4;display:flex;gap:10px;color:var(--amber)}#hFps{grid-column:1/4;color:var(--dim);font-size:11px}
 #hint{position:absolute;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));width:fit-content;max-width:calc(100% - 24px);margin:0 auto;padding:6px 12px;background:var(--panel);border:1px solid var(--line);color:var(--dim);font-size:11px;text-align:center;pointer-events:none}
 #toast{position:absolute;top:calc(56px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);padding:8px 14px;background:var(--panel);border:1px solid var(--amber);font-family:var(--display);font-size:14px;pointer-events:none;white-space:nowrap;max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis}
 #bossBar{position:absolute;left:50%;bottom:calc(64px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(520px,calc(100% - 32px));text-align:center;pointer-events:none}
@@ -118,6 +118,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
         <span data-t="hud.hp">Health</span><span class="bar"><i id="hpBar"></i></span><span id="hpNum"></span>
         <span data-t="hud.ink">Ink</span><span class="bar"><i id="inkBar"></i></span><span id="inkNum"></span>
         <span class="tags"><span id="hLv"></span><span id="hCoins"></span><span id="hAmmo" hidden></span></span>
+        <span id="hFps" hidden></span>
       </div>
     </div>
     <div class="topBtns"><button type="button" id="styleBtn">3D</button><button type="button" data-action="menu" data-t="btn.menu">Menu</button></div>
@@ -177,6 +178,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
           <span data-t="opt.shake">Screen shake</span><div class="seg" id="optShake"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
           <span data-t="opt.atmos">Atmosphere</span><div class="seg" id="optAtmos"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
           <span data-t="opt.shadows">Shadows</span><div class="seg" id="optShadows"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
+          <span data-t="opt.showfps">Show FPS</span><div class="seg" id="optShowFps"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
           <span data-t="opt.style">Style</span><div class="seg" id="optStyle"><button type="button" data-v="diorama">3D</button><button type="button" data-v="flat">2D</button></div>
           <span data-t="opt.wire">Wireframe</span><div class="seg" id="optWire"><button type="button" data-v="on" data-t="opt.on">On</button><button type="button" data-v="off" data-t="opt.off">Off</button></div>
         </div>
