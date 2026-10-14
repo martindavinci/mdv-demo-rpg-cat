@@ -1,0 +1,5 @@
+# every text file LF in the index and on disk, whatever core.autocrlf says (it is true on this Windows machine)
+* text=auto eol=lf
+*.png binary
+*.webp binary
+*.woff2 binary
