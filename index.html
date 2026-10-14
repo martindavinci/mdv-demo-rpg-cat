@@ -13,8 +13,8 @@
 [hidden]{display:none!important}
 body:not(.playing) .top,body:not(.playing) #hint,body:not(.playing) #touch{display:none}
 html,body{height:100%;margin:0}
-body{background:var(--void);color:var(--ink);font-family:var(--mono);font-size:12px;overflow:hidden}
-#stage{position:fixed;inset:0;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+body{background:var(--void);color:var(--ink);font-family:var(--mono);font-size:12px;overflow:hidden;font-variant-ligatures:none}
+#stage{position:fixed;inset:0;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #gl{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}
 button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-bottom-width:3px;padding:8px 12px;cursor:pointer;line-height:1.2;min-height:40px}
 button:hover:not([disabled]){border-color:var(--amber)}
@@ -41,7 +41,7 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 @media (pointer:coarse){#bossBar{bottom:auto;top:calc(96px + env(safe-area-inset-top))}}
 #floats{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .float{position:absolute;left:0;top:0;font-family:var(--display);font-size:16px;font-weight:600;color:#fff;text-shadow:0 2px 0 #000,1px 0 0 #000,-1px 0 0 #000;white-space:nowrap}
-.float.bad{color:#ff7a6e}.float.gold{color:var(--amber)}.float.heal{color:#8be08b}.float.ink{color:#9bb5ff}.float.dim{color:var(--dim);font-size:13px}.float.crit{color:#ffd75e;font-size:24px}#hAmmo{letter-spacing:1px;color:var(--amber)}
+.float.mark{color:var(--amber);font-size:34px;font-weight:700;text-shadow:0 2px 0 #000,2px 0 0 #000,-2px 0 0 #000,0 -2px 0 #000}.float.bad{color:#ff7a6e}.float.gold{color:var(--amber)}.float.heal{color:#8be08b}.float.ink{color:#9bb5ff}.float.dim{color:var(--dim);font-size:13px}.float.crit{color:#ffd75e;font-size:24px}#hAmmo{letter-spacing:1px;color:var(--amber)}
 #dialog{position:absolute;left:50%;bottom:calc(52px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(600px,calc(100% - 24px));box-sizing:border-box;padding:12px 14px;background:var(--panel);border:1px solid var(--line);cursor:pointer;display:flex;gap:12px;align-items:flex-start}
 #dPic{width:72px;height:auto;image-rendering:pixelated;border:1px solid var(--line);background:#0c0a12;flex:none}
 #dialog div{flex:1;min-width:0}
