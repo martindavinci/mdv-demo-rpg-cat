@@ -104,7 +104,15 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
   #dialog{bottom:calc(196px + env(safe-area-inset-bottom))}
 }
 @media (pointer:coarse) and (orientation:landscape){#dialog{bottom:calc(12px + env(safe-area-inset-bottom));width:min(520px,calc(100% - 380px))}}
-@media (prefers-reduced-motion:reduce){#fade,#hud .bar i{transition:none}}
+/* a dialogue's moving words (engine/70-ui.js writeFx): each letter its own beat, a word never split across lines */
+#dText .fxw{white-space:nowrap}#dText .fx{display:inline-block;white-space:pre}
+#dText .fx-shake{animation:fxShake .2s steps(2,end) infinite;animation-delay:calc(var(--i) * -53ms)}
+#dText .fx-quake{color:var(--amber);animation:fxQuake .12s steps(2,end) infinite;animation-delay:calc(var(--i) * -31ms)}
+#dText .fx-wave{animation:fxWave 1.1s ease-in-out infinite;animation-delay:calc(var(--i) * -90ms)}
+@keyframes fxShake{0%{transform:translate(0,0)}25%{transform:translate(1px,-1px)}50%{transform:translate(-1px,1px)}75%{transform:translate(1px,0)}}
+@keyframes fxQuake{0%{transform:translate(0,0) scale(1.15)}25%{transform:translate(2px,-2px) scale(1.15)}50%{transform:translate(-2px,1px) scale(1.15)}75%{transform:translate(1px,2px) scale(1.15)}}
+@keyframes fxWave{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@media (prefers-reduced-motion:reduce){#fade,#hud .bar i{transition:none}#dText .fx{animation:none}}
 @media (max-width:520px){.top h2{font-size:16px}#hud{grid-template-columns:auto 84px auto}}
 </style>
 </head>
