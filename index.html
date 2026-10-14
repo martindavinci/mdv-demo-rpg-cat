@@ -32,7 +32,7 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 #hpBar{background:var(--hp)}#inkBar{background:var(--inkc)}
 #hud .tags{grid-column:1/4;display:flex;gap:10px;color:var(--amber)}#hFps{grid-column:1/4;color:var(--dim);font-size:11px}
 #hint{position:absolute;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));width:fit-content;max-width:calc(100% - 24px);margin:0 auto;padding:6px 12px;background:var(--panel);border:1px solid var(--line);color:var(--dim);font-size:11px;text-align:center;pointer-events:none}
-#toast{position:absolute;top:calc(56px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);padding:8px 14px;background:var(--panel);border:1px solid var(--amber);font-family:var(--display);font-size:14px;pointer-events:none;white-space:nowrap;max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis}
+#toast{position:absolute;top:calc(56px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);padding:8px 14px;background:var(--panel);border:1px solid var(--amber);font-family:var(--display);font-size:14px;pointer-events:none;width:max-content;max-width:calc(100% - 24px);box-sizing:border-box;text-align:center}
 #bossBar{position:absolute;left:50%;bottom:calc(64px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(520px,calc(100% - 32px));text-align:center;pointer-events:none}
 #bossBar b{display:block;font-family:var(--display);font-size:15px;color:var(--ink);text-shadow:0 2px 0 #000;margin-bottom:4px}
 #bossBar .bar{position:relative;display:block;height:12px;background:rgba(0,0,0,.6);border:1px solid var(--line)}
