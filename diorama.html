@@ -107,8 +107,9 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
 /* a dialogue's moving words (engine/70-ui.js writeFx): each letter its own beat, a word never split across lines */
 #dText .fxw{white-space:nowrap}#dText .fx{display:inline-block;white-space:pre}
 #dText .fx-shake{animation:fxShake .2s steps(2,end) infinite;animation-delay:calc(var(--i) * -53ms)}
-#dText .fx-quake{color:var(--amber);animation:fxQuake .12s steps(2,end) infinite;animation-delay:calc(var(--i) * -31ms)}
-#dText .fx-wave{animation:fxWave 1.1s ease-in-out infinite;animation-delay:calc(var(--i) * -90ms)}
+#dText .fx-quake{color:var(--amber);animation:fxQuake .16s steps(2,end) infinite;animation-delay:calc(var(--i) * -41ms)}
+#dText .fx-key{color:#ffe08a}
+#dText .fx-wave{animation:fxWave 1s ease-in-out infinite;animation-delay:calc(var(--i) * -82ms)}
 @keyframes fxShake{0%{transform:translate(0,0)}25%{transform:translate(1px,-1px)}50%{transform:translate(-1px,1px)}75%{transform:translate(1px,0)}}
 @keyframes fxQuake{0%{transform:translate(0,0) scale(1.15)}25%{transform:translate(2px,-2px) scale(1.15)}50%{transform:translate(-2px,1px) scale(1.15)}75%{transform:translate(1px,2px) scale(1.15)}}
 @keyframes fxWave{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
