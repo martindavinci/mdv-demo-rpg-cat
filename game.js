@@ -5495,10 +5495,12 @@ LP_MODELS.cypress = () => {
   m.face(Array.from({ length: n }, (_, k) => { const t = k / n * Math.PI * 2; return [Math.sin(t) * 4, 5, Math.cos(t) * 4]; }), LPC.cypressDk, { from: [0, 20, 0] });
   return m;
 };
+// seven smaller clumps, each once subdivided, the flowers bare icosahedra: a lumpier outline at 640 faces (four big clumps
+// twice subdivided were 1,599, as much as a house, and 21 of them stood in the village)
 LP_MODELS.bush = () => {
   const m = new LPM(), L = lpLeaf(0, 36, LPC.leafLt, LPC.leaf, LPC.leafDk);
-  for (const [x, y, z, r, s] of [[-12, 13, 2, 14, 1], [11, 12, -2, 15, 2], [0, 20, 0, 15, 3], [-2, 11, 9, 11, 4]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 17, sy: .85, jit: .16, col: L, flat: 0, facet: 1 });
-  for (const [x, y, z, c] of [[-14, 22, 10, 0xf4efe6], [6, 26, 8, 0xe9a3b6], [14, 18, 9, 0xf4efe6], [-4, 29, 3, 0xe9a3b6]]) m.blob(x, y, z, 1.4, c, { seed: x + 40, jit: .1 });
+  for (const [x, y, z, r, s] of [[-14, 11, 2, 10, 1], [-5, 15, -4, 11, 2], [7, 13, -3, 11, 3], [15, 10, 2, 9, 4], [-6, 22, 3, 10, 5], [6, 23, 2, 10, 6], [0, 10, 9, 9, 7]]) m.blob(x, y, z, r, LPC.leaf, { seed: s * 17, sy: .85, jit: .2, col: L, flat: 0, facet: 1, sub: 1 });
+  for (const [x, y, z, c] of [[-14, 19, 10, 0xf4efe6], [6, 30, 8, 0xe9a3b6], [14, 17, 9, 0xf4efe6], [-4, 30, 6, 0xe9a3b6]]) m.blob(x, y, z, 1.4, c, { seed: x + 40, jit: .1, sub: 0 });
   return m;
 };
 // (a clump of leaves once subdivided, a bunch of grapes a bare icosahedron: at twice, 3,905 faces a row, more than a house,
