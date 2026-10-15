@@ -1644,10 +1644,26 @@ function setCamera() {
   cam.top = v / 2; cam.bottom = -v / 2; cam.right = v / 2 * aspect; cam.left = -cam.right; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
 }
 
+// a phone showing the page as a desktop site lays it out about 980 px wide and shrinks it to fit the screen: the HUD came
+// out at 40%, and the picture was drawn at six times the pixels the screen has (the owner's phone fell to 29 fps). The
+// stage is then laid out at the phone's own width and enlarged back, so everything in it is as on the phone (pageS: the
+// page's shrink, read off the browser's zoom and the screen's width; 1 everywhere else). The shell's widths are the
+// stage's (container units and queries), not the page's
+let pageS = 1;
+function fitStage() {
+  const vv = window.visualViewport, touch = matchMedia('(pointer:coarse)').matches;
+  const s = Math.min(1, vv && vv.scale > 0 ? vv.scale : 1, touch && screen.width > 0 ? screen.width / innerWidth : 1);
+  pageS = s > .85 ? 1 : s;
+  const st = document.getElementById('stage').style, on = pageS < 1;
+  st.transformOrigin = on ? '0 0' : ''; st.transform = on ? `scale(${1 / pageS})` : '';
+  st.right = st.bottom = on ? 'auto' : ''; st.width = on ? innerWidth * pageS + 'px' : ''; st.height = on ? innerHeight * pageS + 'px' : '';
+}
+
 let quality = 1, bw = 0, bh = 0;
 function resize() {
   if (!renderer) return;
-  const r = canvas.getBoundingClientRect(); if (r.width < 2 || r.height < 2) return;
+  // (the canvas's size inside the stage: on a shrunk page its box on the page is the stage's enlargement of it)
+  const b = canvas.getBoundingClientRect(), r = { width: b.width * pageS, height: b.height * pageS }; if (r.width < 2 || r.height < 2) return;
   // (the screen's own density, up to 3: capped at 2, a 2.75 phone got a canvas the browser stretched by 1.375 and the art's
   // pixels came out one or two screen pixels wide by turns; the picture keeps its ~600 rows, only the last pass grows)
   const dpr = Math.min(window.devicePixelRatio || 1, 3) * quality; bw = Math.max(2, Math.round(r.width * dpr)); bh = Math.max(2, Math.round(r.height * dpr));
@@ -2382,7 +2398,7 @@ function floatText(text, x, y, z, cls) {
 }
 const _v = new THREE.Vector3();
 function floatsDraw(dt) {
-  const r = canvas.getBoundingClientRect();
+  const r = { width: canvas.clientWidth, height: canvas.clientHeight };   // (inside the stage, as the floats are placed)
   for (let k = floats.length - 1; k >= 0; k--) {
     const f = floats[k]; f.t += dt;
     if (f.t > .9) { f.el.remove(); floats.splice(k, 1); continue; }
@@ -3930,7 +3946,7 @@ function marksNow() {
 const _mv = new THREE.Vector3();
 function marksDraw() {
   if (!A || !G) return;
-  const on = ui.screen === 'game' && !dlg, w = on && questWants(), r = canvas.getBoundingClientRect();
+  const on = ui.screen === 'game' && !dlg, w = on && questWants(), r = { width: canvas.clientWidth, height: canvas.clientHeight };
   for (const a of A.acts) {
     const show = on && markedNow(a, w);
     let el = marks.get(a);
@@ -4423,7 +4439,7 @@ let toastT = 0;
 function toast(text) {
   const el = $('toast'), top = document.querySelector('.top'), r = top && top.getBoundingClientRect();
   el.textContent = text; el.hidden = false; toastT = Math.max(2.6, text.length / 15);
-  el.style.top = r && r.height ? Math.round(r.bottom - 4) + 'px' : '';
+  el.style.top = r && r.height ? Math.round(r.bottom * pageS - 4) + 'px' : '';   // (inside the stage: engine/30-render.js fitStage)
 }
 function toastTick(dt) { if (toastT > 0 && (toastT -= dt) <= 0) $('toast').hidden = true; }
 
@@ -6817,6 +6833,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   // the game's data (content/**/*.json, compiled into the registries after the plugins): a problem the build let
   // through stops here, listed on the page instead of a half-loaded game
   // the chapter this page plays (engine/66-chapters.js): the title's choice from the address, else the last played
+  fitStage(); addEventListener('resize', fitStage); if (window.visualViewport) visualViewport.addEventListener('resize', fitStage);
   const next = takeNext(location, history, window);
   CHAPTER_ID = pickChapter(next, STYLE);
   try { loadGameData(chapterFiles(GAME_DATA, CHAPTER_ID)); } catch (e) { $('fallback').textContent = e.message; $('fallback').hidden = false; return; }
@@ -6857,7 +6874,7 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
   // drag turns the view, the wheel zooms (as in the dioramas)
   let drag = null;
   canvas.addEventListener('pointerdown', (e) => { drag = { id: e.pointerId, x: e.clientX }; canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); });
-  canvas.addEventListener('pointermove', (e) => { if (!drag || drag.id !== e.pointerId) return; const dx = e.clientX - drag.x; drag.x = e.clientX; if (settings.flat) return; yawT -= dx * .007; yaw = yawT; });
+  canvas.addEventListener('pointermove', (e) => { if (!drag || drag.id !== e.pointerId) return; const dx = e.clientX - drag.x; drag.x = e.clientX; if (settings.flat) return; yawT -= dx * pageS * .007; yaw = yawT; });
   const endDrag = (e) => { if (drag && drag.id === e.pointerId) { drag = null; yawT = Math.round(yawT / TURN) * TURN; } };
   canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); VT = clamp(VT * Math.exp(e.deltaY * .0012), 7, 26); }, { passive: false });

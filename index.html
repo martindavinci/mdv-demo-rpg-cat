@@ -14,7 +14,7 @@
 body:not(.playing) .top,body:not(.playing) #hint,body:not(.playing) #touch{display:none}
 html,body{height:100%;margin:0}
 body{background:var(--void);color:var(--ink);font-family:var(--mono);font-size:12px;overflow:hidden;font-variant-ligatures:none}
-#stage{position:fixed;inset:0;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#stage{position:fixed;inset:0;container-type:size;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #gl{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none}
 button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-bottom-width:3px;padding:8px 12px;cursor:pointer;line-height:1.2;min-height:40px}
 button:hover:not([disabled]){border-color:var(--amber)}
@@ -54,10 +54,10 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 .screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;background:rgba(23,18,28,.86);padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));box-sizing:border-box;text-align:center;overflow:auto}
 /* centred while it fits, scrolled from its top when it does not (justify-content:center cut a tall screen's top off, out of the scroll's reach): two empty ends share the free space, their gaps taken back */
 .screen::before,.screen::after{content:'';flex:1 0 0}.screen::before{margin-bottom:-12px}.screen::after{margin-top:-12px}
-.screen h1{margin:0;font-family:var(--display);font-size:clamp(28px,7vw,56px);line-height:1;text-shadow:0 3px 0 rgba(0,0,0,.6)}
+.screen h1{margin:0;font-family:var(--display);font-size:clamp(28px,7cqw,56px);line-height:1;text-shadow:0 3px 0 rgba(0,0,0,.6)}
 .screen .sub{margin:0 0 10px;color:var(--dim);font-size:13px}
 .screen .col{display:flex;flex-direction:column;gap:8px;min-width:220px}
-#titleArt{width:min(560px,92vw);height:auto;image-rendering:pixelated}
+#titleArt{width:min(560px,92cqw);height:auto;image-rendering:pixelated}
 .chlist{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;max-width:min(760px,100%)}
 .chcard{display:flex;flex-direction:column;gap:6px;width:min(340px,100%);text-align:left;padding:10px;box-sizing:border-box;background:var(--panel);border:1px solid var(--line)}
 .chcard .row{display:flex;gap:8px;flex-wrap:wrap}
@@ -113,7 +113,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
 @keyframes fxQuake{0%{transform:translate(0,0) scale(1.15)}25%{transform:translate(2px,-2px) scale(1.15)}50%{transform:translate(-2px,1px) scale(1.15)}75%{transform:translate(1px,2px) scale(1.15)}}
 @keyframes fxWave{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
 @media (prefers-reduced-motion:reduce){#fade,#hud .bar i{transition:none}#dText .fx{animation:none}}
-@media (max-width:520px){.top h2{font-size:16px}#hud{grid-template-columns:auto 84px auto}}
+@container (max-width:520px){.top h2{font-size:16px}#hud{grid-template-columns:auto 84px auto}}
 </style>
 </head>
 <body>
