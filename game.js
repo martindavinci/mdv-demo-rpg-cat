@@ -1456,7 +1456,7 @@ const rt = new THREE.WebGLRenderTarget(4, 4, { minFilter: THREE.LinearFilter, ma
 rt.texture.generateMipmaps = false;   // (sRGB as the materials wrote it: legacy())
 if (LP) rt.texture.minFilter = rt.texture.magFilter = THREE.NearestFilter;   // the low-poly page: hard pixels
 const postU = { tColor: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uShift: { value: new THREE.Vector2() }, uK: { value: 0 }, uSpread: { value: 1 }, uAspect: { value: 1 }, uTime: { value: 0 }, uStars: { value: 0 }, uAur: { value: 0 }, uAurT: { value: 0 }, uBgTop: { value: new THREE.Vector3() }, uBgBot: { value: new THREE.Vector3() },
-  tBlur: { value: null }, uHD: { value: 0 }, uBloom: { value: 0 }, uHaze: { value: 0 }, uThr: { value: .35 }, uSat: { value: 1.1 }, uDim: { value: 1 }, uKick: { value: 0 } };   // (the atmosphere: engine/36-look.js)
+  tBlur: { value: null }, uHD: { value: 0 }, uBloom: { value: 0 }, uHaze: { value: 0 }, uThr: { value: .35 }, uSat: { value: 1.1 }, uDim: { value: 1 }, uKick: { value: 0 }, uPool: { value: 0 }, uPoolC: { value: new THREE.Vector2(.5, .5) } };   // (the atmosphere: engine/36-look.js)
 const postMat = new THREE.ShaderMaterial({
   uniforms: postU, depthTest: false, depthWrite: false,
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
@@ -1464,7 +1464,7 @@ const postMat = new THREE.ShaderMaterial({
     precision highp float;
     uniform sampler2D tColor; uniform vec2 uTexel, uShift; uniform float uK, uSpread, uAspect, uTime, uStars, uAur, uAurT;
     uniform vec3 uBgTop, uBgBot; varying vec2 vUv;
-    uniform sampler2D tBlur; uniform float uHD, uBloom, uHaze, uThr, uSat, uDim, uKick;
+    uniform sampler2D tBlur; uniform float uHD, uBloom, uHaze, uThr, uSat, uDim, uKick, uPool; uniform vec2 uPoolC;
     float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     vec4 tap(vec2 o){ vec4 s = texture2D(tColor, vUv - uShift + o * uSpread * uTexel); vec3 c = s.a > 0.001 ? min(s.rgb / s.a, vec3(1.0)) : vec3(0.0); return vec4(c * c * s.a, s.a); }
     void main(){
@@ -1483,6 +1483,10 @@ const postMat = new THREE.ShaderMaterial({
       float h = hash(floor(vUv * vec2(uAspect, 1.0) * 170.0));
       bg += uStars * step(0.991, h) * (0.55 + 0.45 * sin(uTime * 1.6 + h * 90.0)) * vec3(0.8, 0.88, 1.0) * 0.7;
       vec3 col = (acc.rgb + (1.0 - acc.a) * bg) * mix(1.0, uDim, uHD);   // (uDim: a boss's dark, engine/56-combat.js lookDim; the bloom below still glows)
+      // a pool of light around the cat in a dark place (the atmosphere's "pool", engine/36-look.js): away from it the picture
+      // falls toward a tenth of its light (linear here: about half as seen, after the square root below), smoothly, and near it
+      // is a little warmer, a lantern's; lamps and embers still glow through the bloom below
+      if (uPool > 0.0) { float r = length((vUv - uPoolC) * vec2(uAspect, 1.0)), lit = 1.0 - smoothstep(0.12, 0.5, r); col *= mix(vec3(1.0), mix(0.1, 1.0, lit) * mix(vec3(1.0), vec3(1.1, 1.0, 0.86), lit), uPool); }
       if (uHD > 0.0) {
         // bloom: the bright part of the blurred copy added back; haze toward the far (upper) side; grading: a little
         // more colour, cool shadows, warm lights
@@ -1890,6 +1894,9 @@ function cardUpload() { if (cardDirty && cardTex) { cardTex.needsUpdate = true; 
 // pays nothing: no blur passes, no motes, the post pass as it was. The tilt-shift a first try had
 // (the picture blurred above and below a band) was dropped: tiring to look at.
 const ATMOS_DEFAULT = { bloom: .8, thr: .35, haze: .1, sat: 1.1 };
+// a pool of light around the cat (the post pass): by default in the dark places, the areas whose time is a crypt's or a
+// ship's emergency (Chapter 1's crypt, Chapter 3's mines, Chapter 2's failing decks); an atmosphere's "pool" sets its own
+const POOL_DARK = { cripta: .8, emergenza: .8 }, _pool = new THREE.Vector3();
 const MOTES_LOOK = { embers: [1, .6, .25, 1, 0], dust: [1, .95, .75, .5, 0], ink: [.55, .35, 1, .8, .35] };   // colour, opacity, fall speed
 let atmosNow = null, atmosForced, lookSrc = null, lookVal = null;   // (atmosForced: a check's own atmosphere, g.atmos())
 const lookOpt = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false };
@@ -1936,11 +1943,13 @@ const lookMotes = (() => {
 // before the scene is drawn: which atmosphere, its uniforms, the motes
 function lookPre() {
   const a = atmosForced !== undefined ? atmosForced : A ? atmosOf(A.def, GAME, settings.atmos !== false) : null;
-  atmosNow = a; postU.uHD.value = a ? 1 : 0; postU.uDim.value = dimNow;
+  atmosNow = a; postU.uHD.value = a ? 1 : 0; postU.uDim.value = dimNow; postU.uPool.value = 0;
   const mo = a && a.motes && MOTES_LOOK[a.motes]; lookMotes.pts.visible = !!mo;
   if (!a) return;
   if (a !== lookSrc) { lookSrc = a; lookVal = Object.assign({}, ATMOS_DEFAULT, a); } const v = lookVal;   // (merged once per atmosphere, not every frame)
   postU.uBloom.value = v.bloom; postU.uThr.value = v.thr; postU.uHaze.value = v.haze; postU.uSat.value = v.sat;
+  const pool = v.pool !== undefined ? v.pool : POOL_DARK[A.def.tod] || 0;
+  if (pool && player) { _pool.set(player.x, A.groundY(player.x, player.z) + .6, player.z).project(cam); postU.uPool.value = pool; postU.uPoolC.value.set((_pool.x + 1) / 2, (_pool.y + 1) / 2); }
   if (mo) {
     const u = lookMotes.u; u.uC.value.set(camT.x, camT.y * 2, camT.z); u.uT.value = time; u.uPx.value = Math.max(3, rt.height / 120);
     u.uBox.value.set(0, 0, A.W, A.D); u.uCol.value.set(mo[0], mo[1], mo[2]); u.uOp.value = mo[3]; u.uFall.value = mo[4];
@@ -2379,7 +2388,9 @@ function sheetActor(sheet, views, anims, o) {
     // differently from frame to frame, and its place on screen against the view's stepped back and forth
     const [va, vb] = viewOf(a.x, y + a.lift, a.z), ma = snapView(va) - va, mb = snapView(vb) - vb, X = camView.X, U = camView.U;
     a.mesh.visible = !a.blink; a.mesh.position.set(a.x + ma * X[0] + mb * U[0], y + a.lift + mb * U[1], a.z + ma * X[2] + mb * U[2]); a.mesh.rotation.y = yaw; a.mesh.scale.set((flip ? -1 : 1) * k, SPR_Y * k, k);
-    if ((a.flash > 0) !== !!a.flashed) { a.flashed = a.flash > 0; a.mesh.material.emissive.setScalar(a.flashed ? .9 : 0); }   // a hit's white flash (hitFx)
+    // a hit's white flash (hitFx), else a gold glow (an item's card: engine/70-ui.js itemCard)
+    const lit = a.flash > 0 ? 2 : a.glow ? 1 : 0;
+    if (lit !== (a.lit || 0)) { a.lit = lit; if (lit === 2) a.mesh.material.emissive.setScalar(.9); else if (lit) a.mesh.material.emissive.setRGB(.2, .13, .02); else a.mesh.material.emissive.setScalar(0); }
     a.caster.position.set(a.x, y + a.lift, a.z); a.caster.rotation.y = cur.az; a.caster.scale.set((flip ? -1 : 1) * k, k, k);
     a.probe.set(a.x + sx * .2, y, a.z + sz * .2); a.lampL.value = A.lampLight(a.x, y + .6, a.z, 0, 1, 0);
   };
@@ -3707,7 +3718,7 @@ function questEvent(type, what) {
     if (ev === 'defeat' && ++q.n < (n || 1)) { toast(t('toast.count', { n: q.n, of: n })); continue; }
     q.s++; q.n = 0; if (st.then) st.then();
     if (q.s >= Q.steps.length) {
-      const r = Q.reward || {}; if (r.coins) G.coins += r.coins; if (r.item) addItem(r.item); if (r.xp) gainXp(r.xp);
+      const r = Q.reward || {}; if (r.coins) G.coins += r.coins; if (r.item) { addItem(r.item); itemCard(r.item, 1); } if (r.xp) gainXp(r.xp);
       sfx('quest'); toast(t('toast.questdone', { q: t(Q.name) }));
     } else toast(t('toast.questnext', { q: t(Q.name) }));
     saveGame(); questEvent(type === 'flag' ? 'flag' : 'none', null);   // a finished step may already satisfy the next one
@@ -3787,8 +3798,9 @@ function interact(act) {
     if (G.opened[c.id]) { openDialogue({ name: title, lines: ['chest.empty'] }); return; }
     if (c.need && !has(c.need)) { sfx('no'); openDialogue({ name: title, lines: [c.needLine || 'chest.locked'] }); return; }
     G.opened[c.id] = true; addItem(c.item, c.n || 1); sfx('chest'); if (c.flag) G.flags[c.flag] = true; openChestProp(c.id);
-    const found = [t('chest.found', { item: c.item === 'coin' ? t('item.coins', { n: c.n }) : t('item.' + c.item) })].concat((c.lines || []).map((k) => t(k)));
-    openDialogue({ name: title, lines: found, raw: true, after: () => { questEvent('collect', c.item); if (c.flag) questEvent('flag', c.flag); saveGame(); } });
+    const done = () => { questEvent('collect', c.item); if (c.flag) questEvent('flag', c.flag); saveGame(); };
+    if (c.item === 'coin') openDialogue({ name: title, lines: [t('chest.found', { item: t('item.coins', { n: c.n }) })].concat((c.lines || []).map((k) => t(k))), raw: true, after: done });
+    else itemCard(c.item, c.n || 1, () => (c.lines && c.lines.length ? openDialogue({ name: title, lines: c.lines, after: done }) : done()));   // (engine/70-ui.js)
     return;
   }
   if (act.desk) {
@@ -4084,7 +4096,7 @@ const REF_OF = { item: 'items', enemy: 'enemies', area: 'areas', npc: 'npcs', sp
 // 'music'); [values] (one of them); { field: kind } a record ('field!' is required); { list }, { map } (a record by
 // id), { tuple }, { or }. 'cond', 'value', 'cmds', 'lines' and 'on' are checked by their compilers (engine/63-events.js)
 // an atmosphere (engine/36-look.js): bloom over thr, haze toward the far side, saturation, drifting motes
-const ATMOS_KIND = { bloom: 'num', thr: 'num', haze: 'num', sat: 'num', motes: ['embers', 'dust', 'ink'] };
+const ATMOS_KIND = { bloom: 'num', thr: 'num', haze: 'num', sat: 'num', pool: 'num', motes: ['embers', 'dust', 'ink'] };
 const DATA_SPEC = {
   game: {
     'start!': { 'area!': 'area' },
@@ -4479,6 +4491,7 @@ function openDialogue(a) {
 function advance() {
   if (!dlg) { if (nearAct) interact(nearAct); return; }
   if (dlg.pad) return;   // the keypad takes its digits, not a press
+  if (dlg.card) { closeCard(); return; }
   const page = dlg.lines[dlg.i].text;
   if (dlg.n < page.length) dlg.n = page.length;
   else if (dlg.choices && dlg.i === dlg.lines.length - 1) return;   // a choice must be picked
@@ -4487,9 +4500,26 @@ function advance() {
   showPage();
 }
 function tickDialogue(dt) {
-  if (!dlg || dlg.pad) return; const page = dlg.lines[dlg.i].text;
+  if (!dlg || dlg.pad || dlg.card) return; const page = dlg.lines[dlg.i].text;
   if (dlg.n < page.length) { dlg.n += dt * 42; const n = Math.floor(dlg.n); if (n !== dlg.last) { dlg.last = n; if (n % 2 === 0 && page[n - 1] !== ' ') blip(dlg.voice); showPage(); } }
 }
+
+/* an item the story gives (a chest's, a quest's reward): a card where the dialogue box stands, its picture, its name in
+   gold and what it does; a dialogue of its own kind (the game held, the view brought in), the cat glowing gold while it
+   shows. One given while a dialogue is open waits for it to close (a reward comes as the talk that earns it begins) */
+const cards = [];
+function itemCard(id, n, after) {
+  if (dlg) { cards.push([id, n, after]); return; }
+  dropFoeShots();
+  dlg = { card: id, after }; $('dialog').hidden = true;
+  drawPic($('icPic'), GAME.sheets.items, id);
+  $('icName').textContent = t('item.' + id) + (n > 1 ? ' ×' + n : '');
+  $('icDesc').textContent = t('desc.' + id);
+  $('itemCard').hidden = false; sfx('item'); if (player) { player.moving = false; player.glow = 1; }
+}
+function closeCard() { const after = dlg.after; dlg = null; $('itemCard').hidden = true; if (player) player.glow = 0; sfx('ok'); if (after) after(); }
+// (each frame: a waiting card shows once nothing else is open)
+function cardsStep() { if (!dlg && cards.length && ui.screen === 'game') itemCard(...cards.shift()); }
 
 /* the keypad: the dialogue box with the digits typed so far and a pad of buttons (keys 0-9, Backspace and Esc too); the
    data's then / else make the sound of the outcome */
@@ -4850,7 +4880,7 @@ function step(dt) {
   } }
   nearAct = null; let best = 1e9;
   if (!hero.dead) for (const a of A.acts) { if (a.when && !a.when()) continue; const d = Math.hypot(a.x - player.x, a.z - player.z); if (d < a.r && d < best) { best = d; nearAct = a; } }
-  tickDialogue(dt);
+  tickDialogue(dt); cardsStep();
 }
 
 function draw(dt) {
@@ -4860,7 +4890,7 @@ function draw(dt) {
   if (intro < 1) { intro = Math.min(1, intro + dt / 2.8); const e = 1 - Math.pow(1 - intro, 3); yaw = yawT + (settings.flat ? 0 : (1 - e) * -1.05); Vz = lerp(28, VT, e); }
   else { yaw += (yawT - yaw) * (1 - Math.exp(-dt * 9)); Vz += (VT - Vz) * (1 - Math.exp(-dt * 8)); }
   // (a dialogue: the camera aims for the closer view at once, so a cat by a room's wall stays in it: setCamera)
-  if (dlg) { const d = $('dialog').getBoundingClientRect(), c = canvas.getBoundingClientRect(); viewCover = d.height && c.height ? clamp((c.bottom - d.top) / c.height, 0, .8) : 0; } else viewCover = 0;
+  if (dlg) { const d = $(dlg.card ? 'itemCard' : 'dialog').getBoundingClientRect(), c = canvas.getBoundingClientRect(); viewCover = d.height && c.height ? clamp((c.bottom - d.top) / c.height, 0, .8) : 0; } else viewCover = 0;
   kick = Math.max(0, kick - dt * .5); talkZ = reduceMotion ? (dlg ? 1 : 0) : clamp(talkZ + (dlg && ui.screen === 'game' ? dt : -dt) / TALK_ZOOM, 0, 1); dimNow = dimStep(dimNow, dimTo, dt); const vv = Math.max(Vz, minV()) * (LP ? 1 : 1 - kick), [tx, tz] = camGoal(talkZ > 0 ? talkView(vv) : vv), kf = 1 - Math.exp(-dt * 5);
   camT.x += (tx - camT.x) * kf; camT.z += (tz - camT.z) * kf; camT.y += (A.groundY(player.x, player.z) * .5 - camT.y) * kf;
   setCamera();
