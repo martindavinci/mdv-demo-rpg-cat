@@ -1221,7 +1221,7 @@ class LPM {
     const t = (1 + Math.sqrt(5)) / 2, V = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((v) => { const l = Math.hypot(...v); return v.map((q) => q / l); });
     const F0 = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
     const mid = new Map(), verts = V.slice(), M = (a, b) => { const k = a < b ? a + '_' + b : b + '_' + a; if (!mid.has(k)) { const v = verts[a].map((q, i) => (q + verts[b][i]) / 2), l = Math.hypot(...v); verts.push(v.map((q) => q / l)); mid.set(k, verts.length - 1); } return mid.get(k); };
-    let F = F0; for (let lv = 0, nl = o.sub || (r * Math.max(o.sx || 1, o.sy || 1, o.sz || 1) >= 8 ? 2 : 1); lv < nl; lv++) { const G = []; for (const [a, b, d] of F) { const ab = M(a, b), bd = M(b, d), da = M(d, a); G.push([a, ab, da], [b, bd, ab], [d, da, bd], [ab, bd, da]); } F = G; }
+    let F = F0; for (let lv = 0, nl = o.sub !== undefined ? o.sub : (r * Math.max(o.sx || 1, o.sy || 1, o.sz || 1) >= 8 ? 2 : 1); lv < nl; lv++) { const G = []; for (const [a, b, d] of F) { const ab = M(a, b), bd = M(b, d), da = M(d, a); G.push([a, ab, da], [b, bd, ab], [d, da, bd], [ab, bd, da]); } F = G; }
     const sg = o.facet ? 0 : ++this.sg;
     const rnd = rng(o.seed || 7), j = o.jit === undefined ? .14 : o.jit, sy = o.sy || 1;
     const sx = o.sx || 1, sz = o.sz || 1, P3 = verts.map((v) => { const k = 1 + (rnd() * 2 - 1) * j; return [cx + v[0] * r * k * sx, cy + v[1] * r * k * sy, cz + v[2] * r * k * sz]; });
@@ -5501,11 +5501,13 @@ LP_MODELS.bush = () => {
   for (const [x, y, z, c] of [[-14, 22, 10, 0xf4efe6], [6, 26, 8, 0xe9a3b6], [14, 18, 9, 0xf4efe6], [-4, 29, 3, 0xe9a3b6]]) m.blob(x, y, z, 1.4, c, { seed: x + 40, jit: .1 });
   return m;
 };
+// (a clump of leaves once subdivided, a bunch of grapes a bare icosahedron: at twice, 3,905 faces a row, more than a house,
+// and the four rows made the farm the village's heaviest view, the frames dropping on the owner's phone while the cat walked by)
 LP_MODELS.vine_row = () => {
   const m = new LPM(), L = lpLeaf(10, 50, LPC.leafLt, LPC.leaf, LPC.leafDk);
   for (const x of [-62, 0, 62]) m.box(x - 1.3, 0, -1.3, x + 1.3, 46, 1.3, LPC.woodDk);
   for (const y of [24, 40]) m.box(-62, y - .4, -.4, 62, y + .4, .4, LPC.iron);
-  for (let i = 0; i < 8; i++) { const x = -54 + i * 15.5; m.box(x - 1, 0, -1, x + 1, 26, 1, LPC.trunk); m.blob(x, 34, 0, 11, LPC.leaf, { seed: i * 11 + 2, sy: .8, jit: .18, col: L, flat: 18, facet: 1 }); for (let g = 0; g < 2; g++) m.blob(x - 4 + g * 7, 23, 7 - g * 2, 2.6, LPC.grape, { seed: i * 3 + g, sy: 1.3, jit: .12 }); }
+  for (let i = 0; i < 8; i++) { const x = -54 + i * 15.5; m.box(x - 1, 0, -1, x + 1, 26, 1, LPC.trunk); m.blob(x, 34, 0, 11, LPC.leaf, { seed: i * 11 + 2, sy: .8, jit: .18, col: L, flat: 18, facet: 1, sub: 1 }); for (let g = 0; g < 2; g++) m.blob(x - 4 + g * 7, 23, 7 - g * 2, 2.6, LPC.grape, { seed: i * 3 + g, sy: 1.3, jit: .12, sub: 0 }); }
   return m;
 };
 LP_MODELS.fence = () => {
