@@ -2605,15 +2605,16 @@ const dmgRoll = (atk, def, mult) => Math.max(1, Math.round((atk * (mult || 1) - 
 const near = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 // waiting: after BORED seconds without a move the cat turns to the camera, yawns, sits and now and then licks a paw (the
 // hero's "bored" frames, seen from the front: GAME.hero.anims.bored.down, played at 2 a second, the yawn once, the rest
-// over and over); any move, blow or dodge stands it up
+// over and over); any move, blow or dodge stands it up. Never while it swims (it sat on the water), and while it waits it
+// keeps facing the camera, turned or not (turning the view showed a frame the front had not, and the wait was gone)
 const BORED = 6, BORED_YAWN = 3;
 function boredStep(dt) {
   const L = GAME.hero && GAME.hero.anims.bored && GAME.hero.anims.bored.down; if (!L) return;
-  const waiting = player.anim === 'bored', still = !hero.dead && !hero.move && !player.moving && (!player.anim || waiting);
+  const waiting = player.anim === 'bored', still = !hero.dead && !hero.move && !player.moving && !player.swim && (!player.anim || waiting);
   hero.still = still ? (hero.still || 0) + dt : 0;
   if (!still) { if (waiting) player.anim = null; return; }
   if (!waiting && hero.still >= BORED) { player.anim = 'bored'; player.at = 0; player.fps = 2; player.fx = Math.sin(yaw); player.fz = Math.cos(yaw); }
-  if (player.anim === 'bored' && player.at * player.fps >= L.length) player.at = BORED_YAWN / player.fps;
+  if (player.anim === 'bored') { player.fx = Math.sin(yaw); player.fz = Math.cos(yaw); if (player.at * player.fps >= L.length) player.at = BORED_YAWN / player.fps; }
 }
 function resetHero() { if (player) player.lift = 0; Object.assign(hero, { move: null, pushT: 0, swing: -1, st: 0, queued: false, grace: 0, last: -1, dodge: 0, cd: 0, inv: 0, hurt: 0, kx: 0, kz: 0, dead: 0, dash: false, gun: newGun(), shootT: 0, shootAnim: null, holdOff: false, lock: null }); if (player) player.anim = null; }
 
