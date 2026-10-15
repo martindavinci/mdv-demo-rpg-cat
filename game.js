@@ -369,7 +369,7 @@ class Buf { constructor(T, cap) { this.T = T; this.a = new T(cap); this.n = 0; }
 const flipped = (p, nx, ny, nz) => { const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2]; return ((uy * vz - uz * vy) * nx + (uz * vx - ux * vz) * ny + (ux * vy - uy * vx) * nz) < 0; };
 // fianchi del terreno: un rettangolo colorato per faccia
 class Builder {
-  constructor(cap) { this.pos = new Buf(Float32Array, cap * 12); this.nrm = new Buf(Int8Array, cap * 12); this.col = new Buf(Uint8Array, cap * 16); this.idx = new Buf(Uint32Array, cap * 6); this.v = 0; }
+  constructor(cap) { this.pos = new Buf(Float32Array, cap * 12); this.nrm = new Buf(Int8Array, cap * 12); this.col = new Buf(Uint8Array, cap * 16); this.idx = new Buf(Uint32Array, cap * 6); this.fc = new Buf(Uint8Array, cap); this.v = 0; }
   quad(p, nx, ny, nz, r, g, b, gl, sx, sy, sz) {
     const order = flipped(p, nx, ny, nz) ? [0, 3, 2, 1] : [0, 1, 2, 3]; if (sx === undefined) { sx = nx; sy = ny; sz = nz; }
     this.pos.need(12); this.nrm.need(12); this.col.need(16); this.idx.need(6);
@@ -377,23 +377,28 @@ class Builder {
     for (let k = 0; k < 4; k++) { const o = order[k] * 3; pa[pn++] = p[o]; pa[pn++] = p[o + 1]; pa[pn++] = p[o + 2]; na[nn++] = sx * 127; na[nn++] = sy * 127; na[nn++] = sz * 127; ca[cn++] = r; ca[cn++] = g; ca[cn++] = b; ca[cn++] = gl ? 255 : 0; }
     this.pos.n = pn; this.nrm.n = nn; this.col.n = cn;
     const v = this.v, i = this.idx.n; ia[i] = v; ia[i + 1] = v + 1; ia[i + 2] = v + 2; ia[i + 3] = v; ia[i + 4] = v + 2; ia[i + 5] = v + 3; this.idx.n += 6; this.v += 4;
+    this.fc.need(1); this.fc.a[this.fc.n++] = 4;
   }
-  // a face with its own colour at each corner (the low-poly kit bakes a contact shade into the colours); cols: 12 bytes
-  quadC(p, nx, ny, nz, cols, gl, nrms) {   // nrms: 12 numbers, a normal per corner (smooth shading), else the face's
-    const order = flipped(p, nx, ny, nz) ? [0, 3, 2, 1] : [0, 1, 2, 3];
+  // a face with its own colour at each corner (the low-poly kit bakes a contact shade into the colours); cols: 12 bytes.
+  // c: its corners, 4 or 3 (a triangle goes as one triangle: as a quad with a corner repeated it cost a fourth corner
+  // and an empty second triangle, and the kit's round things are all triangles)
+  quadC(p, nx, ny, nz, cols, gl, nrms, c = 4) {   // nrms: 12 numbers, a normal per corner (smooth shading), else the face's
+    const order = flipped(p, nx, ny, nz) ? (c === 3 ? [0, 2, 1] : [0, 3, 2, 1]) : [0, 1, 2, 3];
     this.pos.need(12); this.nrm.need(12); this.col.need(16); this.idx.need(6);
     const pa = this.pos.a, na = this.nrm.a, ca = this.col.a, ia = this.idx.a; let pn = this.pos.n, nn = this.nrm.n, cn = this.col.n;
-    for (let k = 0; k < 4; k++) { const o = order[k]; pa[pn++] = p[o * 3]; pa[pn++] = p[o * 3 + 1]; pa[pn++] = p[o * 3 + 2]; if (nrms) { na[nn++] = nrms[o * 3] * 127; na[nn++] = nrms[o * 3 + 1] * 127; na[nn++] = nrms[o * 3 + 2] * 127; } else { na[nn++] = nx * 127; na[nn++] = ny * 127; na[nn++] = nz * 127; } ca[cn++] = cols[o * 3]; ca[cn++] = cols[o * 3 + 1]; ca[cn++] = cols[o * 3 + 2]; ca[cn++] = gl ? 255 : 0; }
+    for (let k = 0; k < c; k++) { const o = order[k]; pa[pn++] = p[o * 3]; pa[pn++] = p[o * 3 + 1]; pa[pn++] = p[o * 3 + 2]; if (nrms) { na[nn++] = nrms[o * 3] * 127; na[nn++] = nrms[o * 3 + 1] * 127; na[nn++] = nrms[o * 3 + 2] * 127; } else { na[nn++] = nx * 127; na[nn++] = ny * 127; na[nn++] = nz * 127; } ca[cn++] = cols[o * 3]; ca[cn++] = cols[o * 3 + 1]; ca[cn++] = cols[o * 3 + 2]; ca[cn++] = gl ? 255 : 0; }
     this.pos.n = pn; this.nrm.n = nn; this.col.n = cn;
-    const v = this.v, i = this.idx.n; ia[i] = v; ia[i + 1] = v + 1; ia[i + 2] = v + 2; ia[i + 3] = v; ia[i + 4] = v + 2; ia[i + 5] = v + 3; this.idx.n += 6; this.v += 4;
+    const v = this.v, i = this.idx.n; ia[i] = v; ia[i + 1] = v + 1; ia[i + 2] = v + 2;
+    if (c === 3) { this.idx.n += 3; this.v += 3; } else { ia[i + 3] = v; ia[i + 4] = v + 2; ia[i + 5] = v + 3; this.idx.n += 6; this.v += 4; }
+    this.fc.need(1); this.fc.a[this.fc.n++] = c;
   }
   // luce dei lampioni calcolata una volta per faccia al caricamento, invece che per ogni pixel a ogni frame
   bakeLamps(light) {
-    const n = this.v, out = new Uint8Array(n), p = this.pos.a, nr = this.nrm.a;
-    for (let v = 0; v < n; v += 4) {
-      let x = 0, y = 0, z = 0; for (let k = 0; k < 4; k++) { x += p[(v + k) * 3]; y += p[(v + k) * 3 + 1]; z += p[(v + k) * 3 + 2]; }
-      const b = Math.min(255, Math.round(light(x / 4, y / 4, z / 4, nr[v * 3] / 127, nr[v * 3 + 1] / 127, nr[v * 3 + 2] / 127) * 127.5));
-      out[v] = out[v + 1] = out[v + 2] = out[v + 3] = b;
+    const n = this.v, out = new Uint8Array(n), p = this.pos.a, nr = this.nrm.a, fc = this.fc.a;
+    for (let v = 0, f = 0; v < n; v += fc[f++]) {   // (face by face: 4 corners or 3)
+      const c = fc[f]; let x = 0, y = 0, z = 0; for (let k = 0; k < c; k++) { x += p[(v + k) * 3]; y += p[(v + k) * 3 + 1]; z += p[(v + k) * 3 + 2]; }
+      const b = Math.min(255, Math.round(light(x / c, y / c, z / c, nr[v * 3] / 127, nr[v * 3 + 1] / 127, nr[v * 3 + 2] / 127) * 127.5));
+      for (let k = 0; k < c; k++) out[v + k] = b;
     }
     this.lamp = out;
   }
@@ -1288,17 +1293,17 @@ function lpPut(Bd, m, x, z, o = {}) {
   const pts = new Array(12), cols = new Array(12), nrms = new Array(12), VN = lpVN(m);
   m.f.forEach((f, fi) => {
     if (o.only === undefined ? f.sp !== undefined : f.sp !== o.only) return;
-    const p = f.p.length === 3 ? [f.p[0], f.p[1], f.p[2], f.p[2]] : f.p, wp = p.map(([X, Y, Z]) => { const [a, c] = tf(X - hx, Z - hz); return [ox + a * P, oy + (Y - hy) * P, oz + c * P]; });
+    const p = f.p, nc = p.length, wp = p.map(([X, Y, Z]) => { const [a, c] = tf(X - hx, Z - hz); return [ox + a * P, oy + (Y - hy) * P, oz + c * P]; });
     const n = lpNormal(f.p.map(([X, Y, Z]) => { const [a, c] = tf(X, Z); return [a, Y, c]; })), j = 1 + (hash2(fi * 7 + 3, m.f.length) * 2 - 1) * f.j, base = lpRGB(f.c);
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < nc; k++) {
       const y = p[k][1], ao = f.ao ? .72 + .28 * Math.min(1, Math.max(0, y) / 14) : 1;   // contact shade: darker where it meets the ground
       for (let i = 0; i < 3; i++) { pts[k * 3 + i] = wp[k][i]; cols[k * 3 + i] = Math.max(0, Math.min(255, Math.round(base[i] * j * ao))); }
       // o.shade (0..1): spent, a container opened and emptied: toward its own grey by shade, darker by shade (0.5: half)
       if (o.shade) { const c = cols, q = k * 3, g = (c[q] + c[q + 1] + c[q + 2]) / 3, s = 1 - o.shade; for (let i = 0; i < 3; i++) c[q + i] = Math.round((c[q + i] + (g - c[q + i]) * o.shade) * s); }
     }
-    const vn = f.p.length === 3 ? [VN[fi][0], VN[fi][1], VN[fi][2], VN[fi][2]] : VN[fi];
-    for (let k = 0; k < 4; k++) { const [a, c] = tf(vn[k][0], vn[k][2]); nrms[k * 3] = a; nrms[k * 3 + 1] = vn[k][1]; nrms[k * 3 + 2] = c; }
-    Bd.quadC(pts, n[0], n[1], n[2], cols, f.g, nrms);
+    const vn = VN[fi];
+    for (let k = 0; k < nc; k++) { const [a, c] = tf(vn[k][0], vn[k][2]); nrms[k * 3] = a; nrms[k * 3 + 1] = vn[k][1]; nrms[k * 3 + 2] = c; }
+    Bd.quadC(pts, n[0], n[1], n[2], cols, f.g, nrms, nc);
   });
 }
 
@@ -1673,6 +1678,25 @@ function resize() {
   // whole screen pixels)
   const ss = window.__ss || (LP ? 1 / Math.max(1, Math.round(bh / 600)) : 1 / Math.max(1, Math.floor(dpr + .01))); renderer.setSize(bw, bh, false); rt.setSize(Math.max(2, Math.round(bw * ss)), Math.max(2, Math.round(bh * ss)));
   aspect = r.width / r.height; postU.uTexel.value.set(1 / rt.width, 1 / rt.height); postU.uAspect.value = aspect; postU.uSpread.value = LP ? 0 : Math.max(ss, .75); postU.uK.value = LP ? Math.round(1 / ss) : 0;
+}
+
+// what the GPU does the first time a thing is drawn (its textures and geometry sent up, its shader compiled) took a frame
+// where it was first seen: a few ms here, tens on a phone, three of the farm's chunks at once as the cat walked toward
+// them. warmUp does it when the things are made: they are drawn once into one pixel of the picture, in or out of view,
+// seen by a camera that sees only them and the scene's lights (so the very shaders the view will use); the shadow map is
+// left as it is
+const WARM = 7, warmCam = new THREE.OrthographicCamera();
+function warmUp(roots) {
+  if (!renderer || !roots.length) return;
+  scene.traverse((o) => { if (o.isLight) o.layers.enable(WARM); });
+  const back = [], shown = roots.map((r) => r.visible);
+  for (const r of roots) { r.visible = true; r.traverse((o) => { if (o.isMesh || o.isSprite || o.isPoints || o.isLine) { back.push([o, o.frustumCulled, o.layers.mask]); o.frustumCulled = false; o.layers.set(WARM); } }); }
+  warmCam.copy(cam); warmCam.layers.set(WARM);
+  const sh = sun.shadow.needsUpdate, target = renderer.getRenderTarget(); sun.shadow.needsUpdate = false;
+  renderer.setRenderTarget(rt); renderer.setScissorTest(true); renderer.setScissor(0, 0, 1, 1); renderer.render(scene, warmCam);
+  renderer.setScissorTest(false); renderer.setRenderTarget(target); sun.shadow.needsUpdate = sh;
+  for (const [o, c, m] of back) { o.frustumCulled = c; o.layers.mask = m; }
+  roots.forEach((r, i) => { r.visible = shown[i]; });
 }
 
 // ---- engine/31-flicker.js
@@ -2110,6 +2134,7 @@ function openArea(def) {
     const halos = lampSpots.filter((p) => p.x * PPU >= x0 && p.x * PPU < x0 + w && p.z * PPU >= z0 && p.z * PPU < z0 + h).map((p) => { const s = new THREE.Sprite(haloMat(def.halo)); s.position.set(p.x, p.y, p.z); s.scale.setScalar(p.r); group.add(s); return s; });
     const tris = B.tris + S.tris + idx.length / 3;
     S = prevS; B = prevB;
+    warmUp([group]);   // (its textures and geometry sent up now, not on the frame it comes into view: engine/30-render.js)
     return {
       ci, cj, group, halos, tris, spins, meshes: [staticMesh, slabMesh, gm], wet: water.length > 0,
       // (only in view: every water chunk's whole texture, 768 KiB, went up every 0.4 s, seen or not)
@@ -3225,7 +3250,8 @@ function musicTick() {
 
 // ---- engine/59-ambient.js
 /* ---------- the world's small life, read off what is already there: smoke from the chimneys the models built, leaves
-   falling from the trees whose models drop them, butterflies over flowered grass and glints on the water by day. Nothing
+   falling from the trees whose models drop them, butterflies over flowered grass and glints on the water by day, birds
+   crossing the sky wherever there is one (an area whose time is a day's: never in a room, a ship or a mine). Nothing
    to place: an area has them when it has those things. Square pixels like the art, one draw for all, never solid or saved ---------- */
 const AMB = { max: 220, near: 26 };
 const amb = { parts: [], smoke: [], leaves: [], flowers: [], water: [], day: false, t: 0 };
@@ -3234,7 +3260,8 @@ const amb = { parts: [], smoke: [], leaves: [], flowers: [], water: [], day: fal
 // wet spots sampled once on a unit grid
 function ambientBuild(def) {
   amb.parts.length = 0; amb.smoke.length = 0; amb.leaves.length = 0; amb.flowers.length = 0; amb.water.length = 0;
-  amb.day = ['giorno', 'alba', 'tramonto'].includes(def.tod || 'giorno');
+  amb.day = ['giorno', 'alba', 'tramonto'].includes(def.tod || 'giorno'); amb.birdT = 4 + Math.random() * 6;
+  ambientMesh();   // (made now, not with the first part: its shader compiled with the area, while the screen is dark)
   for (const [key, x, z, , , o] of def.things || []) {
     if (!LP || !lpModel(key) || !LP_EMIT[key] || (o && o.when && !o.when())) continue;
     const tf = lpTf(o || {}), y0 = A.groundY(x, z) + ((o && o.dy) || 0);
@@ -3279,6 +3306,16 @@ function ambientStep(dt) {
     const s = pickNear(amb.flowers, 12), c = [[.98, .96, .9], [.98, .85, .3], [.95, .6, .75]][Math.floor(rnd() * 3)];
     if (s) ambPush({ k: 'fly', x: s[0], y: A.groundY(s[0], s[1]) + .4 + rnd() * .5, z: s[1], vx: 0, vy: 0, vz: 0, life: 14, full: 14, size: 2, grow: 0, col: c, a: 1, h: rnd() * 6.28, ph: rnd() * 6 });
   }
+  // birds: now and then a flock of two to five crosses the sky, high, from beyond the view to beyond it, in a loose V
+  if (amb.day && (amb.birdT -= dt) <= 0) {
+    amb.birdT = 9 + rnd() * 14;
+    const h = rnd() * Math.PI * 2, ux = Math.cos(h), uz = Math.sin(h), n = 2 + Math.floor(rnd() * 4), y = A.groundY(player.x, player.z) + 6.5 + rnd() * 2.5, sp = 3.2 + rnd() * 1.2;
+    const sx = player.x - ux * 20 + uz * (rnd() - .5) * 8, sz = player.z - uz * 20 - ux * (rnd() - .5) * 8;
+    for (let i = 0; i < n; i++) {
+      const s = (i % 2 ? 1 : -1) * Math.ceil(i / 2), back = Math.abs(s) * 1.1;
+      ambPush({ k: 'bird', x: sx - ux * back - uz * s * 1.2, y: y + (rnd() - .5) * .4, z: sz - uz * back + ux * s * 1.2, vx: ux * sp, vy: 0, vz: uz * sp, life: 14, full: 14, size: 7, grow: 0, col: [.16, .14, .18], a: .9, ph: rnd() * 6, fl: 7 + rnd() * 3 });
+    }
+  }
   // glints: on open water near the cat by day, a short white spark here and there
   if (amb.day && amb.water.length && rnd() < dt * 9) {
     const s = pickNear(amb.water, 14);
@@ -3296,34 +3333,48 @@ function ambientStep(dt) {
       if (d < 2.2) p.h = Math.atan2(dz, dx) + (rnd() - .5) * .5; else p.h += (rnd() - .5) * dt * 4;
       const sp = d < 2.2 ? 2.4 : .8; p.x += Math.cos(p.h) * sp * dt; p.z += Math.sin(p.h) * sp * dt; p.ph += dt * 14;
       p.y = A.groundY(p.x, p.z) + .55 + Math.sin(amb.t * 2 + p.h) * .25;
-    } else { p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; }
+    } else if (p.k === 'bird') { p.x += p.vx * dt; p.z += p.vz * dt; p.ph += dt * p.fl; p.y += Math.sin(p.ph * .23) * .08 * dt; }
+    else { p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; }
   }
 }
 
 // drawn: square points in art pixels (the picture's own pixel grid), the smoke and the glints fading, a butterfly's wings
-// beating (its size flickering between 2 and 3)
-let ambMesh = null, ambPos, ambCol, ambSize;
+// beating (its size flickering between 2 and 3); a bird is a 7 x 7 point holding its silhouette, one of three poses of
+// the wings (aWing: 0 a plain square, else the pose 1 up, 2 level, 3 down), each pixel an art pixel
+let ambMesh = null, ambPos, ambCol, ambSize, ambWing;
+function ambientMesh() {
+  if (ambMesh || !scene) return;
+  const g = new THREE.BufferGeometry(); ambPos = new Float32Array(AMB.max * 3); ambCol = new Float32Array(AMB.max * 4); ambSize = new Float32Array(AMB.max); ambWing = new Float32Array(AMB.max);
+  g.setAttribute('position', new THREE.BufferAttribute(ambPos, 3)); g.setAttribute('aCol', new THREE.BufferAttribute(ambCol, 4)); g.setAttribute('aSize', new THREE.BufferAttribute(ambSize, 1)); g.setAttribute('aWing', new THREE.BufferAttribute(ambWing, 1));
+  const m = new THREE.ShaderMaterial({
+    uniforms: { uPx: { value: 2 } }, transparent: true, depthWrite: false,
+    vertexShader: `attribute vec4 aCol; attribute float aSize, aWing; uniform float uPx; varying vec4 vC; varying float vW;
+      void main(){ vC = aCol; vW = aWing; gl_PointSize = max(1.0, floor(aSize * uPx + .5)); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    // (a wing's row, top down, at each distance from the body: up a V, level a gull's M, down a roof)
+    fragmentShader: `precision highp float; varying vec4 vC; varying float vW;
+      void main(){
+        if (vC.a < .01) discard;
+        if (vW > .5) {
+          vec2 c = floor(gl_PointCoord * 7.0); float d = abs(c.x - 3.0), row;
+          if (vW < 1.5) row = 4.0 - d; else if (vW < 2.5) row = d < .5 || d > 2.5 ? 3.0 : 2.0; else row = 2.0 + floor(d * .67 + .5);
+          if (c.y != row && !(d < .5 && c.y == row + 1.0)) discard;
+        }
+        gl_FragColor = vec4(vC.rgb, vC.a);
+      }`,
+  });
+  ambMesh = new THREE.Points(g, m); ambMesh.frustumCulled = false; ambMesh.renderOrder = 3; ambMesh.visible = false; scene.add(ambMesh);
+}
 function ambientDraw() {
-  if (!ambMesh && !amb.parts.length) return;
-  if (!ambMesh) {
-    const g = new THREE.BufferGeometry(); ambPos = new Float32Array(AMB.max * 3); ambCol = new Float32Array(AMB.max * 4); ambSize = new Float32Array(AMB.max);
-    g.setAttribute('position', new THREE.BufferAttribute(ambPos, 3)); g.setAttribute('aCol', new THREE.BufferAttribute(ambCol, 4)); g.setAttribute('aSize', new THREE.BufferAttribute(ambSize, 1));
-    const m = new THREE.ShaderMaterial({
-      uniforms: { uPx: { value: 2 } }, transparent: true, depthWrite: false,
-      vertexShader: `attribute vec4 aCol; attribute float aSize; uniform float uPx; varying vec4 vC;
-        void main(){ vC = aCol; gl_PointSize = max(1.0, floor(aSize * uPx + .5)); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: `precision highp float; varying vec4 vC; void main(){ if (vC.a < .01) discard; gl_FragColor = vec4(vC.rgb, vC.a); }`,
-    });
-    ambMesh = new THREE.Points(g, m); ambMesh.frustumCulled = false; ambMesh.renderOrder = 3; scene.add(ambMesh);
-  }
+  if (!ambMesh) return;
   const n = Math.min(amb.parts.length, AMB.max);
   for (let i = 0; i < n; i++) {
     const p = amb.parts[i], f = p.life / p.full, fade = p.k === 'smoke' ? Math.min(1, f * 1.6) * Math.min(1, (1 - f) * 8) : p.k === 'glint' ? Math.sin(f * Math.PI) : Math.min(1, p.life);
     ambPos.set([p.x, p.y, p.z], i * 3); ambCol.set([p.col[0], p.col[1], p.col[2], p.a * fade], i * 4);
     ambSize[i] = p.k === 'fly' ? (Math.sin(p.ph) > 0 ? 3 : 2) : p.size + p.grow * (1 - f);
+    ambWing[i] = p.k === 'bird' ? 1 + Math.floor((Math.sin(p.ph) * .5 + .5) * 2.999) : 0;   // (up, level, down: the beat)
   }
   ambMesh.geometry.setDrawRange(0, n); ambMesh.visible = n > 0;
-  for (const a of ['position', 'aCol', 'aSize']) ambMesh.geometry.attributes[a].needsUpdate = true;
+  for (const a of ['position', 'aCol', 'aSize', 'aWing']) ambMesh.geometry.attributes[a].needsUpdate = true;
   ambMesh.material.uniforms.uPx.value = rt.height / (PPU * viewV(Math.max(Vz, minV())));   // (picture pixels to an art pixel)
 }
 
@@ -4689,6 +4740,9 @@ function enterArea(name, at, face) {
   $('areaName').textContent = t(def.name); hintState = null; shadowHold = 8; dlg = null; $('dialog').hidden = true;
   if (G) G.area = name;
   populate(def); unstick(def); playTrack(areaTrack()); if (settings.wire) applyWire();
+  // the figures and effects the area starts with sent up now, every shader the scene holds compiled (the x-ray's, hidden
+  // until the cat first stands behind something), while the screen is still dark
+  const cg = new Set([...A.chunks.values()].map((c) => c.group)); warmUp(scene.children.filter((o) => !cg.has(o) && !o.isLight)); if (renderer) { renderer.compile(scene, cam); for (const s of ['fx-1', ...[].concat(GAME.sheets.items || [])]) if (SHEETS[s]) renderer.initTexture(flatMat(s).map); }   // (and the effects' and pickups' sheets: a fight's first spark sent one up)
 }
 // a save from an older layout (or any arrival) may put the cat inside something that moved there since: step out to
 // the nearest free spot, searched in rings of a quarter unit out to 8 units; failing that, the area's start. Free means
