@@ -1628,7 +1628,7 @@ function applyWire() {
 }
 const _camS = new THREE.Vector3();
 // the view's axes across the screen and up it, in the world, and the step of the figures' grid along them (setCamera)
-const camView = { X: [1, 0, 0], U: [0, 1, 0], step: 0 };
+const camView = { X: [1, 0, 0], U: [0, 1, 0], step: 0, la: 0, lb: 0 };   // (la, lb: the aim across and up the view at the last setCamera)
 const _vo = [0, 0], viewOf = (x, y, z) => { _vo[0] = x * camView.X[0] + z * camView.X[2]; _vo[1] = x * camView.U[0] + y * camView.U[1] + z * camView.U[2]; return _vo; };   // (one kept pair: read it at once)
 const snapView = (q) => (camView.step ? Math.round(q / camView.step) * camView.step : q);
 function setCamera() {
@@ -1656,10 +1656,15 @@ function setCamera() {
   // figures' grid, less the cat's distance from the camera's aim rounded to the shift's steps. The follow lags the cat
   // by a steady distance while it walks, so the cat keeps its place on screen; rounding the camera and the cat each on
   // its own, their difference stepped back and forth by a pixel as the two fractions crossed, and the cat trembled
+  // Only along an axis where the aim is moving: where it stands still (held at the map's edge, or the whole map in view)
+  // the cat's rounding moved the whole map instead, 1-2 pixels back and forth under the walking cat (tools/jitter-check.mjs,
+  // the map still); there the view is the aim's own, and the cat steps across the still picture
+  const ma = Math.abs(a - camView.la) > sub / 4, mb = Math.abs(b - camView.lb) > sub / 4; camView.la = a; camView.lb = b;
   let ea = Math.round(a / sub) * sub, eb = Math.round(b / sub) * sub;
-  if (player && A) {
+  if (player && A && (ma || mb)) {
     const [pa, pb] = viewOf(player.x, A.groundY(player.x, player.z) + (player.lift || 0), player.z);
-    ea = snapView(pa) - Math.round((pa - a) / sub) * sub; eb = snapView(pb) - Math.round((pb - b) / sub) * sub;
+    if (ma) ea = snapView(pa) - Math.round((pa - a) / sub) * sub;
+    if (mb) eb = snapView(pb) - Math.round((pb - b) / sub) * sub;
   }
   // the camera itself on the picture's own grid (the ground's texels fall on the same pixels wherever it stands); the
   // post pass shifts the picture by what is left, a whole number of screen pixels
