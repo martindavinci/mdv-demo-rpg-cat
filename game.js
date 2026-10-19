@@ -3855,7 +3855,9 @@ function populate(def) {
 // the kind of small function the engine already calls (a thing's when(), a person's talk(), an area's music(), a
 // lever's run()): nothing is interpreted per frame. A mistake is collected in errs with its place in the file, not
 // thrown, so the build names every one at once; refs collects every name the data points at ([kind, name, place]) for
-// the loader to check (engine/65-data.js).
+// the loader to check (engine/65-data.js), and the story's own names that are not records: ['flag', name] a flag
+// read, ['set', name] / ['unset', name] one set or cleared, ['start', quest] a quest begun (the maker's map of the
+// story: tools/maker.mjs).
 const EVENTS = {};   // common events by name (story.json "events"), compiled; run by { "call": name }
 let LOCAL = {};      // the area's scratch numbers ({ "set" } / { "add" }: the crypt's levers); never saved
 const CMP = { '==': (a, b) => a === b, '!=': (a, b) => a !== b, '<': (a, b) => a < b, '<=': (a, b) => a <= b, '>': (a, b) => a > b, '>=': (a, b) => a >= b };
@@ -3904,7 +3906,7 @@ function compileCond(c, path, errs, refs) {
   unknownFields(c, [kind, ...COND_KINDS[kind]], path, errs);
   const v = c[kind];
   switch (kind) {
-    case 'flag': FLAGS_READ.add(v); return () => !!G.flags[v];   // (a flag some condition asks about: one that matters, engine/64-marks.js)
+    case 'flag': FLAGS_READ.add(v); refs.push(['flag', v, path + '.flag']); return () => !!G.flags[v];   // (a flag some condition asks about: one that matters, engine/64-marks.js)
     case 'has': refs.push(['item', v, path + '.has']); return () => has(v, c.n);
     case 'quest': { refs.push(['quest', v, path + '.quest']); const k = compileCmp(c.step, path + '.step', errs, refs); return (sc) => k(qStep(v), sc); }
     case 'var': { const k = compileCmp(c.is, path + '.is', errs, refs); return (sc) => k(LOCAL[v] || 0, sc); }
@@ -3965,10 +3967,10 @@ function compileCmd(c, path, errs, refs) {
     }
     case 'if': { const k = compileCond(v, at('if'), errs, refs), a = compileCmds(c.then || [], at('then'), errs, refs), b = compileCmds(c.else || [], at('else'), errs, refs); return (sc, next) => runSub(k(sc) ? a : b, sc, next); }
     case 'call': { refs.push(['event', v, at('call')]); const args = Object.entries(c.args || {}).map(([k, w]) => [k, compileValue(w, `${path}.args.${k}`, errs, refs)]); return (sc, next) => runSub(EVENTS[v], { self: sc.self, args: Object.fromEntries(args.map(([k, f]) => [k, f(sc)])) }, next); }
-    case 'flag': return () => { setFlag(v); return true; };
-    case 'unflag': return () => { delete G.flags[v]; return true; };
+    case 'flag': refs.push(['set', v, at('flag')]); return () => { setFlag(v); return true; };
+    case 'unflag': refs.push(['unset', v, at('unflag')]); return () => { delete G.flags[v]; return true; };
     case 'take': refs.push(['item', v, at('take')]); return () => { takeItem(v, c.n); return true; };
-    case 'quest': refs.push(['quest', v, at('quest')]); return () => { startQuest(v); return true; };
+    case 'quest': refs.push(['quest', v, at('quest')], ['start', v, at('quest')]); return () => { startQuest(v); return true; };
     case 'drop': {
       refs.push(['item', v, at('drop')]); const off = c.offset || [0, 0]; if (c.at !== 'self') xz(c.at, 'at'); if (c.offset) xz(c.offset, 'offset');
       return (sc) => { const [x, z] = c.at === 'self' ? [sc.self.x, sc.self.z] : c.at; drop(v, x + off[0], z + off[1]); return true; };
@@ -4192,7 +4194,9 @@ function compileGameData(data, errs) {
   Object.assign(out, { game: P.game, items: P.items, speakers: P.speakers, curate: P.curate, events: {}, enemies: {}, behaviours: {}, npcs: {}, quests: {}, music: {}, areas: {}, hooks: {} });
   for (const [id, L] of Object.entries(P.events)) out.events[id] = compileCmds(L, where('events', id), errs, refs);
   for (const k of Object.keys(EFFECT_CALLS)) delete EFFECT_CALLS[k];
-  if (P.game && P.game.hero && P.game.hero.gun && P.game.hero.gun.flag) FLAGS_READ.add(P.game.hero.gun.flag);
+  if (P.game && P.game.hero && P.game.hero.gun && P.game.hero.gun.flag) { FLAGS_READ.add(P.game.hero.gun.flag); refs.push(['flag', P.game.hero.gun.flag, `${from.game}: game.hero.gun.flag`]); }
+  for (const [i, f] of ((P.game && P.game.hero && P.game.hero.start && P.game.hero.start.flags) || []).entries()) refs.push(['set', f, `${from.game}: game.hero.start.flags[${i}]`]);
+  if (P.game && P.game.chapter && P.game.chapter.doneFlag) refs.push(['flag', P.game.chapter.doneFlag, `${from.game}: game.chapter.doneFlag`]);   // (read by the chapters' record: engine/66-chapters.js)
   for (const [id, L] of Object.entries(P.events)) EFFECT_CALLS[id] = compileEffects(L);
   for (const [id, e] of Object.entries(P.enemies)) { const T = Object.assign({}, e); if (e.drops) T.drops = e.drops.map((d) => [d.item, d.chance]); if (e.behaviour) { out.behaviours[id] = e.behaviour; delete T.behaviour; } out.enemies[id] = T; }
   for (const [id, m] of Object.entries(P.music)) out.music[id] = { bpm: m.bpm, voices: Object.fromEntries(Object.entries(m.voices).map(([k, bars]) => [k, bars.join(' | ')])) };
@@ -4208,6 +4212,7 @@ function checkRefs(P, refs, errs) {
   for (const [kind, id, path] of refs) {
     if (kind === 'key' || (kind === 'item' && id === 'coin')) continue;   // (language keys: the build checks them against lang/)
     if (kind === 'sfx') { if (typeof SFX !== 'undefined' && !SFX[id]) errs.push(`${path}: no sound "${id}"`); continue; }
+    if (!REF_OF[kind]) continue;   // (a flag, a quest begun: the story's names, engine/63-events.js)
     const c = P[REF_OF[kind]];
     if (!(id in c)) errs.push(`${path}: no ${kind} "${id}"`);
   }
@@ -4259,7 +4264,7 @@ function compileQuest(q, path, errs, refs) {
     if (!ev) { errs.push(`${p}.on: one of ${Object.keys(STEP_ON).join(', ')}`); st.on = ['none']; }
     else { unknownFields(o, [ev, 'n'], p + '.on', errs); if (STEP_ON[ev]) refs.push([STEP_ON[ev], o[ev], `${p}.on.${ev}`]); st.on = ev === 'check' ? ['check', compileCond(o.check, p + '.on.check', errs, refs)] : o.n !== undefined ? [ev, o[ev], o.n] : [ev, o[ev]];
       // (the items the step asks for, for the marks: what it collects, what its check asks the cat to have)
-      if (ev === 'flag') FLAGS_READ.add(o.flag);
+      if (ev === 'flag') { FLAGS_READ.add(o.flag); refs.push(['flag', o.flag, `${p}.on.flag`]); }
       const items = ev === 'collect' ? [o.collect] : ev === 'check' ? (JSON.stringify(o.check).match(/"has":"[^"]+"/g) || []).map((x) => x.slice(7, -1)) : [];
       if (items.length) st.items = items; }
     if (s.then) { const L = compileCmds(s.then, p + '.then', errs, refs); st.then = () => runCmds(L, {}); }
@@ -4305,17 +4310,22 @@ function compileThing(th, path, errs, refs) {
     else o[f] = v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : v;
   }
   // a thing written in hidden ink ("scan": a flag) is there only once the scanner has found it, and its own when holds
-  if (th.scan) { const w = o.when, f = th.scan; o.when = () => !!G.flags[f] && (!w || w()); }
+  if (th.scan) { const w = o.when, f = th.scan; o.when = () => !!G.flags[f] && (!w || w()); refs.push(['flag', f, path + '.scan']); }
+  if (th.chest && th.chest.flag) refs.push(['set', th.chest.flag, path + '.chest.flag']);   // (set as the chest opens: engine/62-world.js)
   const box = th.box || [];
   return trimTuple([th.key, th.at[0], th.at[1], box[0], box[1], Object.keys(o).length ? o : undefined]);
 }
 
 // at boot (engine/90-boot.js): compiled and put into the engine's registries, after the plugins have registered; any
-// problem stops the game with the list. A record a content script made too is a problem, not a quiet swap
-function loadGameData(data) {
+// problem stops the game with the list. A record a content script made too is a problem, not a quiet swap.
+// again: the data loaded once more in place of what it put there before (the maker's play page after an edit,
+// tools/maker.mjs); the records a content script made stay. Nothing is replaced when the data does not compile
+const DATA_PUT = new Map();   // registry → the ids the data put in it
+function loadGameData(data, again) {
   const errs = [], P = compileGameData(data, errs);
   if (!errs.length) {
-    const put = (reg, recs, what) => { for (const [id, r] of Object.entries(recs || {})) { if (id in reg) errs.push(`${what} "${id}" is defined twice: in the data and in a content script`); else reg[id] = r; } };
+    if (again) { for (const [reg, ids] of DATA_PUT) for (const id of ids) delete reg[id]; DATA_PUT.clear(); for (const k of Object.keys(GAME)) delete GAME[k]; }
+    const put = (reg, recs, what) => { const ids = DATA_PUT.get(reg) || new Set(); DATA_PUT.set(reg, ids); for (const [id, r] of Object.entries(recs || {})) { if (id in reg) errs.push(`${what} "${id}" is defined twice: in the data and in a content script`); else { reg[id] = r; ids.add(id); } } };
     put(ITEMS, P.items, 'item'); put(ENEMIES, P.enemies, 'enemy'); put(SPEAKERS, P.speakers, 'speaker'); put(NPCS, P.npcs, 'person'); put(QUESTS, P.quests, 'quest'); put(MUSIC, P.music, 'track');
     put(EVENTS, P.events, 'event'); put(AREAS, P.areas, 'area'); put(AREA_HOOKS, P.hooks, 'area hook'); put(CURATE, P.curate, 'curation');
     for (const [id, b] of Object.entries(P.behaviours)) { if (BEHAVIOURS[b]) Object.assign(ENEMIES[id], BEHAVIOURS[b]); else errs.push(`enemies.${id}: no behaviour "${b}" (a plugin in content/plugins/ registers it)`); }
@@ -7026,6 +7036,10 @@ function closeShop() { ui.screen = 'game'; showScreen(null); }
     flag: (f) => setFlag(f),
     spriteTris: () => Object.fromEntries(SPRITES.map((s) => [s.key, (s.pixel ? 2 * (s.layF.length + s.layB.length + s.strips.length) : 0) + 2 * s.low.length])),
     G: () => G, code: () => saveCode(), read: (c) => readCode(c), enter: (n, at) => enterArea(n, at),
+    // the maker's play page (tools/maker.mjs): a new game in an area with the flags given (no opening dialogue); the data
+    // compiled again after an edit and the place built again where the cat stands (the problems as text, else null)
+    playAt: (area, at, flags) => { clearTimeout(introT); newGame(); G.flags.intro = true; for (const f of flags || []) G.flags[f] = true; G.area = area; G.x = at ? at[0] : null; G.z = at ? at[1] : null; beginPlay(); },
+    reload: (data) => { try { loadGameData(chapterFiles(data, CHAPTER_ID), true); } catch (e) { return e.message; } restyle(); return null; },
     area: () => A,
     // for the checks: stop the frame loop, reseed, and run the 120 Hz simulation by hand (bot is called before each step)
     freeze: (on) => { frozen = !!on; if (!on) last = performance.now(); },
