@@ -69,6 +69,55 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 .chcard{display:flex;flex-direction:column;gap:6px;width:min(340px,100%);text-align:left;padding:10px;box-sizing:border-box;background:var(--panel);border:1px solid var(--line)}
 .chcard .row{display:flex;gap:8px;flex-wrap:wrap}
 .chcard canvas{width:100%;height:auto;image-rendering:pixelated}
+/* the card duel (engine/74-tourney.js): the opponents, the album, the pick of 5; a card is parchment, its owner's colour
+   inside its edge, its four values in DM Mono (the pixel font's 5 reads as an S) */
+#tourney .col button,#album .col button,#pick .col button{min-height:44px}
+.tlist{display:flex;flex-direction:column;gap:10px;width:min(420px,100%)}
+.topp{display:flex;align-items:center;gap:12px;text-align:left;padding:8px 10px;width:100%}
+.topp canvas{width:56px;height:auto;image-rendering:pixelated;border:1px solid var(--line);background:#0c0a12;flex:none}
+.topp b{display:block;font-family:var(--display);font-size:16px;font-weight:600}
+.topp .stars{color:var(--amber);letter-spacing:2px}.topp .dim{display:block;color:var(--dim);font-size:12px;margin-top:2px}
+.tgrid{display:grid;grid-template-columns:repeat(auto-fill,76px);gap:8px;justify-content:center;width:min(560px,100%)}
+.tc{--cw:96px;position:relative;display:block;width:var(--cw);height:calc(var(--cw) * 1.3);min-height:0;box-sizing:border-box;padding:0;border-radius:5px;border:2px solid #5a3a1c;background:linear-gradient(#f3e3bf,#d9c08d);color:#5a3a1c;box-shadow:0 3px 0 rgba(0,0,0,.5);font-family:var(--mono);overflow:hidden}
+.tgrid .tc{--cw:76px}
+.tc.cat{box-shadow:inset 0 0 0 3px #3b5bbf,0 3px 0 rgba(0,0,0,.5)}.tc.opp{box-shadow:inset 0 0 0 3px #b8402f,0 3px 0 rgba(0,0,0,.5)}
+.tc .art{position:absolute;left:50%;top:47%;transform:translate(-50%,-50%);image-rendering:pixelated}
+.tc .n{position:absolute;font-family:var(--mono);font-weight:500;font-size:calc(var(--cw) * .2);line-height:1;color:#fff;text-shadow:1px 0 #000,-1px 0 #000,0 1px #000,0 -1px #000,1px 1px #000}
+.tc .n.t{top:4%;left:50%;transform:translateX(-50%)}.tc .n.b{bottom:15%;left:50%;transform:translateX(-50%)}.tc .n.l{left:6%;top:40%}.tc .n.r{right:6%;top:40%}
+.tc .nm{position:absolute;bottom:3px;left:2px;right:2px;text-align:center;font-size:calc(var(--cw) * .105);line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc.missing{background:#231c36;border-color:#4a4360;color:var(--dim)}.tc.missing .art{filter:brightness(0);opacity:.55}
+.tc[aria-pressed="true"]{outline:3px solid var(--amber);outline-offset:2px;color:#5a3a1c}
+button.tc:hover:not([disabled]){border-color:#5a3a1c;filter:brightness(1.05)}
+/* the duel: the opponent's room behind (darkened), its word, its cards face down and the score, the table, whose turn,
+   the cat and its hand (the bozza D2) */
+.duel{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;gap:8px;padding:calc(10px + env(safe-area-inset-top)) 10px calc(12px + env(safe-area-inset-bottom));box-sizing:border-box;background:var(--void);overflow:hidden}
+.duel .dbg{position:absolute;inset:0;background:center/cover no-repeat;image-rendering:pixelated;filter:brightness(.38) saturate(.9)}
+.duel>:not(.dbg):not(.dend){position:relative}
+.dtop{display:flex;gap:10px;width:min(560px,100%);box-sizing:border-box;background:var(--panel);border:1px solid var(--line);padding:8px;text-align:left}
+.dtop>canvas{image-rendering:pixelated;flex:none;height:auto;align-self:flex-start}
+.dtop b{display:block;font-family:var(--display);font-weight:600;color:var(--amber);font-size:14px;margin-bottom:3px}
+.dtop .dline{margin:0;font-size:12px;line-height:1.45}
+.dbar{display:flex;justify-content:space-between;align-items:center;width:min(420px,100%);min-height:44px}
+.dbacks{display:flex;gap:5px}.dbacks .back{width:30px;height:40px;box-sizing:border-box;border-radius:4px;border:2px solid #2a180a;background:repeating-linear-gradient(45deg,#6b4423 0 5px,#5a3a1c 5px 10px);display:flex;align-items:center;justify-content:center;color:var(--amber);font-size:13px}
+.dscore{font-family:var(--mono);font-weight:500;font-size:26px}.dscore .c{color:#8fb0ff}.dscore .o{color:#ff8a7a}
+.dtable{padding:12px;border-radius:18px;background:radial-gradient(ellipse at 50% 40%,#7a4a2a,#4a2a16 75%);box-shadow:inset 0 0 0 6px #3a200f,inset 0 0 40px rgba(0,0,0,.6),0 8px 0 rgba(0,0,0,.7)}
+.dboard{display:grid;grid-template-columns:repeat(3,auto);gap:6px}
+.dcell{padding:0;min-height:0;border:2px solid rgba(0,0,0,.25);border-bottom-width:2px;background:rgba(0,0,0,.12);border-radius:5px;box-sizing:border-box;display:flex}
+.dcell:has(.tc){border-color:transparent;background:none}.dcell .tc{width:100%;height:100%}
+.dcell:hover:not([disabled]){border-color:rgba(255,184,92,.6)}
+.dturn{margin:0;font-family:var(--display);font-size:14px;color:var(--amber);min-height:1.3em;text-align:center}
+.dme{display:flex;align-items:flex-end;gap:8px;margin-top:auto}
+.dme>canvas{border:2px solid var(--line);background:var(--panel);padding:2px;image-rendering:pixelated;flex:none;height:auto}
+.dhand{display:flex;gap:5px}
+.dhand .tc.pick{transform:translateY(-12px);outline:2px solid var(--amber);outline-offset:2px}
+.tc.flip{animation:tflip .35s ease-out}@keyframes tflip{0%{transform:rotateY(90deg)}100%{transform:none}}
+/* a stage wider than tall (a phone turned): the table at the right, the opponent, the turn and the hand at its left */
+.duel.wide{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto 1fr auto;column-gap:14px;row-gap:6px;align-items:center;justify-items:center}
+.duel.wide .dtable{grid-column:2;grid-row:1/5;padding:8px}.duel.wide .dtop,.duel.wide .dbar,.duel.wide .dturn,.duel.wide .dme{grid-column:1}
+.duel.wide .dme{margin-top:0}.duel.wide .dtop{padding:6px}.duel.wide .dtop .dline{font-size:11px}
+.dend{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(360px,calc(100% - 24px));box-sizing:border-box;background:var(--panel);border:1px solid var(--amber);padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
+.dend h2{margin:0;font-family:var(--display);font-size:24px}.dend .dnote{margin:0;font-size:13px;color:var(--dim)}
+.dend .dprize{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}.dend .col{min-width:200px}.dend button{min-height:44px}
 .panel{width:min(640px,100%);text-align:left;background:var(--panel);border:1px solid var(--line);padding:12px;box-sizing:border-box}
 #tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
 #tabs button{flex:1 1 auto;min-width:72px}
@@ -161,6 +210,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
       <button type="button" id="bContinue" data-t="menu.continue" hidden>Continue</button>
       <button type="button" id="bStart" data-t="menu.new">New game</button>
       <button type="button" id="bChapters" data-t="menu.chapters">Chapters</button>
+      <button type="button" id="bTourney" data-t="menu.tourney" hidden>Tourney</button>
       <button type="button" id="bLoad" data-t="menu.load">Load code</button>
       <button type="button" id="bOptions" data-t="menu.options">Options</button>
     </div>
@@ -225,6 +275,23 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
     <p class="line" data-t="end.3">Chapter 2 · The Star Map</p>
     <div class="col"><button type="button" id="bKeep" data-t="end.keep">Keep exploring</button><button type="button" id="bEndTitle" data-t="over.title2">Title screen</button></div>
   </div>
+  <div id="tourney" class="screen" hidden role="dialog" aria-labelledby="tTitle">
+    <h1 id="tTitle" data-t="tourney.title">The Codex Tourney</h1>
+    <p id="tNote" class="sub" role="status" hidden></p>
+    <div id="tList" class="tlist"></div>
+    <div class="col"><button type="button" id="bAlbum" data-t="tourney.album">Album</button><button type="button" id="bTourneyBack" data-t="menu.resume">Back</button></div>
+  </div>
+  <div id="album" class="screen" hidden role="dialog" aria-labelledby="albumTitle">
+    <h1 id="albumTitle" data-t="tourney.album">Album</h1><p id="albumCount" class="sub"></p>
+    <div id="albumGrid" class="tgrid"></div>
+    <div class="col"><button type="button" id="bAlbumBack" data-t="menu.resume">Back</button></div>
+  </div>
+  <div id="pick" class="screen" hidden role="dialog" aria-labelledby="pickTitle">
+    <h1 id="pickTitle" data-t="tourney.pick">Choose five cards</h1><p id="pickCount" class="sub" role="status"></p>
+    <div id="pickGrid" class="tgrid"></div>
+    <div class="col"><button type="button" id="bPickPlay" data-t="tourney.play" disabled>Play</button><button type="button" id="bPickBack" data-t="menu.resume">Back</button></div>
+  </div>
+  <div id="duel" class="duel" hidden role="dialog" aria-label="Duel"></div>
   <div id="fade"></div>
   <div id="fallback" hidden data-t="fallback">This browser could not start WebGL, so the game cannot be drawn.</div>
 </div>
