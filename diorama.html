@@ -82,6 +82,12 @@ button.small{min-height:32px;padding:4px 8px;font-size:11px}
 .tc .n.t{top:4%;left:50%;transform:translateX(-50%)}.tc .n.b{bottom:15%;left:50%;transform:translateX(-50%)}.tc .n.l{left:6%;top:40%}.tc .n.r{right:6%;top:40%}
 .tc .nm{position:absolute;bottom:3px;left:2px;right:2px;text-align:center;font-size:calc(var(--cw) * .105);line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tc.missing{background:#231c36;border-color:#4a4360;color:var(--dim)}.tc.missing .art{filter:brightness(0);opacity:.55}
+.tb{padding:0 3px;border-radius:3px;background:var(--amber);color:#2a1a08;font:500 11px/14px var(--mono);font-style:normal;box-shadow:0 1px 0 rgba(0,0,0,.5);white-space:nowrap}
+.tc .tb{position:absolute;top:2px;right:2px}.tb.new{background:#b8402f;color:#fff}.tb.in{background:#3b5bbf;color:#fff}
+.tc{-webkit-tap-highlight-color:transparent}.tc.spent,.tc.spent:hover:not([disabled]){filter:brightness(.5) saturate(.6)}
+.thand{position:sticky;top:-16px;z-index:1;display:flex;gap:6px;justify-content:center;padding:8px 0;width:100%;background:rgba(23,18,28,.96)}
+.thand>*{width:var(--cw);height:calc(var(--cw) * 1.3);flex:none}
+.thand .slot{box-sizing:border-box;border:2px dashed var(--line);border-radius:5px}
 .tc[aria-pressed="true"]{outline:3px solid var(--amber);outline-offset:2px;color:#5a3a1c}
 button.tc:hover:not([disabled]){border-color:#5a3a1c;filter:brightness(1.05)}
 /* the duel: the opponent's room behind (darkened), its word, its cards face down and the score, the table, whose turn,
@@ -113,7 +119,7 @@ button.tc:hover:not([disabled]){border-color:#5a3a1c;filter:brightness(1.05)}
 .duel.wide .dme{margin-top:0}.duel.wide .dtop{padding:6px}.duel.wide .dtop .dline{font-size:11px}
 .dend{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(360px,calc(100% - 24px));box-sizing:border-box;background:var(--panel);border:1px solid var(--amber);padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
 .dend h2{margin:0;font-family:var(--display);font-size:24px}.dend .dnote{margin:0;font-size:13px;color:var(--dim)}
-.dend .dprize{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}.dend .col{min-width:200px}.dend button{min-height:44px}
+.dend .dprize{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}.dprize .pz{display:flex;flex-direction:column;align-items:center;gap:4px}.dend .col{min-width:200px}.dend button{min-height:44px}
 .panel{width:min(640px,100%);text-align:left;background:var(--panel);border:1px solid var(--line);padding:12px;box-sizing:border-box}
 #tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
 #tabs button{flex:1 1 auto;min-width:72px}
@@ -278,6 +284,7 @@ textarea.code,#codeIn{width:100%;box-sizing:border-box;font:inherit;font-size:13
   </div>
   <div id="pick" class="screen" hidden role="dialog" aria-labelledby="pickTitle">
     <h1 id="pickTitle" data-t="tourney.pick">Choose five cards</h1><p id="pickCount" class="sub" role="status"></p>
+    <div id="pickHand" class="thand" aria-live="polite"></div>
     <div id="pickGrid" class="tgrid"></div>
     <div class="col"><button type="button" id="bPickPlay" data-t="tourney.play" disabled>Play</button><button type="button" id="bPickBack" data-t="menu.resume">Back</button></div>
   </div>
