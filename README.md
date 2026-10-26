@@ -1,74 +1,143 @@
-# The Scholar Cat — Chapter 1: The Missing Page
+# The Scholar Cat
 
-A small retro action-RPG in a 2.5D pixel diorama. After a night storm, page 7 of the library's old codex is torn
-into three pieces, and where its ink drips, creatures crawl out of the blots. Folio, the library cat, takes up a
-quill and goes after the pieces.
+A small retro action-RPG in a 2.5D pixel world, in four chapters. Folio, the library cat, follows the ink wherever
+it spills: out of a torn codex in a village library, aboard a silent starship, down a mine under a frontier town, up
+the pagodas of a river city on the night of the lantern festival. Between chapters, a card tourney against the people
+met on the way.
 
 **Play it at [martindavinci.github.io/mdv-demo-rpg-cat](https://martindavinci.github.io/mdv-demo-rpg-cat/)**
 
-In English and Italian. On a computer with a keyboard or a gamepad, and on a phone with touch controls. About
-twenty minutes to the end of the chapter.
+In English and Italian. On a computer with a keyboard or a gamepad, and on a phone with touch controls. Each chapter
+is a story of its own, twenty to thirty-five minutes long; pick any of them under **Chapters** on the title
+screen.
+
+## Chapter 1 · The Missing Page
+
+After a night storm, page 7 of the library's old codex is torn into three pieces, and where its ink drips, creatures
+crawl out of the blots. Folio takes up a quill and goes after the pieces.
 
 <table>
 <tr>
-<td width="50%"><img src="img/village.webp" width="100%" alt="The cat fighting two ink Blots in the village square, with a well, lamp posts and a market stall"></td>
-<td width="50%"><img src="img/road.webp" width="100%" alt="Blots and Inkflies on the road past the vineyards"></td>
-</tr>
-<tr>
-<td width="50%"><img src="img/library.webp" width="100%" alt="The library at the start of the game, with the librarian and a reading desk"></td>
-<td width="50%"><img src="img/boss.webp" width="100%" alt="The Blot Scribe, a hooded spill of ink with a giant quill, marking ink lines on the crypt floor"></td>
+<td width="50%"><img src="img/ch1-village.webp" width="100%" alt="The cat fighting two ink Blots in the village square, with a well, lamp posts and a market stall"></td>
+<td width="50%"><img src="img/ch1-boss.webp" width="100%" alt="The Blot Scribe, a hooded spill of ink with a giant quill, facing the cat in its chamber under the church"></td>
 </tr>
 </table>
 
-## What is in Chapter 1
+- An open village ringed by cliffs: the square, the church, the road past the vineyards to the windmill, a pond, a
+  fenced garden; the library, the bakery and the crypt under the church.
+- A quill combo of three swings, a dodge, and two ink skills learned on the way: **Ink dash**, through enemies and
+  over ink pools, and **Inkwell**, a splash that slows everything around.
+- Four kinds of inky creatures and the Blot Scribe, a boss in two phases. Every attack is announced: a Blot squashes
+  flat before it hops, an Inkfly shivers before it dives, ink marks appear on the floor before they burst.
+- A statue that asks a riddle, a crypt with three levers, a shop, two side quests.
 
-- An open village ringed by cliffs: the square, the church, the road east past the vineyards to the windmill, a
-  pond, a fenced garden. The library, the bakery and the crypt under the church are rooms of their own.
-- A quill combo of three swings, a dodge, and two ink skills you learn on the way: **Ink dash**, which passes
-  through enemies and over ink pools, and **Inkwell**, a splash that slows everything around you.
-- Four kinds of inky creatures and a boss with two phases. Every attack is announced: a Blot squashes flat before
-  it hops, an Inkfly stops and shivers before it dives, ink marks appear on the floor before they burst. A hit
-  during the warning cancels the attack.
-- Five levels, three equipment slots (quill, coat, charm), things to eat and drink, a shop, a main quest and two
-  side quests, a statue that asks a riddle and a crypt with three levers.
+## Chapter 2 · The Star Map
+
+Deep space. The ship's mind wakes the cat early from a cryo pod: the Ark is silent, its crew is gone, and the last 41
+days are missing from the log.
+
+<table>
+<tr>
+<td width="50%"><img src="img/ch2-engine.webp" width="100%" alt="The cat in the ship's engine room, a security drone flying at it past the hazard stripes"></td>
+<td width="50%"><img src="img/ch2-bridge.webp" width="100%" alt="What Remains, a mass of dark tendrils, on the ship's bridge beside the star-map table"></td>
+</tr>
+</table>
+
+- Twelve rooms of a starship: cryo bay, crew quarters, captain's cabin, infirmary, greenhouse, archive, engine room,
+  bridge, observatory and more.
+- The **Scanner**, a third skill that shows the traces the crew left behind; keypad codes, a breaker puzzle in the
+  engine room, four pieces of a star map to put back together.
+- Shadows and drones, and at the end What Remains; a choice on the bridge between trusting the captain or the ship.
+
+## Chapter 3 · Red Dust
+
+The old West. The stagecoach barely stops: a mining town at sunset, not a sound in it, and nobody came back from the
+mine.
+
+<table>
+<tr>
+<td width="50%"><img src="img/ch3-town.webp" width="100%" alt="The cat with a revolver facing three bandits in the dusty mine yard at sunset"></td>
+<td width="50%"><img src="img/ch3-mine.webp" width="100%" alt="The mine's first level lit by lanterns, gunmen among the rails and the lieutenant's health bar"></td>
+</tr>
+</table>
+
+- The sheriff's revolver: six rounds, held down to fire, reloading by itself; the **Fan** empties it in a spread.
+  The quill moves to its own key, and ink becomes **Nerve**.
+- The town, the saloon, the sheriff's office, the undertaker's house, then the mine level by level: lanterns,
+  flooded tunnels, dynamite for a collapse.
+- Gunmen, knifers, dynamiters and the creatures of the vein; Cole the lieutenant and the Ink Outlaw.
+
+## Chapter 4 · The Night of Lanterns
+
+Longmen, the Dragon Gate. On the night of the lantern festival the lanterns are going out, and the ink is climbing the
+river.
+
+<table>
+<tr>
+<td width="50%"><img src="img/ch4-longmen.webp" width="100%" alt="A night street of Longmen with paper lanterns, market stalls and stairs up to the roofs"></td>
+<td width="50%"><img src="img/ch4-battle.webp" width="100%" alt="A turn-based battle on the roofs: the cat's Ink Splash against a brush-shadow, with the battle menu below"></td>
+</tr>
+</table>
+
+- Fights in turns: a blow on the map starts one with the cat first and the foe stunned, a foe's strike starts it with
+  the foes first. Blows that spend breath, techniques that spend Ki, items, a guard, and a timed parry: tap as the
+  ring closes on the cat.
+- Three pagodas climbed floor by floor, each a dojo with its master: Master Bo, Lady Hua, the Black Brush. Each teaches
+  a technique: the Carp Leap carries the cat from roof to roof, Lantern Fire burns the ink brambles, the Silk Ribbon
+  lets it slide down the ropes.
+- Three seal lanterns to light, a kite to find for Mei, and the Ink Dragon at the Gate. Ten levels, gear and loot
+  around the city.
+
+## The Tourney
+
+<img src="img/tourney.webp" width="50%" alt="A card duel in the tourney hall: a three by three board of cards, the cat's hand below, the librarian's line above">
+
+The title's **Tourney** opens a hall where the cat plays cards against the people of the chapters: the librarian, the
+ship's mind at her console, Deputy Billy, the baker and Old Abe. Five cards a hand, a board of three by three: a card
+laid beside the opponent's takes it when its touching side is higher. Each win takes one of the opponent's cards; the
+album keeps 39 of them, and each finished chapter adds its boss.
 
 ## Controls
 
 | | Keyboard | Gamepad | Phone |
 | --- | --- | --- | --- |
 | Walk | WASD or arrows | left stick | stick, bottom left |
-| Hit (and talk) | J or Z | A | **Hit** — it reads **Talk** next to someone |
+| Hit (and talk) | J or Z (held: fire, Chapter 3) | A | **Hit** — it reads **Talk** next to someone |
 | Dodge | K, X or Shift | B | **Dodge** |
-| Ink dash / Inkwell | L or C / U or V | X / Y | **Dash** / **Well**, once learned |
+| Skills | L or C / U or V / I or B | X / Y / LT | **Dash**, **Well** (**Fan**), **Scan**, once learned |
+| Quill (Chapter 3) | F | RT | **Quill** |
 | Talk, open, read | Space or Enter | A | **Talk** |
 | Turn the view | Q / E, or drag | shoulder buttons | drag the scene |
 | Menu | Esc or Tab | Start | **Menu**, top right |
 
+In a battle (Chapter 4): the menu is tapped on a phone; with keys, the arrows move between its buttons and Space or
+Enter presses one; with a gamepad, the shoulder buttons move, A presses, B goes back. During a foe's move, the same key
+or a tap anywhere parries.
+
 ## Saving
 
-The game saves itself in this browser when you change area and when a quest moves on; reading at a reading desk
-saves and restores your health and ink. **Menu → Save code** shows the whole save as a code of letters and digits:
-paste it into **Load code** on the title screen of any browser to carry on there. A code with a wrong or missing
-letter is refused, not half-loaded.
+Each chapter keeps its own save in this browser, made when you change area and when a quest moves on; reading at a
+reading desk saves too. **Menu → Save code** shows the whole save as a code of letters and digits: paste it into
+**Load code** on the title screen of any browser to carry on there, in the chapter it came from. A code with a wrong or
+missing letter is refused, not half-loaded.
 
-Options (language, frame rate 30/60/120, music, effects, screen shake, shadows) are kept in the browser apart from
-the save.
+Options (language, frame rate, music, effects, screen shake, atmosphere, shadows) are kept in the browser apart from
+the saves.
 
 ## Privacy
 
 The game runs entirely in your browser. It makes no network requests after the page has loaded, has no account,
-no analytics and no ads. The save and the options stay in this browser's storage; nothing is sent anywhere.
+no analytics and no ads. The saves, the cards and the options stay in this browser's storage; nothing is sent
+anywhere.
 
 ## How it is made
 
-- The world is modelled in code as low-poly shapes, painted with the same pixel textures, and drawn at a low
-  resolution with hard pixels; the characters are the pixel-art sprites. The first style is still there:
-  [diorama.html](https://martindavinci.github.io/mdv-demo-rpg-cat/diorama.html).
-- That first style draws the world the way [Borghi in diorama](https://martindavinci.github.io/mdv-demo-diorama/) draws its
-  villages: every building, tree and prop is a flat pixel-art sprite whose pixels are given a depth, then lit and
-  shadowed in WebGL with [three.js](https://threejs.org/). Characters are flat cards that always face the camera.
+- The world is modelled in code as low-poly shapes, painted with pixel textures, and drawn at a low resolution with
+  hard pixels in WebGL with [three.js](https://threejs.org/); the characters, enemies and portraits are pixel-art
+  sprites.
 - The pixel art was generated with ChatGPT from written prompts, then cleaned, cut, resampled to one pixel grid and
   given depth by a small pipeline written for this game. The title picture is one of those images.
+- The chapters are data: places, people, quests, enemies and events, read by one engine.
 - The music and the sound effects are made in code at runtime: two pulse voices, a triangle and noise, like an old
   console.
 - Everything ships as a few static files; it also runs from a downloaded copy opened as a local file.
