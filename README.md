@@ -97,6 +97,13 @@ ship's mind at her console, Deputy Billy, the baker and Old Abe. Five cards a ha
 laid beside the opponent's takes it when its touching side is higher. Each win takes one of the opponent's cards; the
 album keeps 39 of them, and each finished chapter adds its boss.
 
+## New game+
+
+A chapter finished in this browser offers **New game+**, on the title screen and on its card under **Chapters**: the
+chapter starts again from the beginning, and the cat keeps its level and experience, its coins, its gear and the
+things it carries to use. The key items and the skills come back the way the story hands them out, and the enemies
+are as strong as the first time.
+
 ## Controls
 
 | | Keyboard | Gamepad | Phone |
