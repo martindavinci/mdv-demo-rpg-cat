@@ -104,6 +104,13 @@ chapter starts again from the beginning, and the cat keeps its level and experie
 things it carries to use. The key items and the skills come back the way the story hands them out, and the enemies
 are as strong as the first time.
 
+## Difficulty
+
+**Difficulty**, under **Options** on the title screen and in the menu, sets how hard the fights are, for every
+chapter, and can be changed at any time, even in the middle of a battle: **Story** (the cat hits harder and takes half
+the damage), **Normal** (the game as it was tuned, the default) or **Hard** (the cat hits a little softer and takes
+half as much again).
+
 ## Controls
 
 | | Keyboard | Gamepad | Phone |
@@ -128,7 +135,7 @@ reading desk saves too. **Menu → Save code** shows the whole save as a code of
 **Load code** on the title screen of any browser to carry on there, in the chapter it came from. A code with a wrong or
 missing letter is refused, not half-loaded.
 
-Options (language, frame rate, music, effects, screen shake, atmosphere, shadows) are kept in the browser apart from
+Options (language, difficulty, frame rate, music, effects, screen shake, atmosphere, shadows) are kept in the browser apart from
 the saves.
 
 ## Privacy
