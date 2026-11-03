@@ -1,5 +1,7 @@
 # The Scholar Cat
 
+[![Check](https://github.com/martindavinci/mdv-demo-rpg-cat/actions/workflows/check.yml/badge.svg)](https://github.com/martindavinci/mdv-demo-rpg-cat/actions/workflows/check.yml)
+
 A small retro action-RPG in a 2.5D pixel world, in four chapters. Folio, the library cat, follows the ink wherever
 it spills: out of a torn codex in a village library, aboard a silent starship, down a mine under a frontier town, up
 the pagodas of a river city on the night of the lantern festival. Between chapters, a card tourney against the people
@@ -145,6 +147,28 @@ no analytics and no ads. The saves, the cards and the options stay in this brows
 anywhere.
 
 ## How it is made
+
+This repository is the game's distribution: the built files, not the source. `game.js`, `art.js` and `lang.js` are
+generated; `game.js` joins the engine's modules and the chapters' data into one script, unminified, each part under a
+comment with its file's name, such as `// ---- engine/30-render.js`. A [quick check](.github/check.mjs) runs on each
+push: the scripts parse, the files the page loads exist, and the game's own files name no outside address.
+
+```mermaid
+flowchart LR
+  E["engine: rendering, combat, input, UI, audio"]
+  C["content: chapters' data and code"]
+  A["art sheets"]
+  L["languages"]
+  B["build: checks data, language keys, no external URLs"]
+  E --> B
+  C --> B
+  A --> B
+  L --> B
+  B --> G["game.js"]
+  B --> R["art.js"]
+  B --> T["lang.js"]
+  B --> I["index.html"]
+```
 
 - The world is modelled in code as low-poly shapes, painted with pixel textures, and drawn at a low resolution with
   hard pixels in WebGL with [three.js](https://threejs.org/); the characters, enemies and portraits are pixel-art
