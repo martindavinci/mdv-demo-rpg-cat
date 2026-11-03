@@ -173,8 +173,8 @@ flowchart LR
 - The world is modelled in code as low-poly shapes, painted with pixel textures, and drawn at a low resolution with
   hard pixels in WebGL with [three.js](https://threejs.org/); the characters, enemies and portraits are pixel-art
   sprites.
-- The pixel art was generated with ChatGPT from written prompts, then cleaned, cut, resampled to one pixel grid and
-  given depth by a small pipeline written for this game. The title picture is one of those images.
+- The pixel art was cleaned, cut, resampled to one pixel grid and given depth by a small pipeline written for this
+  game.
 - The chapters are data: places, people, quests, enemies and events, read by one engine.
 - The music and the sound effects are made in code at runtime: two pulse voices, a triangle and noise, like an old
   console.
